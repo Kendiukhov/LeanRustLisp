@@ -1,0 +1,308 @@
+LeanRustLisp Development Guide
+The guiding idea: a language where (a) types can express theorems (Lean), (b) resources are real and tracked (Rust), and (c) the language is programmable by its users (Lisp). The compiler is not your friend; it’s your very expensive, very literal lawyer.
+Product definition: what LRL is trying to win at
+Core goals
+Soundness you can bet a civilization on: small trusted kernel, proofs checked, no “trust me bro” in the core.
+Systems-level performance: predictable layout, no mandatory GC, AOT compilation, good FFI.
+Rust-grade resource discipline: ownership/borrowing, lifetime checking, data-race freedom in safe code.
+Lean-grade specification: dependent types, inductive types, theorem proving, proof erasure.
+Lisp-grade extensibility: hygienic macros, syntax as data, elaborator/tactic plugins.
+Non-goals (to keep the universe from expanding too fast)
+Full type inference for dependent types everywhere. You will write annotations. The alternative is undecidability plus suffering.
+Mutating dependently-typed values in-place without restrictions. Mutable typestate + dependent indices is a swamp; we’ll do it with explicit patterns that stay decidable.
+A single “one ring” mechanism for metaprogramming, effects, optimization, and proofs. That path ends in a baroque compiler that no one can modify without summoning eldritch bugs.
+Surface language: Lisp syntax, but not the 1970s kind
+Concrete syntax
+Default surface syntax is s-expressions.
+A notation layer can be built on top (like Lean’s notation), but macros are first-class and hygienic.
+Example sketch (just to anchor):
+(defn f : (Ð (n : Nat), Vec Nat n -> Nat) (n xs) ...)
+Macros transform surface syntax to a small “core” AST.
+Macro system requirements
+Hygiene by default (no accidental capture).
+Staging: compile-time code runs in a “Meta” phase; runtime code runs in “Obj” phase.
+Expansion is not trusted; only the kernel’s type checker is trusted. If a macro generates nonsense, it won’t typecheck. If it generates malicious nonsense, it still won’t typecheck (unless you explicitly opt into unsafe).
+Practical macro split (important)
+Syntax macros: purely syntactic rewriting (fast, deterministic, cacheable).
+Elaborator macros: type-directed rewriting during elaboration (powerful, but must be carefully sandboxed for IDE performance).
+Tactic scripts: proof search / transformation in Prop.
+The core theory: Lean-like dependent types with an explicit effect/resource story
+Kernel calculus
+Base: a Calculus of Inductive Constructions (CIC)-family dependent type theory.
+Universes: Prop, Type u with cumulative hierarchy.
+Inductive types: Nat, List, Vec, user-defined inductives.
+Equality: definitional equality (â/é/ä/æ reductions + unfolding rules), plus propositional equality Eq.
+Proof erasure
+Terms inhabiting Prop are erased at runtime (like Lean).
+Extraction is correctness-preserving: runtime semantics depend only on computationally relevant terms.
+Totality vs partiality (this is a key “Lean meets systems” pressure point)
+The kernel needs normalization for definitional equality, which wants total/terminating computations.
+Systems programming wants general recursion, nontermination, and effects.
+A workable design that doesn’t lie:
+Total fragment: definitions used in types/definitional equality must be terminating (structural recursion / well-founded recursion).
+Partial fragment: general recursion allowed, but cannot appear in types; it lives under an effect (call it Comp or IO).
+unsafe fragment: FFI, raw pointers, manual memory, etc. Explicitly marked; the kernel remains sound but you can shoot your foot like an adult.
+So you get three “levels”:
+def (total, can appear in types)
+partial def (computational, cannot appear in types)
+unsafe def (trust boundary break)
+Rust inside dependent types: ownership, borrowing, lifetimes as types
+This is the hardest part. The cleanest approach is: encode ownership with an affine/linear discipline in the type system, and implement Rust-style region inference as a specialized solver that produces proof objects (or at least checkable constraints) consumed by the kernel/type checker.
+Core ownership model
+Values are affine by default: you can use them 0 or 1 times (dropping is allowed; destructors run).
+Copyable values are “unrestricted”: you can duplicate them freely (Copy/Dup trait).
+Borrowing produces references with explicit lifetimes/regions:
+Shared: &'ρ A
+Unique: &'ρ mut A
+Unique borrows are linear capabilities: you can’t alias them.
+Region/lifetime system
+Lifetimes are first-class terms at the type level, but they are not value-dependent at runtime.
+There is a partial order (outlives relation) on regions.
+The compiler runs a constraint solver (think Rust NLL) on a mid-level IR and produces a lifetime assignment plus justification that is checkable.
+“Safe code implies no UB” contract
+In safe code, you cannot:
+use-after-free
+double-free
+data race (with well-defined concurrency primitives)
+violate aliasing rules
+unsafe is the only escape hatch and must be syntactically explicit.
+Mutation + dependent indices: the honest story Dependent types want: mutate Vec A n into Vec A (n+1). Rust wants: &mut T keeps T’s type stable.
+You cannot have both freely without making type checking painful or unsound.
+So LRL should adopt explicit patterns:
+In-place mutation requires stable type: if you mutate behind &mut, the type indices must remain definitionally equal.
+If an operation changes an index, you do it by “state replacement”:
+take ownership, compute a new value with a new type, return it.
+For mutable containers whose size changes, hide indices behind existential packaging:
+Buffer A := Ó (n : Nat), Vec A n (a sigma type)
+Store Buffer A behind a pointer; updates change the hidden n.
+This is not a limitation; it’s the price of not hallucinating soundness.
+Effects without losing your mind: capability-based effect system
+You need effects for I/O, concurrency, allocation, randomness, time, etc.
+A good direction:
+Algebraic effects or a graded monad / effect row system, but with an eye on compilation and ergonomics.
+Minimal core: a single Comp ε A computation type, where ε is an effect row (set/multiset of effects).
+Effects are introduced by primitives and eliminated by handlers/runners.
+Capabilities integrate nicely with Rust-like discipline:
+Some effects require linear tokens (capabilities). Example: World token for I/O, or Allocator capability for allocation in a region.
+This makes “who is allowed to do what” explicit and statically checkable.
+Why this matters for “advanced civilization” vibes:
+You can represent “budget” (time, energy, memory) as a capability and make it impossible to exceed without unsafeor explicit proof.
+Concurrency model: data-race freedom as a theorem, not a hope
+Safe concurrency primitives
+Message passing (channels) with ownership transfer.
+Shared state only via proven-safe abstractions:
+Mutex, RwLock, atomics with well-defined memory orderings.
+Trait-like constraints:
+Send and Sync as typeclass/trait predicates that are proven/derived.
+Dependent types give extra leverage
+You can encode protocols as types:
+session types (who sends what when)
+state machines where transitions are proven
+But keep these as libraries, not baked into the kernel.
+Compilation pipeline: split the world into “trusted kernel” and “fast compiler”
+A realistic architecture looks like this:
+A) Frontend
+Reader/parser: s-expressions + optional notation.
+Macro expansion: hygienic, staged, produces “surface AST”.
+B) Elaborator (untrusted, but produces checkable artifacts)
+Type inference (limited, guided by annotations)
+Implicit argument insertion
+Typeclass resolution
+Tactic execution (produces proof terms)
+Desugaring pattern matching
+C) Kernel (trusted)
+Small type checker for core calculus
+Definitional equality engine (normalization-by-evaluation is common)
+Checks all proof terms and all types
+Enforces the separation between total/partial/unsafe fragments
+D) Ownership/lifetime checking Two possible designs:
+Integrated into the typing judgments (pure type system). Elegant, but hard to engineer.
+Rust-style: generate a mid-level IR (LRL-MIR), run borrow checking + region inference, then emit evidence/constraints that the kernel can validate.
+I’d pick (2) for engineering sanity. The borrow checker is complex; keeping it outside the kernel reduces trusted code size.
+E) Backend
+Lower to LLVM IR (or MLIR) for AOT compilation.
+Emit debug info (DWARF), produce stable ABI for FFI.
+Optionally a WASM backend.
+Runtime model
+No mandatory GC; ownership + RAII.
+Optional region allocator / arena types in stdlib.
+Optional tracing GC as a library for “high-level mode” data structures (but not required).
+Module system and coherence: Rust crates + Lean namespaces, with rules
+You want:
+Namespaces/modules like Lean for mathematical development.
+Packages/crates like Rust for real software.
+A trait/typeclass system for ad-hoc polymorphism.
+But you must avoid incoherence (two instances of the same trait for same type causing ambiguity). A practical rule set:
+Orphan-like rules: either the trait or the type must be defined in the current package to define an instance.
+Instance resolution is deterministic and cached.
+Explicit local instances allowed with lexical scoping (like Lean), but they must not leak globally without explicit export.
+Tooling: if the IDE isn’t good, the language is cosplay
+Minimum viable tooling for LRL (otherwise proofs become suffering)
+LSP server with:
+incremental parsing
+incremental macro expansion
+incremental elaboration
+goal display (proof state)
+“go to definition” across generated code
+Formatter (stable, deterministic)
+Doc generator that renders types, proofs, and examples
+Package manager + build tool with reproducible builds:
+content-addressed dependencies
+locked dependency sets
+deterministic macro expansion (or at least pinned versions)
+Soundness + trust strategy
+Trusted Computing Base (TCB) should be tiny:
+Kernel type checker + definitional equality
+A minimal evaluator used by definitional equality (NbE engine)
+A small set of primitives with axiomatic semantics (e.g., Nat, equality, inductives)
+Everything else is untrusted:
+Elaborator
+Borrow checker
+Optimizer
+Macro system runtime
+Code generator
+But “untrusted” must still be checkable:
+Elaborator emits fully explicit core terms; kernel checks them.
+Borrow checker emits region/lifetime evidence or passes annotated IR to a validator.
+Optimizations can be validated (optional but ideal): translation validation per pass, not “trust the optimizer.”
+Now the development plan (phased, with exit criteria)
+Phase 0: Foundational decisions and the boring paperwork that saves you later Deliverables
+Language charter: goals/non-goals, safety boundaries, total/partial/unsafe policy.
+Core calculus sketch: syntax of core terms, universes, inductives, equality.
+Ownership model spec: affine/linear discipline, reference types, lifetime constraints.
+“Minimal kernel” definition: what is trusted, what isn’t.
+Repo layout, CI, coding standards, contribution model, license.
+Exit criteria
+A written spec that an implementer could follow without telepathy.
+A “hello theorem” and a “hello systems program” planned as golden tests.
+Phase 1: Mechanize the core theory (before you implement 200k lines of wrong) Deliverables
+Formalization in an existing proof assistant (Lean/Coq/Agda) of:
+core typing rules
+definitional equality model
+progress/preservation (type safety)
+A model of the ownership discipline at the typing level (even simplified).
+Exit criteria
+You can prove the core is sound in the mechanized model (for the chosen subset).
+You understand exactly which features are “library” vs “kernel.”
+Phase 2: Kernel v0 (the sacred minimal checker) Deliverables
+Core AST representation (de Bruijn indices or locally nameless).
+Parser for a tiny core syntax (can be s-expr) that is fully explicit.
+Kernel type checker for:
+universes, Ð-types, ë, application
+inductives + pattern matching (or eliminators first)
+definitional equality engine (NbE strongly recommended)
+Proof erasure pipeline for Prop.
+Exit criteria
+Kernel can check small proof developments and reject incorrect ones.
+Kernel is fuzz-tested: random terms don’t crash it.
+Kernel codebase remains small and audited.
+Phase 3: Surface language + hygienic macros (Lisp power, safely) Deliverables
+S-expression reader with source spans.
+Hygienic macro expander producing surface AST.
+Pretty printer + error reporting infrastructure.
+Deterministic expansion (same input => same expanded output).
+Exit criteria
+You can write user-defined syntax extensions.
+The expanded program is inspectable and stable (critical for debugging).
+Phase 4: Elaborator v0 (make the language usable) Deliverables
+Elaboration from surface AST to core terms:
+implicit arguments
+holes/metavariables
+unification (higher-order unification limited; use patterns + constraints)
+typeclass/trait resolution (deterministic)
+pattern matching compilation (to eliminators or to a core match)
+Basic tactic framework for constructing Prop terms.
+Exit criteria
+Users can write code without full explicit core terms.
+IDE can show goals and errors with reasonable locality.
+Phase 5: Ownership/borrowing MVP (safe systems subset) Deliverables
+Define LRL-MIR (typed mid-level IR with explicit moves/borrows).
+Implement borrow checking + region inference:
+lexical lifetimes first, then NLL-style inference
+generate constraints + solve
+Integrate with elaboration/type checking:
+surface & and &mut desugar to MIR borrows
+MIR validates and then lowers to core + evidence/annotations
+Exit criteria
+Classic Rust safety examples work:
+no use-after-free
+no double mutable alias
+safe concurrency primitives enforce Send/Sync
+Error messages are at least “Rust-quality” (still painful, but actionable).
+Phase 6: Effects, I/O, FFI, and the unsafe boundary Deliverables
+Effect system MVP:
+Comp å A + a few core effects (IO, Alloc, Time, Concurrency)
+effect inference (limited) and annotations
+FFI design:
+extern declarations
+ABI spec, layout attributes
+safe wrappers in stdlib
+unsafe blocks:
+syntactic marker
+linting and auditing hooks
+Exit criteria
+You can write real programs: file I/O, networking, concurrency.
+Unsafe is clearly compartmentalized.
+Phase 7: Backend and performance story Deliverables
+Codegen from MIR to LLVM (or equivalent).
+Debug info, stack traces, profiling hooks.
+Build tool integration: incremental compilation, caching.
+Exit criteria
+Performance is within shouting distance of Rust/C for typical systems workloads.
+Compiling a medium project isn’t a spiritual endurance test.
+Phase 8: Standard library + “proof + program” co-development style Deliverables
+Core stdlib:
+basic types, collections, iterators
+concurrency primitives
+filesystem/networking wrappers
+Math/proof stdlib:
+algebraic structures, common lemmas
+automation tactics (simp-like rewriting, decision procedures where feasible)
+Verified components as flagships:
+verified parser combinators
+verified bitvector library
+verified critical algorithms (sorting, memory allocators, etc.), at least partly
+Exit criteria
+People can build nontrivial applications without immediately writing their own universe.
+Phase 9: Tooling hardening and ecosystem Deliverables
+LSP with incremental elaboration and goal display.
+Formatter + linter suite.
+Package registry and reproducible builds:
+lockfiles
+content hashes
+hermetic builds
+Documentation and tutorials that show the “LRL way” (ownership + proofs together).
+Exit criteria
+New users can get productive without joining a cult or reading 800 pages of kernel code.
+Phase 10: Trust upgrades (optional but ideal): translation validation and verified kernel Deliverables
+Translation validation for key compiler passes:
+each optimization pass emits a checkable equivalence witness (or runs a validator)
+Verified kernel:
+either prove the kernel correct in another assistant
+or implement the kernel in a proof-producing style
+Long-run: self-hosting
+write parts of compiler/stdlib in LRL
+keep the kernel minimal and auditable
+Exit criteria
+You can plausibly claim “this compiler is harder to lie with,” which is exactly the kind of claim ambitious civilizations love to make before the universe punishes hubris.
+Team composition and workstreams (because this is not a one-person weekend project)
+Type theory + proof engineering: core calculus, kernel correctness, definitional equality, erasure.
+Compiler frontend: parsing, macros, elaboration, unification, error reporting.
+Borrow checker + MIR: region inference, lifetime constraints, diagnostics.
+Backend: codegen, ABI, performance, debug info.
+Tooling: LSP, incremental compilation, formatter, build system.
+Stdlib + examples: libraries that stress every subsystem (and find your bugs first).
+Big risks and how to avoid becoming a cautionary tale
+Dependent types + mutation Mitigation: enforce stable types under &mut; use existential packaging for changing indices; make “typestate transitions” explicit.
+Dependent type inference complexity Mitigation: require annotations at boundaries; keep elaboration predictable; prefer bidirectional typing; constrain unification.
+Macro power nuking tooling Mitigation: deterministic macros, hygiene, staged compilation, caching; expose expanded code and spans.
+Kernel bloat Mitigation: treat kernel size as sacred; push features into libraries and untrusted elaborator plugins; audit relentlessly.
+“Unsafe” creeping everywhere Mitigation: design safe primitives early; give people escape hatches that are still safe (arenas, verified wrappers); make unsafe noisy in tooling and CI.
+A realistic MVP definition (the first version that proves the concept)
+Total core with inductives + equality + basic tactics.
+Affine ownership with & / &mut and lifetimes (lexical first).
+A small effectful IO layer.
+LLVM backend for a subset.
+Enough stdlib to write a small CLI tool plus prove a handful of nontrivial theorems about parts of it.
+That’s the plan that gets you from “funny tweet language” to “language whose compiler can reject incorrect thoughts with prejudice.”
+

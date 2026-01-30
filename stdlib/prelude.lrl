@@ -1,0 +1,74 @@
+;; Prelude for LeanRustLisp
+
+(defmacro id (x) x)
+
+(inductive Nat (sort 0)
+  (ctor zero Nat)
+  (ctor succ (pi n Nat Nat))
+)
+
+(inductive Bool (sort 0)
+  (ctor true Bool)
+  (ctor false Bool)
+)
+
+;; Addition (Simplified for debug)
+(def add (pi n Nat (pi m Nat Nat))
+  (lam n Nat
+    (lam m Nat
+        (match n Nat
+            (case (zero) m)
+            (case (succ m' ih) (succ ih))
+        )
+    )
+  )
+)
+
+(def not (pi b Bool Bool)
+  (lam b Bool
+    (match b Bool
+      (case (true) false)
+      (case (false) true)
+    )
+  )
+)
+
+(def if_nat (pi c Bool (pi t Nat (pi f Nat Nat)))
+  (lam c Bool
+    (lam t Nat
+      (lam f Nat
+        (match c Nat
+          (case (true) t)
+          (case (false) f)
+        )
+      )
+    )
+  )
+)
+
+(def and (pi a Bool (pi b Bool Bool))
+  (lam a Bool
+    (lam b Bool
+      (match a Bool
+        (case (true) b)
+        (case (false) false)
+      )
+    )
+  )
+)
+
+(def or (pi a Bool (pi b Bool Bool))
+  (lam a Bool
+    (lam b Bool
+      (match a Bool
+        (case (true) true)
+        (case (false) b)
+      )
+    )
+  )
+)
+
+(inductive List (pi T (sort 0) (sort 0))
+  (ctor nil (pi T (sort 0) (List T)))
+  (ctor cons (pi T (sort 0) (pi h T (pi t (List T) (List T)))))
+)

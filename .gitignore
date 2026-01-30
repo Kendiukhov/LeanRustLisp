@@ -1,0 +1,5 @@
+/target
+/output
+/output.rs
+**/*.dSYM
+.DS_Store

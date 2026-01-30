@@ -1,0 +1,6 @@
+{
+    "autoagents.targetSubpath": "",
+    "autoagents.targetPath": "/Volumes/Crucial X6/MacBook/Code/axioms",
+    "autoagents.cliBackend": "gemini",
+    "autoagents.cliModel": "gemini-3-pro-preview"
+}

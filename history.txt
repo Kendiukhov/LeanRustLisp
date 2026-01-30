@@ -1,0 +1,11 @@
+#V2
+(lam x x)
+(add (ctor Nat 1) (ctor Nat 1))
+(cons Nat (succ zero) (nil Nat))
+:help
+(cons Nat (succ zero) (nil Nat))
+:eval (and true false)
+:help
+:eval (and true false)
+:eval (if_nat true (succ zero) zero)
+:eval (cons Nat (succ zero) (nil Nat))

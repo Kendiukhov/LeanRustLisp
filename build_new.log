@@ -1,0 +1,340 @@
+warning: hard linking files in the incremental compilation cache failed. copying files instead. consider moving the cache directory to a file system which supports hard linking in session dir `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfbfaaqihx-1gsdm7v-working`
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfbf54dx71-m4ngt3-6xsxirb7xzjaxz8vzmtypj8nq`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfb803a98t-xojspc-3jyesd8ny1r8ez077stbdq54r`: No such file or directory (os error 2)
+
+warning: unused import: `std::fmt`
+ --> kernel/src/ast.rs:2:5
+  |
+2 | use std::fmt;
+  |     ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused variable: `env`
+   --> kernel/src/checker.rs:266:25
+    |
+266 | ...act_ctor_app(env: &Env, t: &Rc<Term...
+    |                 ^^^ help: if this is intentional, prefix it with an underscore: `_env`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfbf89198o-1cbjm23-dmogrfjet3ftqa8haomfywekk`: No such file or directory (os error 2)
+
+warning: `kernel` (lib) generated 6 warnings (run `cargo fix --lib -p kernel` to apply 1 suggestion)
+warning: hard linking files in the incremental compilation cache failed. copying files instead. consider moving the cache directory to a file system which supports hard linking in session dir `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbg49lz9t-14er2k2-working`
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbf21j05g-ny4t3s-6qrmhbzuio624w1akrurafmrb`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbffx3ixa-can7ws-oawpwybsouk9o26j35qt1rsu`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbfh8vljj-n4vlbd-f4ns7sr9ls9d412sj4o2jja0o`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfb8uhydxs-jq0j9p-cbmciqvav71moc5ur4xhdmi04`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbfqwr5l9-n227m2-5uad2iskruodee2g48cquohd1`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfb8j8b33l-u4wzd0-b6k8rlurpyu3o0c0ai6mrip9p`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfb8lnnmxk-1gyd08f-2ktqsu8wwdt9rd6pyi7ajkqh5`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbffh7bef-f3zzi1-756ofcnucbfn2rn7h2cww00j3`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbf89nnsj-ykwykj-11nu4v37dqi1j01djbx1vhw7z`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfb8vtkals-12zlxpv-d33ub8i09td5ga3fkz8ns27q9`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfb8uw1bf2-e3wjk3-2b7lgwh8lkgwt4hu20m345xit`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbfab6rbt-j51ank-36nhuofbst0red76xzo8gaurc`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbf54xggt-1fno95q-85piy6wip9jf7m7rd39igkar9`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbfoq99pn-15o6io3-e07m9nl1yl4h123ncdyq2runn`: No such file or directory (os error 2)
+
+warning: unused import: `Level`
+ --> codegen/src/lib.rs:1:25
+  |
+1 | use kernel::ast::{Term, Level};
+  |                         ^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `std::rc::Rc`
+ --> codegen/src/lib.rs:2:5
+  |
+2 | use std::rc::Rc;
+  |     ^^^^^^^^^^^
+
+warning: unused variable: `l`
+  --> codegen/src/lib.rs:53:24
+   |
+53 |             Term::Sort(l) => {
+   |                        ^ help: if this is intentional, prefix it with an underscore: `_l`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `name`
+   --> codegen/src/lib.rs:105:23
+    |
+105 |             Term::Ind(name, _) => {
+    |                       ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: field `indent_level` is never read
+ --> codegen/src/lib.rs:8:5
+  |
+6 | pub struct Codegen {
+  |            ------- field in this struct
+7 |     output: String,
+8 |     indent_level: usize,
+  |     ^^^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` on by default
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbg32ep0n-4faojr-7us9n99s4hkzvg21ox1wfq3d4`: No such file or directory (os error 2)
+
+warning: hard linking files in the incremental compilation cache failed. copying files instead. consider moving the cache directory to a file system which supports hard linking in session dir `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbg97vnfx-zth8oi-working`
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb87v9wh0-5sbzsx-ckbzhyfsnzdcrb3a1a61ef1t9`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb88ts6gi-1ju4f40-dgv9ewj97uaxge8u13wleff5i`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbfab6rbt-1msnx8m-2c6lyxhpjog17es8j30qt52xn`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb838tiwb-roi077-3h8hway5zry2suyg77r9m9feq`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb84d0smn-wp0949-3376xhx6fhz8qz6vsx3428mkw`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb8ygefq4-1li0unm-22odiz1fgshsbnbto0hnla6vo`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb87cuo8q-f9nruy-1esr7alnzdis97vvzkcu4koo7`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb88brqgx-1j6g3d7-ebqlu148zyinue6dn458fx9jn`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb85hepgm-181rghw-444ton7k659pa81usupi8pj6f`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbf54xdxz-11333dt-5qm57zbwqcwnrz0ibg5g2um1n`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb803e6sb-1m2plk3-93dcjpqgd0k5fr9c0m1sewj5y`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbf89no3t-1t901bq-c84l4pd0kl6b28l3p8sopycei`: No such file or directory (os error 2)
+
+warning: unused import: `std::rc::Rc`
+ --> frontend/src/surface.rs:1:5
+  |
+1 | use std::rc::Rc;
+  |     ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `std::fmt`
+ --> frontend/src/surface.rs:2:5
+  |
+2 | use std::fmt;
+  |     ^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> frontend/src/macro_expander.rs:126:30
+    |
+126 |             SyntaxKind::List(mut list) => {
+    |                              ----^^^^
+    |                              |
+    |                              help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: field `input` is never read
+  --> frontend/src/parser.rs:17:5
+   |
+16 | struct Lexer<'a> {
+   |        ----- field in this struct
+17 |     input: &'a str,
+   |     ^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbg6vv39e-1ms6wi8-5ywo28g4o8wshbudcpwsi6o46`: No such file or directory (os error 2)
+
+warning: `codegen` (lib) generated 21 warnings (run `cargo fix --lib -p codegen` to apply 2 suggestions)
+warning: `frontend` (lib) generated 18 warnings (run `cargo fix --lib -p frontend` to apply 3 suggestions)
+warning: hard linking files in the incremental compilation cache failed. copying files instead. consider moving the cache directory to a file system which supports hard linking in session dir `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbg98uh3s-1yaw0r3-working`
+
+warning: failed to garbage collect incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbfe8g1ig-1rmafyp-working`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfb8jxhxk2-1nohv25-3nd0f671f49njuq1q2zrhollu`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbf55zvec-1mjcac4-4zegukeo7p8sm8iyuhd7lpkxx`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfb8uwjo3f-1skt8vu-9z9qov2leob97r4oxjvzdt1wk`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbg336n21-2bkcyy-2c4mkdm6obvklzy2aigwnarp8`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbfoqq2l5-j69whj-1c9bthpc7hanpfp6z1y8hb9qr`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbfh9gibc-zpkxww-4u18zpox9tozhxelaqz2t8z5q`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbfb8e2ki-1worx1r-7mgbnmzh9lhc8d7clkyhbqhit`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbfqx83q9-ky39le-5h29tvihk87nf9tpc7jxe7ze7`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbf76mlqe-13o4kbd-386f65634e6s8pjex5xz5entz`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbffhuqeg-cbh9tv-9cgfrrtmn0ql3e9g7llnug1lw`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbfei4anj-l9n5nl-9fte2f8t3o55et4j6kquyz9oi`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbf0ma2b8-trvn4z-dp8a9hrbscbjcq00aber6a49e`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbf8aqzmx-18pfaa8-dez65jt8ab1attxlsn1xamhyv`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfb8lo5zbd-fl347c-5dsya6gge3gnbq29cdnfyr1bd`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbfjxkdnw-94js9r-c0pljokyzd1h1mq4d4hdxpqan`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbf2270bl-16l2usp-cqj8xue2dh2vlx9t1jkbi0gv4`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbffxhlq3-1ph1ip3-64l7uws2zh25u89nas7zly5qp`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbg4aau9q-1r7zpij-amsfam8wjjn1pn2qzmanqzwmt`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfb8uij45x-k39hxa-hzl3y4wt08a2wnx46dkexf5b`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfb8vu6edk-1uc7gtn-e0a8rvikyhrliikcs6w1nxnpy`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbfml41o5-1c8abks-cqajsbtgztmokssxp03s2k3px`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbfacbd87-18r9fa5-kla4n3l932uijr0gwpns4d8b`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfb8yhfs74-14pcjjo-4tpd8p5qkh6yjuy9d99yqpn46`: No such file or directory (os error 2)
+
+warning: unused import: `std::rc::Rc`
+ --> cli/src/repl.rs:8:5
+  |
+8 | use std::rc::Rc;
+  |     ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `infer`
+ --> cli/src/compiler.rs:1:44
+  |
+1 | use kernel::checker::{Env, Context, check, infer};
+  |                                            ^^^^^
+
+warning: unused variable: `is_prelude`
+  --> cli/src/compiler.rs:27:39
+   |
+27 |     let mut process = |content: &str, is_prelude: bool| {
+   |                                       ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_prelude`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/cli-qn11mak5vzkc/s-hfbg6wuhfk-1hsrtij-sesgadf9bqi1ssituq31wh9a`: No such file or directory (os error 2)
+
+warning: `cli` (bin "cli") generated 29 warnings (run `cargo fix --bin "cli"` to apply 2 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running `target/debug/cli compile tests/list_test.lrl`
+Compiling output.rs to output...
+warning: unnecessary braces around block return value
+   --> output.rs:153:1
+    |
+153 | { Value::Func(Rc::new(move |x_0: Value| { { let x_0 = x_0.clone(); Value::Func(Rc::new(move |x_1: Value| { (match (match (match (match Value::Func(Rc::new(rec_nat_entry)) { Value::Func(f) => f({ let x_0 = x_0.clone(); let x_1 = x_1.clone(); Value::Func(Rc::new(move |x_2: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_1.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f({ let x_0 = x_0.clone(); let x_1 = x_1.clone(); Value::Func(Rc::new(move |x_3: Value| { { let x_0 = x_0.clone(); let x_1 = x_1.clone(); let x_3 = x_3.clone(); Value::Func(Rc::new(move |x_4: Value| { (match succ() { Value::Func(f) => f(x_4.clone()), _ => panic!("Expected Func") }) })) } })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_0.clone()), _ => panic!("Expected Func") }) })) } })) }
+    | ^^                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ^^
+    |
+    = note: `#[warn(unused_braces)]` on by default
+help: remove these braces
+    |
+153 - { Value::Func(Rc::new(move |x_0: Value| { { let x_0 = x_0.clone(); Value::Func(Rc::new(move |x_1: Value| { (match (match (match (match Value::Func(Rc::new(rec_nat_entry)) { Value::Func(f) => f({ let x_0 = x_0.clone(); let x_1 = x_1.clone(); Value::Func(Rc::new(move |x_2: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_1.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f({ let x_0 = x_0.clone(); let x_1 = x_1.clone(); Value::Func(Rc::new(move |x_3: Value| { { let x_0 = x_0.clone(); let x_1 = x_1.clone(); let x_3 = x_3.clone(); Value::Func(Rc::new(move |x_4: Value| { (match succ() { Value::Func(f) => f(x_4.clone()), _ => panic!("Expected Func") }) })) } })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_0.clone()), _ => panic!("Expected Func") }) })) } })) }
+153 + Value::Func(Rc::new(move |x_0: Value| { { let x_0 = x_0.clone(); Value::Func(Rc::new(move |x_1: Value| { (match (match (match (match Value::Func(Rc::new(rec_nat_entry)) { Value::Func(f) => f({ let x_0 = x_0.clone(); let x_1 = x_1.clone(); Value::Func(Rc::new(move |x_2: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_1.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f({ let x_0 = x_0.clone(); let x_1 = x_1.clone(); Value::Func(Rc::new(move |x_3: Value| { { let x_0 = x_0.clone(); let x_1 = x_1.clone(); let x_3 = x_3.clone(); Value::Func(Rc::new(move |x_4: Value| { (match succ() { Value::Func(f) => f(x_4.clone()), _ => panic!("Expected Func") }) })) } })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_0.clone()), _ => panic!("Expected Func") }) })) } }))
+    |
+
+warning: unnecessary braces around block return value
+   --> output.rs:156:1
+    |
+156 | { Value::Func(Rc::new(move |x_5: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_5 = x_5.clone(); Value::Func(Rc::new(move |x_6: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#false()), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#true()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_5.clone()), _ => panic!("Expected Func") }) })) }
+    | ^^                                                                                                                                                                                                                                                                                                                                                                                                                                                              ^^
+    |
+help: remove these braces
+    |
+156 - { Value::Func(Rc::new(move |x_5: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_5 = x_5.clone(); Value::Func(Rc::new(move |x_6: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#false()), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#true()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_5.clone()), _ => panic!("Expected Func") }) })) }
+156 + Value::Func(Rc::new(move |x_5: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_5 = x_5.clone(); Value::Func(Rc::new(move |x_6: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#false()), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#true()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_5.clone()), _ => panic!("Expected Func") }) }))
+    |
+
+warning: unnecessary braces around block return value
+   --> output.rs:159:1
+    |
+159 | { Value::Func(Rc::new(move |x_7: Value| { { let x_7 = x_7.clone(); Value::Func(Rc::new(move |x_8: Value| { { let x_7 = x_7.clone(); let x_8 = x_8.clone(); Value::Func(Rc::new(move |x_9: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_7 = x_7.clone(); let x_8 = x_8.clone(); let x_9 = x_9.clone(); Value::Func(Rc::new(move |x_10: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_8.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_9.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_7.clone()), _ => panic!("Expected Func") }) })) } })) } })) }
+    | ^^                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       ^^
+    |
+help: remove these braces
+    |
+159 - { Value::Func(Rc::new(move |x_7: Value| { { let x_7 = x_7.clone(); Value::Func(Rc::new(move |x_8: Value| { { let x_7 = x_7.clone(); let x_8 = x_8.clone(); Value::Func(Rc::new(move |x_9: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_7 = x_7.clone(); let x_8 = x_8.clone(); let x_9 = x_9.clone(); Value::Func(Rc::new(move |x_10: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_8.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_9.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_7.clone()), _ => panic!("Expected Func") }) })) } })) } })) }
+159 + Value::Func(Rc::new(move |x_7: Value| { { let x_7 = x_7.clone(); Value::Func(Rc::new(move |x_8: Value| { { let x_7 = x_7.clone(); let x_8 = x_8.clone(); Value::Func(Rc::new(move |x_9: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_7 = x_7.clone(); let x_8 = x_8.clone(); let x_9 = x_9.clone(); Value::Func(Rc::new(move |x_10: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_8.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_9.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_7.clone()), _ => panic!("Expected Func") }) })) } })) } }))
+    |
+
+warning: unnecessary braces around block return value
+   --> output.rs:162:1
+    |
+162 | { Value::Func(Rc::new(move |x_11: Value| { { let x_11 = x_11.clone(); Value::Func(Rc::new(move |x_12: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_11 = x_11.clone(); let x_12 = x_12.clone(); Value::Func(Rc::new(move |x_13: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_12.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#false()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_11.clone()), _ => panic!("Expected Func") }) })) } })) }
+    | ^^                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          ^^
+    |
+help: remove these braces
+    |
+162 - { Value::Func(Rc::new(move |x_11: Value| { { let x_11 = x_11.clone(); Value::Func(Rc::new(move |x_12: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_11 = x_11.clone(); let x_12 = x_12.clone(); Value::Func(Rc::new(move |x_13: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_12.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#false()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_11.clone()), _ => panic!("Expected Func") }) })) } })) }
+162 + Value::Func(Rc::new(move |x_11: Value| { { let x_11 = x_11.clone(); Value::Func(Rc::new(move |x_12: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_11 = x_11.clone(); let x_12 = x_12.clone(); Value::Func(Rc::new(move |x_13: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_12.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#false()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_11.clone()), _ => panic!("Expected Func") }) })) } }))
+    |
+
+warning: unnecessary braces around block return value
+   --> output.rs:165:1
+    |
+165 | { Value::Func(Rc::new(move |x_14: Value| { { let x_14 = x_14.clone(); Value::Func(Rc::new(move |x_15: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_14 = x_14.clone(); let x_15 = x_15.clone(); Value::Func(Rc::new(move |x_16: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#true()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_15.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_14.clone()), _ => panic!("Expected Func") }) })) } })) }
+    | ^^                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ^^
+    |
+help: remove these braces
+    |
+165 - { Value::Func(Rc::new(move |x_14: Value| { { let x_14 = x_14.clone(); Value::Func(Rc::new(move |x_15: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_14 = x_14.clone(); let x_15 = x_15.clone(); Value::Func(Rc::new(move |x_16: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#true()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_15.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_14.clone()), _ => panic!("Expected Func") }) })) } })) }
+165 + Value::Func(Rc::new(move |x_14: Value| { { let x_14 = x_14.clone(); Value::Func(Rc::new(move |x_15: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_14 = x_14.clone(); let x_15 = x_15.clone(); Value::Func(Rc::new(move |x_16: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#true()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_15.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_14.clone()), _ => panic!("Expected Func") }) })) } }))
+    |
+
+warning: variable `T_val` should have a snake case name
+  --> output.rs:88:19
+   |
+88 | fn rec_list_entry(T_val: Value) -> Value {
+   |                   ^^^^^ help: convert the identifier to snake case: `t_val`
+   |
+   = note: `#[warn(non_snake_case)]` on by default
+
+warning: variable `_M` should have a snake case name
+  --> output.rs:89:31
+   |
+89 |     Value::Func(Rc::new(move |_M| {
+   |                               ^^ help: convert the identifier to snake case: `_m`
+
+warning: variable `T_val` should have a snake case name
+  --> output.rs:90:13
+   |
+90 |         let T_val = T_val.clone();
+   |             ^^^^^ help: convert the identifier to snake case: `t_val`
+
+warning: variable `T_val` should have a snake case name
+  --> output.rs:92:17
+   |
+92 |             let T_val = T_val.clone();
+   |                 ^^^^^ help: convert the identifier to snake case: `t_val`
+
+warning: variable `T_val` should have a snake case name
+  --> output.rs:95:22
+   |
+95 |                  let T_val = T_val.clone();
+   |                      ^^^^^ help: convert the identifier to snake case: `t_val`
+
+warning: variable `T_val` should have a snake case name
+   --> output.rs:106:18
+    |
+106 | fn rec_list_impl(T_val: Value, nil_case: Value, cons_case: Value...
+    |                  ^^^^^ help: convert the identifier to snake case: `t_val`
+
+warning: 11 warnings emitted
+
+Compilation successful. Binary 'output' created.
