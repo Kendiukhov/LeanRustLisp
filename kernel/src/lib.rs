@@ -1230,4 +1230,49 @@ mod tests {
             panic!("Expected LargeElimination error, got {:?}", result);
         }
     }
+
+    #[test]
+    fn test_opaque_abstraction() {
+        use crate::ast::{BinderInfo, Definition, InductiveDecl, Constructor};
+        use crate::checker::infer;
+
+        let mut env = Env::new();
+        // Setup Nat
+        let nat_ty = Term::sort(Level::Zero);
+        let nat_decl = InductiveDecl {
+            name: "Nat".to_string(),
+            univ_params: vec![],
+            num_params: 0,
+            ty: nat_ty.clone(),
+            ctors: vec![
+                Constructor { name: "zero".to_string(), ty: Rc::new(Term::Ind("Nat".to_string(), vec![])) },
+            ],
+            is_copy: false,
+        };
+        env.add_inductive(nat_decl).unwrap();
+        
+        let nat_ref = Rc::new(Term::Ind("Nat".to_string(), vec![]));
+        
+        // def MyNat = Nat. Mark Opaque.
+        let mut my_nat_def = Definition::total("MyNat".to_string(), nat_ty.clone(), nat_ref.clone());
+        my_nat_def.mark_opaque();
+        env.add_definition(my_nat_def).unwrap();
+        
+        let my_nat = Rc::new(Term::Const("MyNat".to_string(), vec![]));
+        
+        // f : MyNat -> MyNat
+        let f = Term::lam(my_nat.clone(), Term::var(0), BinderInfo::Default);
+        
+        // zero : Nat
+        let zero = Rc::new(Term::Ctor("Nat".to_string(), 0, vec![]));
+        
+        // f zero
+        let app = Term::app(f, zero);
+        
+        // Infer should fail because infer(zero) = Nat, but expected MyNat.
+        // MyNat is opaque, so Nat != MyNat.
+        let result = infer(&env, &Context::new(), app);
+        
+        assert!(result.is_err(), "Opaque abstraction should prevent type equality between Nat and MyNat");
+    }
 }

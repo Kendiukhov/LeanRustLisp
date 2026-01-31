@@ -1776,7 +1776,7 @@ pub fn is_def_eq(env: &Env, t1: Rc<Term>, t2: Rc<Term>, transparency: crate::Tra
 pub fn check(env: &Env, ctx: &Context, term: Rc<Term>, expected_type: Rc<Term>) -> Result<(), TypeError> {
     // println!("Checking {:?} against {:?}", term, expected_type);
     let inferred = infer(env, ctx, term.clone())?;
-    if !is_def_eq(env, inferred.clone(), expected_type.clone(), crate::Transparency::All) {
+    if !is_def_eq(env, inferred.clone(), expected_type.clone(), crate::Transparency::Reducible) {
         println!("TypeMismatch: Term: {:?}, Expected {:?}, Got {:?}", term, expected_type, inferred);
         return Err(TypeError::TypeMismatch { expected: expected_type, got: inferred });
     }
@@ -1830,7 +1830,7 @@ fn check_elimination_restriction(env: &Env, ind_name: &str, levels: &[Level]) ->
                  // dom is the type of the field.
                  // infer(dom) should be Sort(Zero) (Prop).
                  let sort = infer(env, &ctx, dom.clone())?;
-                 let sort_norm = whnf(env, sort, crate::Transparency::All);
+                 let sort_norm = whnf(env, sort, crate::Transparency::Reducible);
                  let level = extract_level(&sort_norm);
                  
                  if level != Some(Level::Zero) {
@@ -1869,11 +1869,11 @@ pub fn infer(env: &Env, ctx: &Context, term: Rc<Term>) -> Result<Rc<Term>, TypeE
         Term::Pi(ty, body, _) => {
             // Pi (x : A) -> B has type Sort(imax(level(A), level(B)))
             let s1 = infer(env, ctx, ty.clone())?;
-            let s1_norm = whnf(env, s1, crate::Transparency::All);
+            let s1_norm = whnf(env, s1, crate::Transparency::Reducible);
             
             let new_ctx = ctx.push(ty.clone());
             let s2 = infer(env, &new_ctx, body.clone())?;
-            let s2_norm = whnf(env, s2, crate::Transparency::All);
+            let s2_norm = whnf(env, s2, crate::Transparency::Reducible);
             
             // Extract levels from sorts
             if let (Some(l1), Some(l2)) = (extract_level(&s1_norm), extract_level(&s2_norm)) {
@@ -1887,7 +1887,7 @@ pub fn infer(env: &Env, ctx: &Context, term: Rc<Term>) -> Result<Rc<Term>, TypeE
         }
         Term::App(f, a) => {
             let f_ty = infer(env, ctx, f.clone())?;
-            let f_ty_norm = whnf(env, f_ty, crate::Transparency::All);
+            let f_ty_norm = whnf(env, f_ty, crate::Transparency::Reducible);
             
             if let Term::Pi(arg_ty, body_ty, _) = &*f_ty_norm {
                 check(env, ctx, a.clone(), arg_ty.clone())?;
