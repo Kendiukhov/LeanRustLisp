@@ -1,0 +1,219 @@
+Processing: defmacro
+Processing: inductive
+Processing: inductive
+Processing: def
+Processing def: add with type: Syntax { kind: List([Syntax { kind: Symbol("pi"), span: Span { start: 236, end: 238, line: 16, col: 10 }, scopes: [] }, Syntax { kind: Symbol("n"), span: Span { start: 239, end: 240, line: 16, col: 13 }, scopes: [] }, Syntax { kind: Symbol("Nat"), span: Span { start: 241, end: 244, line: 16, col: 15 }, scopes: [] }, Syntax { kind: List([Syntax { kind: Symbol("pi"), span: Span { start: 246, end: 248, line: 16, col: 20 }, scopes: [] }, Syntax { kind: Symbol("m"), span: Span { start: 249, end: 250, line: 16, col: 23 }, scopes: [] }, Syntax { kind: Symbol("Nat"), span: Span { start: 251, end: 254, line: 16, col: 25 }, scopes: [] }, Syntax { kind: Symbol("Nat"), span: Span { start: 255, end: 258, line: 16, col: 29 }, scopes: [] }]), span: Span { start: 245, end: 259, line: 16, col: 19 }, scopes: [] }]), span: Span { start: 235, end: 260, line: 16, col: 9 }, scopes: [] }
+Resolved def: succ
+Check Def add: ty_core=Pi(Ind("Nat", []), Pi(Ind("Nat", []), Ind("Nat", []))) val_core=Lam(Ind("Nat", []), Lam(Ind("Nat", []), App(App(App(App(Rec("Nat", []), Lam(Ind("Nat", []), Ind("Nat", []))), Var(0)), Lam(Ind("Nat", []), Lam(Sort(Zero), App(Const("succ", []), Var(0))))), Var(1))))
+Def Check Error add: TypeMismatch { expected: Ind("Nat", []), got: Sort(Zero) }
+Processing: def
+Processing def: not with type: Syntax { kind: List([Syntax { kind: Symbol("pi"), span: Span { start: 413, end: 415, line: 27, col: 10 }, scopes: [] }, Syntax { kind: Symbol("b"), span: Span { start: 416, end: 417, line: 27, col: 13 }, scopes: [] }, Syntax { kind: Symbol("Bool"), span: Span { start: 418, end: 422, line: 27, col: 15 }, scopes: [] }, Syntax { kind: Symbol("Bool"), span: Span { start: 423, end: 427, line: 27, col: 20 }, scopes: [] }]), span: Span { start: 412, end: 428, line: 27, col: 9 }, scopes: [] }
+Resolved def: false
+Resolved def: true
+Check Def not: ty_core=Pi(Ind("Bool", []), Ind("Bool", [])) val_core=Lam(Ind("Bool", []), App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Bool", []))), Const("false", [])), Const("true", [])), Var(0)))
+Processing: def
+Processing def: if_nat with type: Syntax { kind: List([Syntax { kind: Symbol("pi"), span: Span { start: 539, end: 541, line: 36, col: 13 }, scopes: [] }, Syntax { kind: Symbol("c"), span: Span { start: 542, end: 543, line: 36, col: 16 }, scopes: [] }, Syntax { kind: Symbol("Bool"), span: Span { start: 544, end: 548, line: 36, col: 18 }, scopes: [] }, Syntax { kind: List([Syntax { kind: Symbol("pi"), span: Span { start: 550, end: 552, line: 36, col: 24 }, scopes: [] }, Syntax { kind: Symbol("t"), span: Span { start: 553, end: 554, line: 36, col: 27 }, scopes: [] }, Syntax { kind: Symbol("Nat"), span: Span { start: 555, end: 558, line: 36, col: 29 }, scopes: [] }, Syntax { kind: List([Syntax { kind: Symbol("pi"), span: Span { start: 560, end: 562, line: 36, col: 34 }, scopes: [] }, Syntax { kind: Symbol("f"), span: Span { start: 563, end: 564, line: 36, col: 37 }, scopes: [] }, Syntax { kind: Symbol("Nat"), span: Span { start: 565, end: 568, line: 36, col: 39 }, scopes: [] }, Syntax { kind: Symbol("Nat"), span: Span { start: 569, end: 572, line: 36, col: 43 }, scopes: [] }]), span: Span { start: 559, end: 573, line: 36, col: 33 }, scopes: [] }]), span: Span { start: 549, end: 574, line: 36, col: 23 }, scopes: [] }]), span: Span { start: 538, end: 575, line: 36, col: 12 }, scopes: [] }
+Check Def if_nat: ty_core=Pi(Ind("Bool", []), Pi(Ind("Nat", []), Pi(Ind("Nat", []), Ind("Nat", [])))) val_core=Lam(Ind("Bool", []), Lam(Ind("Nat", []), Lam(Ind("Nat", []), App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Nat", []))), Var(1)), Var(0)), Var(2)))))
+Processing: def
+Processing def: and with type: Syntax { kind: List([Syntax { kind: Symbol("pi"), span: Span { start: 737, end: 739, line: 49, col: 10 }, scopes: [] }, Syntax { kind: Symbol("a"), span: Span { start: 740, end: 741, line: 49, col: 13 }, scopes: [] }, Syntax { kind: Symbol("Bool"), span: Span { start: 742, end: 746, line: 49, col: 15 }, scopes: [] }, Syntax { kind: List([Syntax { kind: Symbol("pi"), span: Span { start: 748, end: 750, line: 49, col: 21 }, scopes: [] }, Syntax { kind: Symbol("b"), span: Span { start: 751, end: 752, line: 49, col: 24 }, scopes: [] }, Syntax { kind: Symbol("Bool"), span: Span { start: 753, end: 757, line: 49, col: 26 }, scopes: [] }, Syntax { kind: Symbol("Bool"), span: Span { start: 758, end: 762, line: 49, col: 31 }, scopes: [] }]), span: Span { start: 747, end: 763, line: 49, col: 20 }, scopes: [] }]), span: Span { start: 736, end: 764, line: 49, col: 9 }, scopes: [] }
+Resolved def: false
+Check Def and: ty_core=Pi(Ind("Bool", []), Pi(Ind("Bool", []), Ind("Bool", []))) val_core=Lam(Ind("Bool", []), Lam(Ind("Bool", []), App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Bool", []))), Var(0)), Const("false", [])), Var(1))))
+Processing: def
+Processing def: or with type: Syntax { kind: List([Syntax { kind: Symbol("pi"), span: Span { start: 898, end: 900, line: 60, col: 9 }, scopes: [] }, Syntax { kind: Symbol("a"), span: Span { start: 901, end: 902, line: 60, col: 12 }, scopes: [] }, Syntax { kind: Symbol("Bool"), span: Span { start: 903, end: 907, line: 60, col: 14 }, scopes: [] }, Syntax { kind: List([Syntax { kind: Symbol("pi"), span: Span { start: 909, end: 911, line: 60, col: 20 }, scopes: [] }, Syntax { kind: Symbol("b"), span: Span { start: 912, end: 913, line: 60, col: 23 }, scopes: [] }, Syntax { kind: Symbol("Bool"), span: Span { start: 914, end: 918, line: 60, col: 25 }, scopes: [] }, Syntax { kind: Symbol("Bool"), span: Span { start: 919, end: 923, line: 60, col: 30 }, scopes: [] }]), span: Span { start: 908, end: 924, line: 60, col: 19 }, scopes: [] }]), span: Span { start: 897, end: 925, line: 60, col: 8 }, scopes: [] }
+Resolved def: true
+Check Def or: ty_core=Pi(Ind("Bool", []), Pi(Ind("Bool", []), Ind("Bool", []))) val_core=Lam(Ind("Bool", []), Lam(Ind("Bool", []), App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Bool", []))), Const("true", [])), Var(0)), Var(1))))
+Processing: inductive
+Processing: inductive
+Processing: def
+Processing def: getBox with type: Syntax { kind: List([Syntax { kind: Symbol("pi"), span: Span { start: 69, end: 71, line: 4, col: 13 }, scopes: [] }, Syntax { kind: Symbol("b"), span: Span { start: 72, end: 73, line: 4, col: 16 }, scopes: [] }, Syntax { kind: Symbol("MyBox"), span: Span { start: 74, end: 79, line: 4, col: 18 }, scopes: [] }, Syntax { kind: Symbol("Nat"), span: Span { start: 80, end: 83, line: 4, col: 24 }, scopes: [] }]), span: Span { start: 68, end: 84, line: 4, col: 12 }, scopes: [] }
+Check Def getBox: ty_core=Pi(Ind("MyBox", []), Ind("Nat", [])) val_core=Lam(Ind("MyBox", []), App(App(App(Rec("MyBox", []), Lam(Ind("MyBox", []), Ind("Nat", []))), Lam(Ind("Nat", []), Var(0))), Var(0)))
+Processing: def
+Processing def: res1 with type: Syntax { kind: Symbol("Nat"), span: Span { start: 165, end: 168, line: 12, col: 10 }, scopes: [] }
+Resolved def: getBox
+Resolved def: mkBox
+Resolved def: succ
+Resolved def: zero
+Check Def res1: ty_core=Ind("Nat", []) val_core=App(Const("getBox", []), App(Const("mkBox", []), App(Const("succ", []), Const("zero", []))))
+Processing: inductive
+Processing: def
+Processing def: toNat with type: Syntax { kind: List([Syntax { kind: Symbol("pi"), span: Span { start: 293, end: 295, line: 18, col: 12 }, scopes: [] }, Syntax { kind: Symbol("m"), span: Span { start: 296, end: 297, line: 18, col: 15 }, scopes: [] }, Syntax { kind: Symbol("MyNat"), span: Span { start: 298, end: 303, line: 18, col: 17 }, scopes: [] }, Syntax { kind: Symbol("Nat"), span: Span { start: 304, end: 307, line: 18, col: 23 }, scopes: [] }]), span: Span { start: 292, end: 308, line: 18, col: 11 }, scopes: [] }
+Resolved def: zero
+Resolved def: succ
+Check Def toNat: ty_core=Pi(Ind("MyNat", []), Ind("Nat", [])) val_core=Lam(Ind("MyNat", []), App(App(App(App(Rec("MyNat", []), Lam(Ind("MyNat", []), Ind("Nat", []))), Const("zero", [])), Lam(Ind("MyNat", []), Lam(Sort(Zero), App(Const("succ", []), Var(0))))), Var(0)))
+Def Check Error toNat: TypeMismatch { expected: Ind("Nat", []), got: Sort(Zero) }
+Processing: def
+Processing def: res2 with type: Syntax { kind: Symbol("Nat"), span: Span { start: 428, end: 431, line: 27, col: 10 }, scopes: [] }
+Failed to resolve def: toNat
+[31mError:[0m Unbound variable: toNat
+    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0mtests/generic_ind_test.lrl:27:16[38;5;246m][0m
+    [38;5;246m│[0m
+ [38;5;246m27 │[0m [38;5;249m([0m[38;5;249md[0m[38;5;249me[0m[38;5;249mf[0m[38;5;249m [0m[38;5;249mr[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249m2[0m[38;5;249m [0m[38;5;249mN[0m[38;5;249ma[0m[38;5;249mt[0m[38;5;249m [0m[38;5;249m([0m[31mt[0m[31mo[0m[31mN[0m[31ma[0m[31mt[0m[38;5;249m [0m[38;5;249m([0m[38;5;249mm[0m[38;5;249my[0m[38;5;249ms[0m[38;5;249mu[0m[38;5;249mc[0m[38;5;249mc[0m[38;5;249m [0m[38;5;249m([0m[38;5;249mm[0m[38;5;249my[0m[38;5;249ms[0m[38;5;249mu[0m[38;5;249mc[0m[38;5;249mc[0m[38;5;249m [0m[38;5;249mm[0m[38;5;249my[0m[38;5;249mz[0m[38;5;249me[0m[38;5;249mr[0m[38;5;249mo[0m[38;5;249m)[0m[38;5;249m)[0m[38;5;249m)[0m[38;5;249m)[0m
+ [38;5;240m   │[0m                [31m─[0m[31m─[0m[31m┬[0m[31m─[0m[31m─[0m  
+ [38;5;240m   │[0m                  [31m╰[0m[31m─[0m[31m─[0m[31m─[0m[31m─[0m Unbound variable: toNat
+[38;5;246m────╯[0m
+Resolved def: res1
+Failed to resolve def: res2
+[31mError:[0m Unbound variable: res2
+    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0mtests/generic_ind_test.lrl:29:1[38;5;246m][0m
+    [38;5;246m│[0m
+ [38;5;246m29 │[0m [31mr[0m[31me[0m[31ms[0m[31m2[0m
+ [38;5;240m   │[0m [31m─[0m[31m─[0m[31m┬[0m[31m─[0m  
+ [38;5;240m   │[0m   [31m╰[0m[31m─[0m[31m─[0m[31m─[0m Unbound variable: res2
+[38;5;246m────╯[0m
+Compiling build/output.rs to generic_test...
+warning: hard linking files in the incremental compilation cache failed. copying files instead. consider moving the cache directory to a file system which supports hard linking in session dir `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/build/incremental/output-2wsjtpnx8bt2e/s-hfc5nt4os9-23ftkk-working`
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/build/incremental/output-2wsjtpnx8bt2e/s-hfbvq37umc-im8rpw-4y8x6dw0il5aykgh42d05diai`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/build/incremental/output-2wsjtpnx8bt2e/s-hfbvqn46o3-7w0xxg-4y8x6dw0il5aykgh42d05diai`: No such file or directory (os error 2)
+
+warning: unnecessary braces around block return value
+   --> output.rs:166:1
+    |
+166 | { Value::Func(Rc::new(move |x_0: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_0 = x_0.clone(); Value::Func(Rc::new(move |x_1: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#false()), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#true()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_0.clone()), _ => panic!("Expected Func") }) })) }
+    | ^^                                                                                                                                                                                                                                                                                                                                                                                                                                                              ^^
+    |
+    = note: `#[warn(unused_braces)]` on by default
+help: remove these braces
+    |
+166 - { Value::Func(Rc::new(move |x_0: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_0 = x_0.clone(); Value::Func(Rc::new(move |x_1: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#false()), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#true()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_0.clone()), _ => panic!("Expected Func") }) })) }
+166 + Value::Func(Rc::new(move |x_0: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_0 = x_0.clone(); Value::Func(Rc::new(move |x_1: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#false()), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#true()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_0.clone()), _ => panic!("Expected Func") }) }))
+    |
+
+warning: unnecessary braces around block return value
+   --> output.rs:169:1
+    |
+169 | { Value::Func(Rc::new(move |x_2: Value| { { let x_2 = x_2.clone(); Value::Func(Rc::new(move |x_3: Value| { { let x_2 = x_2.clone(); let x_3 = x_3.clone(); Value::Func(Rc::new(move |x_4: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_2 = x_2.clone(); let x_3 = x_3.clone(); let x_4 = x_4.clone(); Value::Func(Rc::new(move |x_5: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_3.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_4.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_2.clone()), _ => panic!("Expected Func") }) })) } })) } })) }
+    | ^^                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      ^^
+    |
+help: remove these braces
+    |
+169 - { Value::Func(Rc::new(move |x_2: Value| { { let x_2 = x_2.clone(); Value::Func(Rc::new(move |x_3: Value| { { let x_2 = x_2.clone(); let x_3 = x_3.clone(); Value::Func(Rc::new(move |x_4: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_2 = x_2.clone(); let x_3 = x_3.clone(); let x_4 = x_4.clone(); Value::Func(Rc::new(move |x_5: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_3.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_4.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_2.clone()), _ => panic!("Expected Func") }) })) } })) } })) }
+169 + Value::Func(Rc::new(move |x_2: Value| { { let x_2 = x_2.clone(); Value::Func(Rc::new(move |x_3: Value| { { let x_2 = x_2.clone(); let x_3 = x_3.clone(); Value::Func(Rc::new(move |x_4: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_2 = x_2.clone(); let x_3 = x_3.clone(); let x_4 = x_4.clone(); Value::Func(Rc::new(move |x_5: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_3.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_4.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_2.clone()), _ => panic!("Expected Func") }) })) } })) } }))
+    |
+
+warning: unnecessary braces around block return value
+   --> output.rs:172:1
+    |
+172 | { Value::Func(Rc::new(move |x_6: Value| { { let x_6 = x_6.clone(); Value::Func(Rc::new(move |x_7: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_6 = x_6.clone(); let x_7 = x_7.clone(); Value::Func(Rc::new(move |x_8: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_7.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#false()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_6.clone()), _ => panic!("Expected Func") }) })) } })) }
+    | ^^                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               ^^
+    |
+help: remove these braces
+    |
+172 - { Value::Func(Rc::new(move |x_6: Value| { { let x_6 = x_6.clone(); Value::Func(Rc::new(move |x_7: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_6 = x_6.clone(); let x_7 = x_7.clone(); Value::Func(Rc::new(move |x_8: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_7.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#false()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_6.clone()), _ => panic!("Expected Func") }) })) } })) }
+172 + Value::Func(Rc::new(move |x_6: Value| { { let x_6 = x_6.clone(); Value::Func(Rc::new(move |x_7: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_6 = x_6.clone(); let x_7 = x_7.clone(); Value::Func(Rc::new(move |x_8: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_7.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#false()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_6.clone()), _ => panic!("Expected Func") }) })) } }))
+    |
+
+warning: unnecessary braces around block return value
+   --> output.rs:175:1
+    |
+175 | { Value::Func(Rc::new(move |x_9: Value| { { let x_9 = x_9.clone(); Value::Func(Rc::new(move |x_10: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_9 = x_9.clone(); let x_10 = x_10.clone(); Value::Func(Rc::new(move |x_11: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#true()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_10.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_9.clone()), _ => panic!("Expected Func") }) })) } })) }
+    | ^^                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   ^^
+    |
+help: remove these braces
+    |
+175 - { Value::Func(Rc::new(move |x_9: Value| { { let x_9 = x_9.clone(); Value::Func(Rc::new(move |x_10: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_9 = x_9.clone(); let x_10 = x_10.clone(); Value::Func(Rc::new(move |x_11: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#true()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_10.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_9.clone()), _ => panic!("Expected Func") }) })) } })) }
+175 + Value::Func(Rc::new(move |x_9: Value| { { let x_9 = x_9.clone(); Value::Func(Rc::new(move |x_10: Value| { (match (match (match (match Value::Func(Rc::new(rec_bool_entry)) { Value::Func(f) => f({ let x_9 = x_9.clone(); let x_10 = x_10.clone(); Value::Func(Rc::new(move |x_11: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(r#true()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_10.clone()), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_9.clone()), _ => panic!("Expected Func") }) })) } }))
+    |
+
+warning: unnecessary braces around block return value
+   --> output.rs:187:1
+    |
+187 | { Value::Func(Rc::new(move |x_12: Value| { (match (match (match Value::Func(Rc::new(rec_MyBox_entry)) { Value::Func(f) => f({ let x_12 = x_12.clone(); Value::Func(Rc::new(move |x_13: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f({ let x_12 = x_12.clone(); Value::Func(Rc::new(move |x_14: Value| { x_14.clone() })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_12.clone()), _ => panic!("Expected Func") }) })) }
+    | ^^                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ^^
+    |
+help: remove these braces
+    |
+187 - { Value::Func(Rc::new(move |x_12: Value| { (match (match (match Value::Func(Rc::new(rec_MyBox_entry)) { Value::Func(f) => f({ let x_12 = x_12.clone(); Value::Func(Rc::new(move |x_13: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f({ let x_12 = x_12.clone(); Value::Func(Rc::new(move |x_14: Value| { x_14.clone() })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_12.clone()), _ => panic!("Expected Func") }) })) }
+187 + Value::Func(Rc::new(move |x_12: Value| { (match (match (match Value::Func(Rc::new(rec_MyBox_entry)) { Value::Func(f) => f({ let x_12 = x_12.clone(); Value::Func(Rc::new(move |x_13: Value| { Value::Unit })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f({ let x_12 = x_12.clone(); Value::Func(Rc::new(move |x_14: Value| { x_14.clone() })) }), _ => panic!("Expected Func") }) { Value::Func(f) => f(x_12.clone()), _ => panic!("Expected Func") }) }))
+    |
+
+warning: variable does not need to be mutable
+   --> output.rs:253:25
+    |
+253 |                     let mut curr_fn = arg_1.clone();
+    |                         ----^^^^^^^
+    |                         |
+    |                         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: variable `T_val` should have a snake case name
+   --> output.rs:101:19
+    |
+101 | fn rec_list_entry(T_val: Value) -> Value {
+    |                   ^^^^^ help: convert the identifier to snake case: `t_val`
+    |
+    = note: `#[warn(non_snake_case)]` on by default
+
+warning: variable `_M` should have a snake case name
+   --> output.rs:102:31
+    |
+102 |     Value::Func(Rc::new(move |_M| {
+    |                               ^^ help: convert the identifier to snake case: `_m`
+
+warning: variable `T_val` should have a snake case name
+   --> output.rs:103:13
+    |
+103 |         let T_val = T_val.clone();
+    |             ^^^^^ help: convert the identifier to snake case: `t_val`
+
+warning: variable `T_val` should have a snake case name
+   --> output.rs:105:17
+    |
+105 |             let T_val = T_val.clone();
+    |                 ^^^^^ help: convert the identifier to snake case: `t_val`
+
+warning: variable `T_val` should have a snake case name
+   --> output.rs:108:22
+    |
+108 |                  let T_val = T_val.clone();
+    |                      ^^^^^ help: convert the identifier to snake case: `t_val`
+
+warning: variable `T_val` should have a snake case name
+   --> output.rs:119:18
+    |
+119 | fn rec_list_impl(T_val: Value, nil_case: Value, cons_case: Value...
+    |                  ^^^^^ help: convert the identifier to snake case: `t_val`
+
+warning: function `mkBox` should have a snake case name
+   --> output.rs:183:4
+    |
+183 | fn mkBox() -> Value {
+    |    ^^^^^ help: convert the identifier to snake case: `mk_box`
+
+warning: function `getBox` should have a snake case name
+   --> output.rs:186:4
+    |
+186 | fn getBox() -> Value {
+    |    ^^^^^^ help: convert the identifier to snake case: `get_box`
+
+warning: function `rec_MyBox_entry` should have a snake case name
+   --> output.rs:199:4
+    |
+199 | fn rec_MyBox_entry(arg_0: Value) -> Value {
+    |    ^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `rec_my_box_entry`
+
+warning: function `rec_MyBox_impl` should have a snake case name
+   --> output.rs:210:4
+    |
+210 | fn rec_MyBox_impl(arg_0: Value, arg_1: Value, arg_2: Value) -> V...
+    |    ^^^^^^^^^^^^^^ help: convert the identifier to snake case: `rec_my_box_impl`
+
+warning: function `rec_MyNat_entry` should have a snake case name
+   --> output.rs:230:4
+    |
+230 | fn rec_MyNat_entry(arg_0: Value) -> Value {
+    |    ^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `rec_my_nat_entry`
+
+warning: function `rec_MyNat_impl` should have a snake case name
+   --> output.rs:246:4
+    |
+246 | fn rec_MyNat_impl(arg_0: Value, arg_1: Value, arg_2: Value, arg_...
+    |    ^^^^^^^^^^^^^^ help: convert the identifier to snake case: `rec_my_nat_impl`
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/build/incremental/output-2wsjtpnx8bt2e/s-hfbvr7iv9n-85c0vt-6oj73qd2oyf6rlxghtnz2snbi`: No such file or directory (os error 2)
+
+warning: 22 warnings emitted
+
+Compilation successful. Binary 'generic_test' created.

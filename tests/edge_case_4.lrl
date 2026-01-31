@@ -1,0 +1,11 @@
+;; Edge Case 4: Boolean logic chain
+;; Test: complex boolean expression
+
+(def bool_chain (pi a Bool (pi b Bool (pi c Bool Bool)))
+  (lam a Bool
+    (lam b Bool
+      (lam c Bool
+        (or (and a b) (and (not a) c))))))
+
+;; bool_chain false true true = or (and false true) (and true true) = or false true = true
+(bool_chain false true true)

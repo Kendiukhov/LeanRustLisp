@@ -22,6 +22,10 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
     },
+    /// Compile a file to Rust via MIR
+    CompileMir {
+        file: String,
+    },
 }
 
 fn main() {
@@ -30,6 +34,9 @@ fn main() {
     match &cli.command {
         Some(Commands::Compile { file, output }) => {
             compiler::compile_file(file, output.clone());
+        }
+        Some(Commands::CompileMir { file }) => {
+             compiler::compile_file_to_mir(file);
         }
         None => {
             if let Some(file) = cli.file {

@@ -1,0 +1,12 @@
+;; Edge Case 3: Curried function with 4 arguments
+;; Test: add4 a b c d = a + b + c + d
+
+(def add4 (pi a Nat (pi b Nat (pi c Nat (pi d Nat Nat))))
+  (lam a Nat
+    (lam b Nat
+      (lam c Nat
+        (lam d Nat
+          (add a (add b (add c d))))))))
+
+;; add4 1 2 3 4 = 10
+(add4 (succ zero) (succ (succ zero)) (succ (succ (succ zero))) (succ (succ (succ (succ zero)))))

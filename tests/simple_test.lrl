@@ -1,0 +1,21 @@
+;; Simple test file
+
+;; Test 1: Simple constant
+(def const_zero Nat zero)
+
+;; Test 2: Simple successor
+(def one Nat (succ zero))
+
+;; Test 3: Identity function
+(def id_nat (pi n Nat Nat)
+  (lam n Nat n))
+
+;; Test 4: Simple match
+(def is_zero (pi n Nat Bool)
+  (lam n Nat
+    (match n Bool
+      (case (zero) true)
+      (case (succ m ih) false))))
+
+;; Final expression
+(succ (succ zero))

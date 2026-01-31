@@ -4,13 +4,13 @@ resolver = "2"
 members = [
     # "kernel",
     "kernel",
-    "frontend", "cli", "codegen",
+    "frontend", "cli", "codegen", "mir",
     # "elaborator",
 ]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2026"
 authors = ["LeanRustLisp Developers"]
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/leanrustlisp/leanrustlisp"

@@ -1,0 +1,43 @@
+;; Test file for Phase 1D: Totality markers
+;;
+;; Demonstrates:
+;; - (def name type value) - Total definitions (must terminate)
+;; - (partial name type value) - Partial definitions (may not terminate)
+;; - (axiom name type) - Axioms (assumed without proof)
+
+;; Define Nat and Bool (self-contained test)
+(inductive Nat (sort 0)
+  (ctor zero Nat)
+  (ctor succ (pi n Nat Nat))
+)
+
+(inductive Bool (sort 0)
+  (ctor true Bool)
+  (ctor false Bool)
+)
+
+;; Regular total definition (uses structural recursion via Rec)
+(def isZero (pi n Nat Bool)
+  (lam n Nat
+    (match n Bool
+      (case (zero) true)
+      (case (succ m ih) false)
+    )
+  )
+)
+
+;; Partial definition - allowed to be non-terminating
+(partial pred (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) zero)
+      (case (succ m ih) m)
+    )
+  )
+)
+
+;; Axiom - a simple assumed proposition
+(axiom myAxiom (pi A (sort 0) (pi x A A)))
+
+;; Test expression
+(isZero (succ zero))

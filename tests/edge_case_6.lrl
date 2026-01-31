@@ -1,0 +1,18 @@
+;; Edge Case 6: Predecessor and subtraction
+;; Test: 5 - 3 = 2
+
+(def pred (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) zero)
+      (case (succ m ih) m))))
+
+(def sub (pi a Nat (pi b Nat Nat))
+  (lam a Nat
+    (lam b Nat
+      (match b Nat
+        (case (zero) a)
+        (case (succ m ih) (pred ih))))))
+
+;; sub 5 3 = 2
+(sub (succ (succ (succ (succ (succ zero))))) (succ (succ (succ zero))))

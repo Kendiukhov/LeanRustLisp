@@ -1,0 +1,71 @@
+;; Comprehensive test file for edge cases
+
+;; Test 1: Simple constant
+(def const_zero Nat zero)
+
+;; Test 2: Simple successor
+(def one Nat (succ zero))
+
+;; Test 3: Double successor
+(def two Nat (succ (succ zero)))
+
+;; Test 4: Identity function
+(def id_nat (pi n Nat Nat)
+  (lam n Nat n))
+
+;; Test 5: Nested lambda (curried add)
+(def add_one (pi n Nat Nat)
+  (lam n Nat (succ n)))
+
+;; Test 6: Complex pattern match
+(def is_zero (pi n Nat Bool)
+  (lam n Nat
+    (match n Bool
+      (case (zero) true)
+      (case (succ m ih) false))))
+
+;; Test 7: Double pattern match (uses both branches)
+(def nat_to_bool (pi n Nat Bool)
+  (lam n Nat
+    (match n Bool
+      (case (zero) false)
+      (case (succ m ih)
+        (match m Bool
+          (case (zero) true)
+          (case (succ k ih2) false))))))
+
+;; Test 8: Higher-order function (applies f twice)
+(def twice (pi f (pi n Nat Nat) (pi n Nat Nat))
+  (lam f (pi n Nat Nat)
+    (lam n Nat (f (f n)))))
+
+;; Test 9: Function composition
+(def compose (pi f (pi n Nat Nat) (pi g (pi n Nat Nat) (pi n Nat Nat)))
+  (lam f (pi n Nat Nat)
+    (lam g (pi n Nat Nat)
+      (lam n Nat (f (g n))))))
+
+;; Test 10: Boolean functions
+(def my_and (pi a Bool (pi b Bool Bool))
+  (lam a Bool
+    (lam b Bool
+      (match a Bool
+        (case (true) b)
+        (case (false) false)))))
+
+;; Test 11: Recursive function via match
+(def double (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) zero)
+      (case (succ m ih) (succ (succ ih))))))
+
+;; Test 12: Three arguments
+(def add3 (pi a Nat (pi b Nat (pi c Nat Nat)))
+  (lam a Nat
+    (lam b Nat
+      (lam c Nat
+        (add a (add b c))))))
+
+;; Final expression to evaluate
+(add (double two) one)

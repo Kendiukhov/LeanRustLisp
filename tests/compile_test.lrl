@@ -1,0 +1,3 @@
+(def x Nat (succ (succ zero)))
+(def result Nat (add x x))
+result

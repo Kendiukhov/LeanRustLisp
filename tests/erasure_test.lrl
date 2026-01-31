@@ -1,0 +1,2 @@
+
+(def h (Eq Nat zero zero) (refl Nat zero))

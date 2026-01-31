@@ -1,0 +1,22 @@
+;; Edge Case 2: Deeply nested pattern matching
+;; Test: Three-level nested match on Nat
+
+(def nested_match (pi a Nat (pi b Nat (pi c Nat Nat)))
+  (lam a Nat
+    (lam b Nat
+      (lam c Nat
+        (match a Nat
+          (case (zero)
+            (match b Nat
+              (case (zero) c)
+              (case (succ m ih) (succ c))))
+          (case (succ n ih)
+            (match b Nat
+              (case (zero) (succ (succ c)))
+              (case (succ m ih2)
+                (match c Nat
+                  (case (zero) (succ (succ (succ zero))))
+                  (case (succ k ih3) (succ (succ (succ (succ ih3))))))))))))))
+
+;; nested_match 1 1 2 should give: succ(succ(succ(succ(2)))) = 6
+(nested_match (succ zero) (succ zero) (succ (succ zero)))

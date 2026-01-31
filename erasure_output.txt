@@ -1,0 +1,310 @@
+DEBUG: push_local _0 ty=Pi(Ind("Nat", []), Pi(Ind("Nat", []), Ind("Nat", []), Default), Default) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering Lam(Ind("Nat", []), Lam(Ind("Nat", []), App(App(App(App(Rec("Nat", []), Lam(Ind("Nat", []), Ind("Nat", []), Default)), Var(0)), Lam(Ind("Nat", []), Lam(Ind("Nat", []), App(Const("succ", []), Var(0)), Default), Default)), Var(1)), Default), Default)
+TypeMismatch: Term: Lam(Ind("Nat", []), Ind("Nat", []), Default), Expected Pi(Ind("Nat", []), Sort(Zero), Default), Got Pi(Ind("Nat", []), Sort(Succ(Zero)), Default)
+DEBUG: push_local _0 ty=Sort(Zero) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: push_local arg0 ty=Ind("Nat", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering Lam(Ind("Nat", []), App(App(App(App(Rec("Nat", []), Lam(Ind("Nat", []), Ind("Nat", []), Default)), Var(0)), Lam(Ind("Nat", []), Lam(Ind("Nat", []), App(Const("succ", []), Var(0)), Default), Default)), Var(1)), Default)
+TypeMismatch: Term: Lam(Ind("Nat", []), Ind("Nat", []), Default), Expected Pi(Ind("Nat", []), Sort(Zero), Default), Got Pi(Ind("Nat", []), Sort(Succ(Zero)), Default)
+DEBUG: push_local _0 ty=Sort(Zero) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: push_local arg0 ty=Ind("Nat", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering App(App(App(App(Rec("Nat", []), Lam(Ind("Nat", []), Ind("Nat", []), Default)), Var(0)), Lam(Ind("Nat", []), Lam(Ind("Nat", []), App(Const("succ", []), Var(0)), Default), Default)), Var(1))
+DEBUG: Lowering Var(1)
+DEBUG: Lowering Var(0)
+DEBUG: Lowering Lam(Ind("Nat", []), Lam(Ind("Nat", []), App(Const("succ", []), Var(0)), Default), Default)
+DEBUG: push_local _0 ty=Pi(Ind("Nat", []), Ind("Nat", []), Default) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: push_local arg0 ty=Ind("Nat", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering Lam(Ind("Nat", []), App(Const("succ", []), Var(0)), Default)
+DEBUG: push_local _0 ty=Ind("Nat", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: push_local arg0 ty=Ind("Nat", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering App(Const("succ", []), Var(0))
+DEBUG: Lowering Const("succ", [])
+DEBUG: Lowering Var(0)
+// MIR Codegen for add:
+fn add() -> u64 {
+    let mut state = 0;
+    let mut _0: u64 = 0;
+
+    loop {
+        match state {
+            0 => {
+                _0 = closure_0;
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for add_closure_0:
+fn add_closure_0(arg1: u64) -> u64 {
+    let mut state = 0;
+    let mut _0: u64 = 0;
+    let mut _1: u64 = arg1;
+
+    loop {
+        match state {
+            0 => {
+                _0 = closure_0;
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+DEBUG: push_local _0 ty=Pi(Ind("Bool", []), Ind("Bool", []), Default) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering Lam(Ind("Bool", []), App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Bool", []), Default)), Const("false", [])), Const("true", [])), Var(0)), Default)
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Bool", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+DEBUG: push_local _0 ty=Sort(Zero) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: push_local arg0 ty=Ind("Bool", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Bool", []), Default)), Const("false", [])), Const("true", [])), Var(0))
+DEBUG: Lowering Var(0)
+DEBUG: Lowering Const("false", [])
+DEBUG: Lowering Const("true", [])
+Ownership Errors in not_closure_0:
+  use of uninitialized value: local _4 at block 5 statement 1
+  help: ensure the variable is assigned before use
+  use of uninitialized value: local _5 at block 6 statement 3
+  help: ensure the variable is assigned before use
+Compilation aborted due to safety violations.
+DEBUG: push_local _0 ty=Pi(Ind("Bool", []), Pi(Ind("Nat", []), Pi(Ind("Nat", []), Ind("Nat", []), Default), Default), Default) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering Lam(Ind("Bool", []), Lam(Ind("Nat", []), Lam(Ind("Nat", []), App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Nat", []), Default)), Var(1)), Var(0)), Var(2)), Default), Default), Default)
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Nat", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+DEBUG: push_local _0 ty=Sort(Zero) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: push_local arg0 ty=Ind("Bool", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering Lam(Ind("Nat", []), Lam(Ind("Nat", []), App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Nat", []), Default)), Var(1)), Var(0)), Var(2)), Default), Default)
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Nat", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+DEBUG: push_local _0 ty=Sort(Zero) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: push_local arg0 ty=Ind("Nat", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering Lam(Ind("Nat", []), App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Nat", []), Default)), Var(1)), Var(0)), Var(2)), Default)
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Nat", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+DEBUG: push_local _0 ty=Sort(Zero) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: push_local arg0 ty=Ind("Nat", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Nat", []), Default)), Var(1)), Var(0)), Var(2))
+DEBUG: Lowering Var(2)
+DEBUG: Lowering Var(1)
+DEBUG: Lowering Var(0)
+// MIR Codegen for if_nat:
+fn if_nat() -> u64 {
+    let mut state = 0;
+    let mut _0: u64 = 0;
+
+    loop {
+        match state {
+            0 => {
+                _0 = closure_0;
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for if_nat_closure_0:
+fn if_nat_closure_0(arg1: u64) -> u64 {
+    let mut state = 0;
+    let mut _0: u64 = 0;
+    let mut _1: u64 = arg1;
+
+    loop {
+        match state {
+            0 => {
+                _0 = closure_0;
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+DEBUG: push_local _0 ty=Pi(Ind("Bool", []), Pi(Ind("Bool", []), Ind("Bool", []), Default), Default) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering Lam(Ind("Bool", []), Lam(Ind("Bool", []), App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Bool", []), Default)), Var(0)), Const("false", [])), Var(1)), Default), Default)
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Bool", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+DEBUG: push_local _0 ty=Sort(Zero) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: push_local arg0 ty=Ind("Bool", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering Lam(Ind("Bool", []), App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Bool", []), Default)), Var(0)), Const("false", [])), Var(1)), Default)
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Bool", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+DEBUG: push_local _0 ty=Sort(Zero) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: push_local arg0 ty=Ind("Bool", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Bool", []), Default)), Var(0)), Const("false", [])), Var(1))
+DEBUG: Lowering Var(1)
+DEBUG: Lowering Var(0)
+DEBUG: Lowering Const("false", [])
+// MIR Codegen for and:
+fn and() -> u64 {
+    let mut state = 0;
+    let mut _0: u64 = 0;
+
+    loop {
+        match state {
+            0 => {
+                _0 = closure_0;
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for and_closure_0:
+fn and_closure_0(arg1: u64) -> u64 {
+    let mut state = 0;
+    let mut _0: u64 = 0;
+    let mut _1: u64 = arg1;
+
+    loop {
+        match state {
+            0 => {
+                _0 = closure_0;
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+DEBUG: push_local _0 ty=Pi(Ind("Bool", []), Pi(Ind("Bool", []), Ind("Bool", []), Default), Default) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering Lam(Ind("Bool", []), Lam(Ind("Bool", []), App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Bool", []), Default)), Const("true", [])), Var(0)), Var(1)), Default), Default)
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Bool", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+DEBUG: push_local _0 ty=Sort(Zero) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: push_local arg0 ty=Ind("Bool", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering Lam(Ind("Bool", []), App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Bool", []), Default)), Const("true", [])), Var(0)), Var(1)), Default)
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Bool", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+DEBUG: push_local _0 ty=Sort(Zero) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: push_local arg0 ty=Ind("Bool", []) infer_sort=Sort(Succ(Zero)) is_prop=false
+DEBUG: Lowering App(App(App(App(Rec("Bool", []), Lam(Ind("Bool", []), Ind("Bool", []), Default)), Const("true", [])), Var(0)), Var(1))
+DEBUG: Lowering Var(1)
+DEBUG: Lowering Const("true", [])
+DEBUG: Lowering Var(0)
+// MIR Codegen for or:
+fn or() -> u64 {
+    let mut state = 0;
+    let mut _0: u64 = 0;
+
+    loop {
+        match state {
+            0 => {
+                _0 = closure_0;
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for or_closure_0:
+fn or_closure_0(arg1: u64) -> u64 {
+    let mut state = 0;
+    let mut _0: u64 = 0;
+    let mut _1: u64 = arg1;
+
+    loop {
+        match state {
+            0 => {
+                _0 = closure_0;
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+DEBUG: push_local _0 ty=App(App(App(Ind("Eq", []), Ind("Nat", [])), Const("zero", [])), Const("zero", [])) infer_sort=Sort(Zero) is_prop=true
+DEBUG: Lowering App(App(Const("refl", []), Ind("Nat", [])), Const("zero", []))
+DEBUG: Lowering Const("refl", [])
+DEBUG: Lowering Ind("Nat", [])
+DEBUG: Lowering Const("zero", [])
+DEBUG: Checking Call dest=_0 is_prop=true
+DEBUG: Erasing Call to Prop!
+// MIR Codegen for h:
+fn h() -> u64 {
+    let mut state = 0;
+    let mut _0: u64 = 0;
+    let mut _1: u64 = 0;
+    let mut _2: u64 = 0;
+    let mut _3: u64 = 0;
+
+    loop {
+        match state {
+            0 => {
+                // StorageLive(Local(1))
+                _1 = refl;
+                state = 2;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            2 => {
+                // StorageLive(Local(2))
+                _2 = 0;
+                state = 3;
+                continue;
+            }
+            3 => {
+                // StorageLive(Local(3))
+                _3 = zero;
+                state = 4;
+                continue;
+            }
+            4 => {
+                _0 = 0;
+                state = 5;
+                continue;
+            }
+            5 => {
+                // StorageDead(Local(1))
+                state = 1;
+                continue;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+Elab error: UnificationError(App(App(App(Ind("Eq", []), Ind("Nat", [])), Const("zero", [])), Const("zero", [])), Ind("Nat", []))

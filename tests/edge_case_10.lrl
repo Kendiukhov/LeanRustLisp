@@ -1,0 +1,13 @@
+;; Edge Case 10: Closures with multiple captures
+;; Test function that creates a closure capturing multiple values
+
+(def make_adder_3 (pi a Nat (pi b Nat (pi c Nat (pi x Nat Nat))))
+  (lam a Nat
+    (lam b Nat
+      (lam c Nat
+        (lam x Nat
+          (add a (add b (add c x))))))))
+
+;; Create adder that adds 1+2+3=6 to its argument
+;; Apply to 4: 1+2+3+4 = 10
+(make_adder_3 (succ zero) (succ (succ zero)) (succ (succ (succ zero))) (succ (succ (succ (succ zero)))))

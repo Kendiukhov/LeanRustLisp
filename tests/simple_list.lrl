@@ -1,0 +1,2 @@
+;; Simple test: just create a Nat and return it
+(succ (succ (succ zero)))

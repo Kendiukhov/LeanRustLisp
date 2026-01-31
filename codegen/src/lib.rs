@@ -4,6 +4,16 @@ use std::rc::Rc;
 use std::fmt::Write;
 use anyhow::{Result, anyhow};
 
+/// Check if a type is recursive (references the given inductive type).
+/// Handles: Ind(name), App(Ind(name), ...), and nested applications.
+fn is_recursive_arg(ty: &Rc<Term>, ind_name: &str) -> bool {
+    match &**ty {
+        Term::Ind(n, _) => n == ind_name,
+        Term::App(f, _) => is_recursive_arg(f, ind_name),
+        _ => false,
+    }
+}
+
 pub struct Codegen {
     output: String,
     indent_level: usize,
@@ -64,7 +74,7 @@ impl Codegen {
                     return Err(anyhow!("Unbound variable index: {}", idx));
                 }
             }
-            Term::Lam(_ty, body) => {
+            Term::Lam(_ty, body, _) => {
                 // Value::Func(Rc::new(move |x| { body }))
                 // We must clone the environment for the move closure
                 write!(self.output, "{{ ")?;
@@ -90,7 +100,7 @@ impl Codegen {
                 self.emit(a)?;
                 write!(self.output, "), _ => panic!(\"Expected Func\") }})")?;
             }
-            Term::Pi(_, _) => {
+            Term::Pi(_, _, _) => {
                 write!(self.output, "Value::Unit")?;
             }
             Term::LetE(_ty, val, body) => {
@@ -142,7 +152,7 @@ impl Codegen {
                              // Determine arity by counting Pi types
                              let mut arity = 0;
                              let mut curr = &ctor.ty;
-                             while let Term::Pi(_, body) = &**curr {
+                             while let Term::Pi(_, body, _) = &**curr {
                                  arity += 1;
                                  curr = body;
                              }
@@ -151,22 +161,24 @@ impl Codegen {
                                  write!(self.output, "Value::Inductive(\"{}\".to_string(), {}, vec![])", name, idx)?;
                              } else {
                                  // Generate nested closures
-                                 // Value::Func(|a0| Value::Func(|a1| ... Value::Inductive(..., vec![a0, a1...]) ))
+                                 // Value::Func(|a0| { let a0=a0.clone(); Value::Func(|a1| { let a0=a0.clone(); let a1=a1.clone(); ... }) })
+                                 // At each level, clone ALL previous args so they can be moved into inner closures
                                  for i in 0..arity {
                                      let arg_name = format!("arg_{}", i);
                                      write!(self.output, "Value::Func(Rc::new(move |{}: Value| {{ ", arg_name)?;
-                                     if i < arity - 1 {
-                                         write!(self.output, "let {} = {}.clone(); ", arg_name, arg_name)?;
+                                     // Clone all args from 0 to i for the next level
+                                     for j in 0..=i {
+                                         write!(self.output, "let arg_{} = arg_{}.clone(); ", j, j)?;
                                      }
                                  }
-                                 
+
                                  write!(self.output, "Value::Inductive(\"{}\".to_string(), {}, vec![", name, idx)?;
                                  for i in 0..arity {
                                      if i > 0 { write!(self.output, ", ")?; }
-                                     write!(self.output, "arg_{}.clone()", i)?;
+                                     write!(self.output, "arg_{}", i)?;
                                  }
                                  write!(self.output, "])")?;
-                                 
+
                                  for _ in 0..arity {
                                      write!(self.output, " }}))")?;
                                  }
@@ -198,11 +210,28 @@ impl Codegen {
              Term::Const(name, _) => {
                  write!(self.output, "{}()", Self::sanitize_name(name))?;
              }
+            Term::Meta(id) => {
+                // Meta variables should be resolved during elaboration.
+                // If they reach codegen, it indicates an incomplete unification.
+                // We emit Unit as a safe fallback (erased), but this should be investigated.
+                // In a stricter mode, this could return an error.
+                write!(self.output, "Value::Unit /* unresolved meta {} */", id)?;
+            }
         }
         Ok(())
     }
 
-    fn sanitize_name(name: &str) -> String {
+    /// Check if a type is recursive (references the given inductive type).
+    /// Handles: Ind(name), App(Ind(name), ...), and nested applications.
+    fn is_recursive_type(ty: &Term, ind_name: &str) -> bool {
+        match ty {
+            Term::Ind(n, _) => n == ind_name,
+            Term::App(f, _) => Self::is_recursive_type(f, ind_name),
+            _ => false,
+        }
+    }
+
+    pub fn sanitize_name(name: &str) -> String {
         match name {
             "true" | "false" | "if" | "else" | "match" | "let" | "fn" | "struct" | "enum" | "type" | "return" | 
             "loop" | "while" | "for" | "in" | "use" | "mod" | "crate" | "pub" | "impl" | "trait" | "where" | 
@@ -339,28 +368,20 @@ fn rec_list_impl(T_val: Value, nil_case: Value, cons_case: Value, l_val: Value) 
     match l_val {
         Value::List(l) => match &*l {
              List::Nil => {
-                 // nil_case takes T
-                 match nil_case {
-                     Value::Func(f) => f(T_val),
-                     _ => panic!("nil_case expects T, got {:?}", nil_case)
-                 }
+                 // nil_case
+                 nil_case
              },
              List::Cons(h, t_rc) => {
                  let t_val = Value::List(t_rc.clone());
                  let ih = rec_list_impl(T_val.clone(), nil_case.clone(), cons_case.clone(), t_val.clone());
-                 // cons_case takes T, h, t, ih
+                 // cons_case takes h, t, ih
                  match cons_case {
-                     Value::Func(f1) => {
-                         match f1(T_val) { // Apply T
-                             Value::Func(f2) => match f2(h.clone()) { // Apply h
-                                 Value::Func(f3) => match f3(t_val) { // Apply t
-                                      Value::Func(f4) => f4(ih), // Apply ih
-                                      _ => panic!("cons_case expects 4 args")
-                                 },
-                                 _ => panic!("cons_case expects 4 args")
-                             },
-                             _ => panic!("cons_case expects 4 args")
-                         }
+                     Value::Func(f2) => match f2(h.clone()) { // Apply h
+                         Value::Func(f3) => match f3(t_val) { // Apply t
+                              Value::Func(f4) => f4(ih), // Apply ih
+                              _ => panic!("cons_case expects 3 args")
+                         },
+                         _ => panic!("cons_case expects 3 args")
                      },
                      _ => panic!("cons_case must be Func")
                  }
@@ -383,186 +404,131 @@ fn rec_list_impl(T_val: Value, nil_case: Value, cons_case: Value, l_val: Value) 
         // Emit Generic Recursion Helpers
         for (ind_name, decl) in &inductives_iter {
             if ind_name == "Nat" || ind_name == "Bool" || ind_name == "List" { continue; }
-            
+
+            // Use num_params from declaration (more reliable than counting Pis)
+            let num_params = decl.num_params;
+            let num_ctors = decl.ctors.len();
+
             // rec_I_entry
-            // Args: Params (k) -> Motive (1) -> MinorPremises (m) -> Major (1)
-            // Total chain length
-            // We need to count params.
-            let mut num_params = 0;
-            let mut curr = &decl.ty;
-             while let Term::Pi(_, body) = &**curr {
-                 num_params += 1;
-                 curr = body;
-             }
-             // Actually, `decl.univ_params` is for Levels. `ty` Pi's are params + indices?
-             // In LRL kernel, inductive params are usually part of `ty`.
-             // But for `Rec`, we treat `Params` as arguments to `Rec`.
-             // `Rec(I, params...)`.
-             // In `codegen`, `Term::Rec` is just the eliminator.
-             // It expects `num_params` args FIRST.
-             // Then `motive`.
-             // Then `constructors` (minor premises).
-             // Then `major`.
-             
-             let num_ctors = decl.ctors.len();
-             let total_args = num_params + 1 + num_ctors + 1;
-             
-             cg.output.push_str(&format!("// Rec for {}\n", ind_name));
-             cg.output.push_str(&format!("fn rec_{}_entry(arg_0: Value) -> Value {{\n", ind_name));
-             
-             // Chain closures
-             for i in 1..total_args {
-                 cg.output.push_str(&format!("    Value::Func(Rc::new(move |arg_{}: Value| {{\n", i));
-                 // Clone previous args to make them available
-                 for j in 0..i {
-                     cg.output.push_str(&format!("        let arg_{} = arg_{}.clone();\n", j, j));
-                 }
-             }
-             
-             // Call impl
-             cg.output.push_str(&format!("        rec_{}_impl(", ind_name));
-             for i in 0..total_args {
-                 if i > 0 { cg.output.push_str(", "); }
-                 cg.output.push_str(&format!("arg_{}", i));
-             }
-             cg.output.push_str(")\n");
-             
-             // Close closures
-             for _ in 1..total_args {
-                 cg.output.push_str("    }))\n");
-             }
-             cg.output.push_str("}\n\n");
-             
-             // rec_I_impl
-             cg.output.push_str(&format!("fn rec_{}_impl(", ind_name));
-              for i in 0..total_args {
-                 if i > 0 { cg.output.push_str(", "); }
-                 cg.output.push_str(&format!("arg_{}: Value", i));
-             }
-             cg.output.push_str(") -> Value {\n");
-             
-             // Identify arguments
-             // arg_0 .. arg_{num_params-1} : Params
-             // arg_{num_params} : Motive (ignored for computation)
-             // arg_{num_params+1} .. arg_{num_params+num_ctors} : Minor Premises
-             // arg_{total_args-1} : Major
-             
-             let major_idx = total_args - 1;
-             let first_minor_idx = num_params + 1;
-             
-             cg.output.push_str(&format!("    match arg_{} {{\n", major_idx));
-             cg.output.push_str(&format!("        Value::Inductive(n, idx, ctor_args) => {{\n"));
-             cg.output.push_str(&format!("            if n != \"{}\" {{ panic!(\"rec_{} mismatch\"); }}\n", ind_name, ind_name));
-             cg.output.push_str("            match idx {\n");
-             
-             for (c_idx, ctor) in decl.ctors.iter().enumerate() {
-                 cg.output.push_str(&format!("                {} => {{\n", c_idx));
-                 
-                 // Apply minor premise `arg_{first_minor_idx + c_idx}`
-                 // Arguments: ctor_args + recursive IHs
-                 // We need to know ctor structure.
-                 // Ctor params comes from `ctor.ty`.
-                 // Skip `num_params` uniform parameters?
-                 // `ctor.ty` includes `pi` for parameters?
-                 // In LRL kernel, constructor types usually include the inductive parameters as first arguments.
-                 // But in `Value::Inductive`, `ctor_args` usually ONLY contains the explicit constructor arguments?
-                 // Let's verify.
-                 // `add_inductive` in `repl.rs`: `ty` is fully qualified.
-                 // `ctor.ty`: `Pi T ...`?
-                 // If `List` is `Pi T Type Type`.
-                 // `nil` is `Pi T Type List T`.
-                 // My manual `cons` codegen expects `h`, `t`?
-                 // Manual `cons` implementation:
-                 // `rec_list_entry` takes `T_val` (param).
-                 // `rec_list_impl` takes `T_val`.
-                 // `nil_case` takes `T_val`.
-                 // `cons_case` takes `T_val`, `h`, `t`, `ih`.
-                 // `Value::List(Cons(h, t))` stores `h`. `t`.
-                 // It does NOT store `T`.
-                 // So `ctor_args` for `cons` are `[h, t]`.
-                 // BUT `cons_case` expects `T` first.
-                 // So we must pass `params` (arg_0..arg_{num_params}) to minor premise FIRST.
-                 
-                 let minor_idx = first_minor_idx + c_idx;
-                 cg.output.push_str(&format!("                    // Apply minor premise {}\n", minor_idx));
-                 
-                 // Logic to apply minor premise to params + ctor_args + IHs
-                 // We have `arg_{minor_idx}` as the function.
-                 // We apply it to `arg_0` .. `arg_{num_params-1}`.
-                 // Then apply to `ctor_args[k]`.
-                 // Then apply `IH` if `ctor_args[k]` is recursive.
-                 
-                 // Helper to determine if type is recursive
-                 // `ctor.ty` has structure `Pi P1.. Pi Pk.. Pi A1.. Pi An -> I ...`
-                 // We need to skip `num_params` Pis.
-                 let mut curr = &ctor.ty;
-                 for _ in 0..num_params {
-                     if let Term::Pi(_, b) = &**curr { curr = b; }
-                 }
-                 
-                 // Now `curr` has arguments corresponding to `ctor_args`.
-                 let mut arg_types = Vec::new();
-                 while let Term::Pi(ty, b) = &**curr {
-                     arg_types.push(ty.clone());
-                     curr = b;
-                 }
-                 
-                 // `arg_types` corresponds to `ctor_args`.
-                 // Assert len match?
-                 // cg.output.push_str("                    if ctor_args.len() != " + arg_types.len() + " { panic! }");
-                 
-                 // Generate application validation
-                 cg.output.push_str(&format!("                    let mut curr_fn = arg_{}.clone();\n", minor_idx));
-                 
-                 // Apply Params
-                 for p in 0..num_params {
-                      cg.output.push_str(&format!("                    // Apply param {}\n", p));
-                      cg.output.push_str(&format!("                    match curr_fn {{ Value::Func(f) => curr_fn = f(arg_{}.clone()), _ => panic!(\"param app\") }}\n", p));
-                 }
-                 
-                 // Apply Args and IH
-                 for (a_i, a_ty) in arg_types.iter().enumerate() {
-                      cg.output.push_str(&format!("                    let val_{} = ctor_args[{}].clone();\n", a_i, a_i));
-                      
-                      // Check recursion
-                      // Is `a_ty` == `Ind(ind_name)`?
-                      // `a_ty` might be `App(Ind(name), ...)` or just `Ind(name)`.
-                      let is_rec = if let Term::App(head, _) = &**a_ty {
-                          if let Term::Ind(n, _) = &**head { n == ind_name } else { false }
-                      } else if let Term::Ind(n, _) = &**a_ty {
-                          n == ind_name
-                      } else { false };
-                      
-                      // Apply val
-                      cg.output.push_str(&format!("                    match curr_fn {{ Value::Func(f) => curr_fn = f(val_{}.clone()), _ => panic!(\"arg app\") }}\n", a_i));
-                      
-                      if is_rec {
-                          // Compute IH
-                          // ih = rec_I_impl(params..., params..., motive, minors..., val_{})
-                          // Wait. `rec_I_impl` takes ALL args.
-                          // arg_0..arg_{total-2} are same.
-                          // only last arg (major) changes to `val_{}`.
-                          cg.output.push_str(&format!("                    let ih_{} = rec_{}_impl(", a_i, ind_name));
-                          for k in 0..total_args-1 {
-                              cg.output.push_str(&format!("arg_{}.clone(), ", k));
-                          }
-                          cg.output.push_str(&format!("val_{}.clone());\n", a_i));
-                          
-                          // Apply IH
-                          cg.output.push_str(&format!("                    match curr_fn {{ Value::Func(f) => curr_fn = f(ih_{}), _ => panic!(\"ih app\") }}\n", a_i));
-                      }
-                 }
-                 
-                 cg.output.push_str("                    curr_fn\n");
-                 cg.output.push_str("                }\n");
-             }
-             
-             cg.output.push_str("                _ => panic!(\"Invalid Ctor Index\"),\n");
-             cg.output.push_str("            }\n"); // match idx
-             cg.output.push_str("        }\n"); // match Value
-             cg.output.push_str("        _ => panic!(\"Expected Inductive\"),\n");
-             cg.output.push_str("    }\n"); // match Match
-             cg.output.push_str("}\n\n");
+            // Arguments layout:
+            //   arg_0 .. arg_{num_params-1}    : Type parameters
+            //   arg_{num_params}               : Motive (C : I params -> Type)
+            //   arg_{num_params+1} .. arg_{num_params+num_ctors} : Minor premises
+            //   arg_{total_args-1}             : Major premise (value to recurse on)
+            let total_args = num_params + 1 + num_ctors + 1;
+
+            cg.output.push_str(&format!("// Generic Recursor for {}\n", ind_name));
+            cg.output.push_str(&format!("// Layout: {} params, 1 motive, {} minors, 1 major = {} total\n",
+                num_params, num_ctors, total_args));
+            cg.output.push_str(&format!("fn rec_{}_entry(arg_0: Value) -> Value {{\n", ind_name));
+
+            // Chain closures to curry all arguments
+            for i in 1..total_args {
+                cg.output.push_str(&format!("    Value::Func(Rc::new(move |arg_{}: Value| {{\n", i));
+                // Clone previous args for the move closure
+                for j in 0..i {
+                    cg.output.push_str(&format!("        let arg_{} = arg_{}.clone();\n", j, j));
+                }
+            }
+
+            // Call the implementation
+            cg.output.push_str(&format!("        rec_{}_impl(", ind_name));
+            for i in 0..total_args {
+                if i > 0 { cg.output.push_str(", "); }
+                cg.output.push_str(&format!("arg_{}", i));
+            }
+            cg.output.push_str(")\n");
+
+            // Close all the nested closures
+            for _ in 1..total_args {
+                cg.output.push_str("    }))\n");
+            }
+            cg.output.push_str("}\n\n");
+
+            // rec_I_impl - the actual recursion implementation
+            cg.output.push_str(&format!("fn rec_{}_impl(", ind_name));
+            for i in 0..total_args {
+                if i > 0 { cg.output.push_str(", "); }
+                cg.output.push_str(&format!("arg_{}: Value", i));
+            }
+            cg.output.push_str(") -> Value {\n");
+
+            let major_idx = total_args - 1;
+            let first_minor_idx = num_params + 1;
+
+            cg.output.push_str(&format!("    match arg_{} {{\n", major_idx));
+            cg.output.push_str("        Value::Inductive(n, idx, ctor_args) => {\n");
+            cg.output.push_str(&format!("            if n != \"{}\" {{ panic!(\"rec_{}: type mismatch, expected {} got {{}}\", n); }}\n",
+                ind_name, ind_name, ind_name));
+            cg.output.push_str("            match idx {\n");
+
+            for (c_idx, ctor) in decl.ctors.iter().enumerate() {
+                cg.output.push_str(&format!("                {} => {{ // {}\n", c_idx, ctor.name));
+
+                let minor_idx = first_minor_idx + c_idx;
+
+                // Parse constructor type to find argument types (after skipping params)
+                // ctor.ty has structure: Pi P1 .. Pi Pk .. Pi A1 .. Pi An .. (I params)
+                let mut curr = &ctor.ty;
+
+                // Skip uniform parameters in constructor type
+                for _ in 0..num_params {
+                    if let Term::Pi(_, b, _) = &**curr {
+                        curr = b;
+                    }
+                }
+
+                // Collect non-parameter argument types
+                let mut arg_types = Vec::new();
+                while let Term::Pi(ty, b, _) = &**curr {
+                    arg_types.push(ty.clone());
+                    curr = b;
+                }
+
+                // Start with the minor premise function
+                cg.output.push_str(&format!("                    let mut curr_fn = arg_{}.clone();\n", minor_idx));
+
+                // Apply each constructor argument and its IH if recursive
+                for (a_i, a_ty) in arg_types.iter().enumerate() {
+                    cg.output.push_str(&format!("                    let val_{} = ctor_args[{}].clone();\n", a_i, a_i));
+
+                    // Check if this argument type is recursive (references the inductive type)
+                    let is_rec = is_recursive_arg(a_ty, ind_name);
+
+                    // Apply the value to the minor premise
+                    cg.output.push_str(&format!(
+                        "                    match curr_fn {{ Value::Func(f) => curr_fn = f(val_{}.clone()), _ => panic!(\"rec_{}: expected function for arg {}\") }}\n",
+                        a_i, ind_name, a_i
+                    ));
+
+                    // If recursive, compute and apply the inductive hypothesis
+                    if is_rec {
+                        cg.output.push_str(&format!("                    // Compute IH for recursive arg {}\n", a_i));
+                        cg.output.push_str(&format!("                    let ih_{} = rec_{}_impl(", a_i, ind_name));
+                        // Pass all args except major, then the recursive value as new major
+                        for k in 0..total_args-1 {
+                            cg.output.push_str(&format!("arg_{}.clone(), ", k));
+                        }
+                        cg.output.push_str(&format!("val_{}.clone());\n", a_i));
+
+                        // Apply IH
+                        cg.output.push_str(&format!(
+                            "                    match curr_fn {{ Value::Func(f) => curr_fn = f(ih_{}), _ => panic!(\"rec_{}: expected function for IH {}\") }}\n",
+                            a_i, ind_name, a_i
+                        ));
+                    }
+                }
+
+                cg.output.push_str("                    curr_fn\n");
+                cg.output.push_str("                }\n");
+            }
+
+            cg.output.push_str(&format!("                _ => panic!(\"rec_{}: invalid constructor index {{}}\", idx),\n", ind_name));
+            cg.output.push_str("            }\n"); // match idx
+            cg.output.push_str("        }\n"); // Value::Inductive
+            cg.output.push_str(&format!("        _ => panic!(\"rec_{}: expected Inductive value\"),\n", ind_name));
+            cg.output.push_str("    }\n"); // match
+            cg.output.push_str("}\n\n");
         }
 
         cg.output.push_str("fn main() {\n");

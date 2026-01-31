@@ -2,12 +2,12 @@
 
 (defmacro id (x) x)
 
-(inductive Nat (sort 0)
+(inductive Nat (sort 1)
   (ctor zero Nat)
   (ctor succ (pi n Nat Nat))
 )
 
-(inductive Bool (sort 0)
+(inductive Bool (sort 1)
   (ctor true Bool)
   (ctor false Bool)
 )
@@ -38,8 +38,8 @@
     (lam t Nat
       (lam f Nat
         (match c Nat
-          (case (true) t)
-          (case (false) f)
+            (case (true) t)
+            (case (false) f)
         )
       )
     )
@@ -68,7 +68,19 @@
   )
 )
 
-(inductive List (pi T (sort 0) (sort 0))
-  (ctor nil (pi T (sort 0) (List T)))
-  (ctor cons (pi T (sort 0) (pi h T (pi t (List T) (List T)))))
+(inductive List (pi T (sort 1) (sort 1))
+  (ctor nil (pi T (sort 1) (List T)))
+  (ctor cons (pi T (sort 1) (pi h T (pi t (List T) (List T)))))
 )
+
+;; The Computation type for partiality and effects
+;; Monadic structure: ret, bind
+(inductive Comp (pi A (sort 1) (sort 1))
+  (ctor ret (pi A (sort 1) (pi x A (Comp A))))
+  (ctor bind (pi A (sort 1) (pi B (sort 1) (pi m (Comp A) (pi f (pi x A (Comp B)) (Comp B))))))
+)
+
+(inductive Eq (pi A (sort 1) (pi a A (pi b A (sort 0))))
+  (ctor refl (pi A (sort 1) (pi a A (Eq A a a))))
+)
+

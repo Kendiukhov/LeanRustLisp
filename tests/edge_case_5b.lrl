@@ -1,0 +1,12 @@
+;; Edge Case 5b: Simple multiplication test
+;; Test: mul 3 4 = 12
+
+(def mul (pi a Nat (pi b Nat Nat))
+  (lam a Nat
+    (lam b Nat
+      (match a Nat
+        (case (zero) zero)
+        (case (succ m ih) (add b ih))))))
+
+;; mul 3 4 = 12
+(mul (succ (succ (succ zero))) (succ (succ (succ (succ zero)))))

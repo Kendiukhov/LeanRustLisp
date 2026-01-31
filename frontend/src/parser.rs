@@ -125,6 +125,28 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+            Some('{') => {
+                self.lexer.next(); // eat '{'
+                let mut list = Vec::new();
+                loop {
+                    self.lexer.skip_whitespace();
+                    match self.lexer.peek() {
+                        Some('}') => {
+                             self.lexer.next(); // eat '}'
+                             let end_span = self.lexer.current_span();
+                             return Ok(Syntax {
+                                 kind: SyntaxKind::BracedList(list),
+                                 span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                                 scopes: Vec::new(),
+                             });
+                        }
+                        None => return Err(ParseError::UnexpectedEof(self.lexer.current_span())),
+                        _ => {
+                            list.push(self.parse_expr()?);
+                        }
+                    }
+                }
+            }
             Some(c) if c.is_digit(10) => {
                 let mut s = String::new();
                 while let Some(c) = self.lexer.peek() {
@@ -144,7 +166,7 @@ impl<'a> Parser<'a> {
             Some(_) => {
                 let mut s = String::new();
                 while let Some(c) = self.lexer.peek() {
-                    if !c.is_whitespace() && c != '(' && c != ')' {
+                    if !c.is_whitespace() && c != '(' && c != ')' && c != '{' && c != '}' {
                         s.push(self.lexer.next().unwrap());
                     } else {
                         break;
@@ -154,11 +176,19 @@ impl<'a> Parser<'a> {
                 if s.is_empty() {
                      return Err(ParseError::UnexpectedChar(self.lexer.peek().unwrap_or('\0'), start_span));
                 }
-                Ok(Syntax {
-                    kind: SyntaxKind::Symbol(s),
-                    span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
-                    scopes: Vec::new(),
-                })
+                if s == "_" {
+                    Ok(Syntax {
+                        kind: SyntaxKind::Hole,
+                        span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                        scopes: Vec::new(),
+                    })
+                } else {
+                    Ok(Syntax {
+                        kind: SyntaxKind::Symbol(s),
+                        span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                        scopes: Vec::new(),
+                    })
+                }
             }
             None => Err(ParseError::UnexpectedEof(start_span)),
         }

@@ -1,0 +1,9 @@
+[package]
+name = "mir"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kernel = { path = "../kernel" }
+indexmap = "2.2.0"
+thiserror = "1.0"

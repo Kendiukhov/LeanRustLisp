@@ -1,0 +1,13 @@
+;; Testing Pattern Matching Elaboration
+
+(def match_bool (pi b Bool Nat)
+  (lam b Bool
+    (match b Nat
+      (case (true) zero)
+      (case (false) (succ zero)))))
+
+(def match_nat (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) zero)
+      (case (succ n_pred) n_pred))))

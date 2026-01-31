@@ -2,9 +2,10 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use frontend::parser::Parser;
 use frontend::macro_expander::Expander;
-use frontend::elaborator::Elaborator;
-use frontend::surface::SyntaxKind;
-use kernel::checker::{Env, Context, infer, whnf, check};
+use frontend::elaborator::{Elaborator, ElabError};
+use frontend::declaration_parser::DeclarationParser;
+use frontend::surface::Declaration;
+use kernel::checker::{Env, whnf};
 use std::rc::Rc;
 use std::fs;
 use std::path::Path;
@@ -18,7 +19,6 @@ pub fn start() {
     let mut env = Env::new();
     let mut expander = Expander::new();
     
-    // Load local prelude if available
     let prelude_path = "stdlib/prelude.lrl";
     if Path::new(prelude_path).exists() {
         println!("Loading prelude from {}...", prelude_path);
@@ -51,6 +51,7 @@ pub fn start() {
                             println!("  :load <file>    Load a file");
                             println!("  :type <expr>    Check the type of an expression");
                             println!("  :eval <expr>    Evaluate an expression to WHNF");
+                            println!("  :expand <expr>  Expand macros in an expression");
                         },
                         ":load" => {
                             if parts.len() < 2 {
@@ -76,10 +77,29 @@ pub fn start() {
                                 process_line(input_expr, &mut env, &mut expander, false, true);
                             }
                         },
+                        ":expand" => {
+                            if parts.len() < 2 {
+                                println!("Usage: :expand <expr>");
+                            } else {
+                                let input_expr = line[parts[0].len()..].trim();
+                                let mut parser = Parser::new(input_expr);
+                                let syntax_nodes = match parser.parse() {
+                                    Ok(nodes) => nodes,
+                                    Err(e) => {
+                                        println!("Parse Error: {:?}", e);
+                                        continue;
+                                    }
+                                };
+                                for syntax in syntax_nodes {
+                                    if let Some(expanded_syntax) = expander.expand_all_macros(syntax).unwrap() {
+                                        println!("{}", expanded_syntax.pretty_print());
+                                    }
+                                }
+                            }
+                        },
                         _ => println!("Unknown command. Type :help for help."),
                     }
                 } else {
-                    // Default behavior: Check type
                     process_line(line, &mut env, &mut expander, true, false);
                 }
             },
@@ -110,7 +130,6 @@ pub fn run_file(path: &str, env: &mut Env, expander: &mut Expander, verbose: boo
 }
 
 fn process_line(input: &str, env: &mut Env, expander: &mut Expander, show_type: bool, do_eval: bool) {
-    // 1. Parse
     let mut parser = Parser::new(input);
     let syntax_nodes = match parser.parse() {
         Ok(nodes) => nodes,
@@ -120,138 +139,174 @@ fn process_line(input: &str, env: &mut Env, expander: &mut Expander, show_type: 
         }
     };
 
-    for syntax in syntax_nodes {
-        // Special Form: (def name type value) or (inductive ...)
-        if let SyntaxKind::List(ref items) = syntax.kind {
-            if items.len() >= 3 {
-                if let SyntaxKind::Symbol(ref s) = items[0].kind {
-                    if s == "def" {
-                         if items.len() != 4 { println!("Error: def expects 3 args"); continue; }
-                        let name_node = &items[1];
-                        let type_node = &items[2];
-                        let val_node = &items[3];
+    let mut decl_parser = DeclarationParser::new(expander);
+    let decls = match decl_parser.parse(syntax_nodes) {
+        Ok(decls) => decls,
+        Err(e) => {
+            println!("Declaration Parse Error: {:?}", e);
+            return;
+        }
+    };
 
-                        let name = if let SyntaxKind::Symbol(ref n) = name_node.kind {
-                            n.clone()
-                        } else {
-                            println!("Error: def name must be a symbol");
+    for decl in decls {
+        match decl {
+            Declaration::Def { name, ty, val, is_partial } => {
+                let mut elab = Elaborator::new(env);
+                let ty_core = match elab.infer(ty) {
+                    Ok((t, s)) => {
+                        if !matches!(*s, kernel::ast::Term::Sort(_)) {
+                            println!("Type of a definition must be a Sort, but got {:?}", s);
                             continue;
-                        };
-
-                        // Process Type
-                        let ty_expanded = match expander.expand(type_node.clone()) {
-                            Ok(t) => t,
-                            Err(e) => { println!("Expansion Error (Type): {:?}", e); continue; }
-                        };
-                        let mut elab = Elaborator::new(env);
-                        let ty_core = match elab.elaborate(ty_expanded) {
-                            Ok(t) => t,
-                            Err(e) => { println!("Elaboration Error (Type): {:?}", e); continue; }
-                        };
-
-                        // Process Value
-                        let val_expanded = match expander.expand(val_node.clone()) {
-                            Ok(t) => t,
-                            Err(e) => { println!("Expansion Error (Value): {:?}", e); continue; }
-                        };
-                        let mut elab2 = Elaborator::new(env);
-                        let val_core = match elab2.elaborate(val_expanded) {
-                            Ok(t) => t,
-                            Err(e) => { println!("Elaboration Error (Value): {:?}", e); continue; }
-                        };
-
-                        // Check Type
-                        let ctx = Context::new();
-                        match check(env, &ctx, val_core.clone(), ty_core.clone()) {
-                            Ok(_) => {
-                                env.add_def(name.clone(), ty_core, val_core);
-                                if show_type { println!("Defined {}", name); }
-                            },
-                            Err(e) => {
-                                println!("Type Error in def {}: {:?}", name, e);
-                            }
                         }
-                        continue;
-                    } else if s == "inductive" {
-                        // (inductive Name Type (ctor Name Type) ...)
-                        if items.len() < 3 { println!("Error: inductive missing args"); continue; }
-                        
-                        let name = if let SyntaxKind::Symbol(n) = &items[1].kind { n.clone() } else { println!("Error: inductive name symbol"); continue; };
-                        
-                        // Type
-                        let ty_exp = match expander.expand(items[2].clone()) { Ok(t)=>t, Err(e)=>{println!("Exp Err: {:?}",e);continue;} };
-                        let mut elab = Elaborator::new(env);
-                        let ty_core = match elab.elaborate(ty_exp) { Ok(t)=>t, Err(e)=>{println!("Elab Err: {:?}",e);continue;} };
-                        
-                        // Pre-register inductive to support recursion in constructors
-                        let placeholder = kernel::ast::InductiveDecl {
-                            name: name.clone(),
-                            univ_params: vec![],
-                            ty: ty_core.clone(),
-                            ctors: vec![],
-                        };
-                        env.add_inductive(placeholder);
-                        
-                        // Constructors
-                        let mut ctors = Vec::new();
-                        let mut failed = false;
-                        for ctor_spec in items.iter().skip(3) {
-                            // Only process valid ctor lists
-                            if let SyntaxKind::List(citems) = &ctor_spec.kind {
-                                if citems.len() != 3 { println!("Error: ctor spec len"); failed=true; break; }
-                                if let SyntaxKind::Symbol(k) = &citems[0].kind {
-                                    if k != "ctor" { println!("Error: expected ctor keyword"); failed=true; break; }
-                                }
-                                let cname = if let SyntaxKind::Symbol(n)=&citems[1].kind { n.clone() } else { println!("Error ctor name"); failed=true; break; };
-                                
-                                let cty_exp = match expander.expand(citems[2].clone()) { Ok(t)=>t, Err(e)=>{println!("Exp Err: {:?}",e); failed=true; break;} };
-                                let mut elab_c = Elaborator::new(env); 
-                                let cty_core = match elab_c.elaborate(cty_exp) { Ok(t)=>t, Err(e)=>{println!("Elab Err: {:?}",e); failed=true; break;} };
-                                
-                                ctors.push(kernel::ast::Constructor { name: cname, ty: cty_core });
-                            } else { println!("Error: ctor spec not list"); failed=true; break; }
-                        }
-                        if failed { continue; }
-                        
-                        let decl = kernel::ast::InductiveDecl {
-                            name: name.clone(),
-                            univ_params: vec![],
-                            ty: ty_core,
-                            ctors: ctors,
-                        };
-                        env.add_inductive(decl);
-                        if show_type { println!("Defined inductive {}", name); }
-                        continue;
+                        t
+                    },
+                    Err(e) => { println!("Elaboration Error (Type): {:?}", e); continue; }
+                };
+
+                let val_core = match elab.check(val, &ty_core) {
+                    Ok(t) => {
+                         if let Err(e) = elab.solve_constraints() {
+                             println!("Elaboration Error (Constraints): {:?}", e);
+                             continue;
+                         }
+                         t
+                    },
+                    Err(e) => { println!("Elaboration Error (Value): {:?}", e); continue; }
+                };
+                
+                let def = if is_partial {
+                    kernel::ast::Definition::partial(name.clone(), ty_core, val_core)
+                } else {
+                    kernel::ast::Definition::total(name.clone(), ty_core, val_core)
+                };
+                match env.add_definition(def) {
+                    Ok(_) => {
+                        if show_type { println!("Defined {} ({})", name, if is_partial { "partial" } else { "total" }); }
+                    }
+                    Err(e) => {
+                        println!("Definition Error in {}: {:?}", name, e);
                     }
                 }
             }
-        }
-
-        // 2. Expand (Normal term)
-        let expanded = match expander.expand(syntax) {
-            Ok(term) => term,
-            Err(e) => {
-                println!("Expansion Error: {:?}", e);
-                continue;
+            Declaration::Axiom { name, ty } => {
+                let mut elab = Elaborator::new(env);
+                let (ty_core, ty_ty) = match elab.infer(ty) {
+                    Ok((t, s)) => (t, s),
+                    Err(e) => { println!("Elaboration Error (Type): {:?}", e); continue; }
+                };
+                if !matches!(*ty_ty, kernel::ast::Term::Sort(_)) {
+                    println!("Error: axiom type must be a type, got {:?}", ty_ty);
+                    continue;
+                }
+                env.add_axiom(name.clone(), ty_core);
+                if show_type { println!("Axiom {} declared", name); }
             }
-        };
+            Declaration::Inductive { name, ty, ctors } => {
+                // Elaborate the type
+                let mut elab = Elaborator::new(env);
+                let (ty_core, ty_ty) = match elab.infer(ty) {
+                    Ok((t, s)) => (t, s),
+                    Err(e) => { println!("Elaboration Error (Inductive Type): {:?}", e); continue; }
+                };
+                if !matches!(*ty_ty, kernel::ast::Term::Sort(_)) {
+                    println!("Error: inductive type must be a type, got {:?}", ty_ty);
+                    continue;
+                }
 
-        // 3. Elaborate
-        let mut elaborator = Elaborator::new(env);
-        let core_term = match elaborator.elaborate(expanded) {
-            Ok(term) => term,
-            Err(e) => {
-                println!("Elaboration Error: {:?}", e);
-                continue;
+                // Count parameters (pi binders in the type)
+                let num_params = {
+                    let mut n = 0;
+                    let mut t = &ty_core;
+                    while let kernel::ast::Term::Pi(_, b, _) = &**t {
+                        n += 1;
+                        t = b;
+                    }
+                    n
+                };
+
+                // Pre-register the inductive to allow self-references in constructors
+                let placeholder = kernel::ast::InductiveDecl {
+                    name: name.clone(),
+                    univ_params: vec![],
+                    num_params,
+                    ty: ty_core.clone(),
+                    ctors: vec![],
+                    is_copy: false,
+                };
+                if let Err(e) = env.add_inductive(placeholder) {
+                    println!("Error adding placeholder inductive: {:?}", e);
+                    continue;
+                }
+
+                // Elaborate constructors
+                let mut kernel_ctors = Vec::new();
+                let mut failed = false;
+                for (cname, cty) in ctors {
+                    let mut elab_c = Elaborator::new(env);
+                    let (cty_core, _) = match elab_c.infer(cty) {
+                        Ok((t, s)) => (t, s),
+                        Err(e) => {
+                            println!("Elaboration Error (Constructor {}): {:?}", cname, e);
+                            failed = true;
+                            break;
+                        }
+                    };
+                    kernel_ctors.push(kernel::ast::Constructor { name: cname, ty: cty_core });
+                }
+                if failed { continue; }
+
+                // Create the full inductive declaration
+                let decl = kernel::ast::InductiveDecl {
+                    name: name.clone(),
+                    univ_params: vec![],
+                    num_params,
+                    ty: ty_core,
+                    ctors: kernel_ctors,
+                    is_copy: false,
+                };
+
+                // Re-register with full constructors (replacing placeholder)
+                env.inductives.insert(name.clone(), decl.clone());
+
+                // Verify soundness
+                if let Err(e) = kernel::checker::check_inductive_soundness(env, &decl) {
+                    println!("Inductive soundness check failed for {}: {:?}", name, e);
+                    env.inductives.remove(&name);
+                    continue;
+                }
+
+                if show_type { println!("Defined inductive {}", name); }
             }
-        };
+            Declaration::DefMacro { name, args, body } => {
+                let macro_def = frontend::macro_expander::MacroDef { args, body };
+                expander.macros.insert(name.clone(), macro_def);
+                if show_type { println!("Defined macro {}", name); }
+            }
+            Declaration::Expr(term) => {
+                let mut elab = Elaborator::new(env);
+                let (core_term, ty) = match elab.infer(term) {
+                    Ok((term, ty)) => (term, ty),
+                    Err(e) => {
+                        match e {
+                            ElabError::OccursCheck(id, t) => {
+                                println!("Occurs Check Failed: {} in {:?}", id, t);
+                            }
+                            ElabError::UnificationError(t1, t2) => {
+                                println!("Unification Error: {:?} vs {:?}", t1, t2);
+                            }
+                            ElabError::SolutionContainsFreeVariables(t) => {
+                                println!("Solution Contains Free Variables: {:?}", t);
+                            }
+                            _ => {
+                                println!("Elaboration Error: {:?}", e);
+                            }
+                        }
+                        continue;
+                    }
+                };
 
-        // 4. Type Check / Infer
-        let ctx = Context::new();
-        match infer(env, &ctx, core_term.clone()) {
-            Ok(ty) => {
                 if show_type {
-                    let ty_norm = whnf(env, ty);
+                    let ty_norm = whnf(env, ty, kernel::Transparency::All);
                     println!(": {:?}", ty_norm);
                 }
                 
@@ -259,9 +314,6 @@ fn process_line(input: &str, env: &mut Env, expander: &mut Expander, show_type: 
                     let val_norm = strong_normalize(env, core_term);
                     println!("= {}", pretty_print(env, &val_norm));
                 }
-            },
-            Err(e) => {
-                println!("Type Error: {:?}", e);
             }
         }
     }
@@ -269,7 +321,7 @@ fn process_line(input: &str, env: &mut Env, expander: &mut Expander, show_type: 
 
 fn strong_normalize(env: &Env, term: Rc<kernel::ast::Term>) -> Rc<kernel::ast::Term> {
     use kernel::ast::Term;
-    let whnf = kernel::checker::whnf(env, term);
+    let whnf = kernel::checker::whnf(env, term, kernel::Transparency::All);
     match &*whnf {
         Term::App(f, a) => {
             Rc::new(Term::App(
@@ -277,27 +329,21 @@ fn strong_normalize(env: &Env, term: Rc<kernel::ast::Term>) -> Rc<kernel::ast::T
                 strong_normalize(env, a.clone())
             ))
         }
-        Term::Lam(ty, body) => {
-            // We don't go under binders for now to avoid dealing with variable capture/renaming
-            // unless we strictly need to. But for values (closed terms), we usually want to.
-            // For simple math, we shouldn't have free vars in body if it's a value.
-            // But we have De Bruijn indices.
-            // If we normalize body, we must be careful?
-            // `whnf` doesn't reduce under lambda.
-            // But for `Nat`, we don't have lambdas in values (except inside closures).
-            // Let's recurse.
+        Term::Lam(ty, body, info) => {
             Rc::new(Term::Lam(
                 strong_normalize(env, ty.clone()),
-                strong_normalize(env, body.clone())
+                strong_normalize(env, body.clone()),
+                *info
             ))
         }
-        Term::Pi(ty, body) => {
+        Term::Pi(ty, body, info) => {
             Rc::new(Term::Pi(
                 strong_normalize(env, ty.clone()),
-                strong_normalize(env, body.clone())
+                strong_normalize(env, body.clone()),
+                *info
             ))
         }
-        Term::LetE(ty, v, b) => { // Should be removed by whnf
+        Term::LetE(_ty, v, b) => { 
              strong_normalize(env, b.subst(0, v)) 
         }
         _ => whnf,
@@ -308,10 +354,9 @@ fn pretty_print(env: &Env, term: &kernel::ast::Term) -> String {
     use kernel::ast::Term;
     match term {
         Term::Var(i) => format!("#{}", i),
-        Term::Sort(l) => format!("Sort({:?})", l), // Simplify level printing if possible
+        Term::Sort(l) => format!("Sort({:?})", l),
         Term::Const(n, _) => n.clone(),
         Term::App(f, a) => {
-            // Flatten app spine
             let mut args = vec![a];
             let mut curr = f;
             while let Term::App(sub_f, sub_a) = &**curr {
@@ -324,8 +369,8 @@ fn pretty_print(env: &Env, term: &kernel::ast::Term) -> String {
             let ar_str: Vec<String> = args.iter().map(|arg| pretty_print(env, &***arg)).collect();
             format!("({} {})", head, ar_str.join(" "))
         }
-        Term::Lam(_, body) => format!("(lam {})", pretty_print(env, &**body)),
-        Term::Pi(_, body) => format!("(pi {})", pretty_print(env, &**body)), // infer name?
+        Term::Lam(_, body, _) => format!("(lam {})", pretty_print(env, &**body)),
+        Term::Pi(_, body, _) => format!("(pi {})", pretty_print(env, &**body)),
         Term::LetE(_, val, body) => format!("(let {} {})", pretty_print(env, &**val), pretty_print(env, &**body)),
         Term::Ind(n, _) => n.clone(),
         Term::Ctor(ind_name, idx, _) => {
@@ -337,5 +382,6 @@ fn pretty_print(env: &Env, term: &kernel::ast::Term) -> String {
             format!("{}.{}", ind_name, idx)
         }
         Term::Rec(n, _) => format!("Rec({})", n),
+        Term::Meta(id) => format!("?{}", id),
     }
 }

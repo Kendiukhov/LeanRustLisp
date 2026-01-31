@@ -1,0 +1,18 @@
+;; Edge Case 7: Less-than comparison
+;; Test: lt 3 5 = true, lt 5 3 = false
+
+(def lt (pi a Nat (pi b Nat Bool))
+  (lam a Nat
+    (lam b Nat
+      (match a Bool
+        (case (zero)
+          (match b Bool
+            (case (zero) false)
+            (case (succ m ih) true)))
+        (case (succ n ih)
+          (match b Bool
+            (case (zero) false)
+            (case (succ m ih2) ih)))))))
+
+;; lt 2 5 = true (2 < 5)
+(lt (succ (succ zero)) (succ (succ (succ (succ (succ zero))))))

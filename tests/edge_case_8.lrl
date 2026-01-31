@@ -1,0 +1,18 @@
+;; Edge Case 8: Power function (a^n)
+
+(def mul (pi a Nat (pi b Nat Nat))
+  (lam a Nat
+    (lam b Nat
+      (match a Nat
+        (case (zero) zero)
+        (case (succ m ih) (add b ih))))))
+
+(def power (pi a Nat (pi n Nat Nat))
+  (lam a Nat
+    (lam n Nat
+      (match n Nat
+        (case (zero) (succ zero))
+        (case (succ m ih) (mul a ih))))))
+
+;; 2^5 = 32
+(power (succ (succ zero)) (succ (succ (succ (succ (succ zero))))))

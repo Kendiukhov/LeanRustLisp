@@ -1,0 +1,20 @@
+;; Edge Case 9: Natural number equality
+;; eq 3 3 = true, eq 3 4 = false
+;; Note: ih from outer match is nat_eq applied to predecessor of a
+;; We need to apply ih to m (predecessor of b)
+
+(def nat_eq (pi a Nat (pi b Nat Bool))
+  (lam a Nat
+    (lam b Nat
+      (match a Bool
+        (case (zero)
+          (match b Bool
+            (case (zero) true)
+            (case (succ m ih) false)))
+        (case (succ n ih)
+          (match b Bool
+            (case (zero) false)
+            (case (succ m ih2) (ih m))))))))
+
+;; Test: nat_eq 3 3 = true
+(nat_eq (succ (succ (succ zero))) (succ (succ (succ zero))))

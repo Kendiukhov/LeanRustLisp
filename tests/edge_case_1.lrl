@@ -1,0 +1,17 @@
+;; Edge Case 1: Higher-order functions and function composition
+;; Test: apply a function twice
+
+(def apply_twice (pi f (pi n Nat Nat) (pi n Nat Nat))
+  (lam f (pi n Nat Nat)
+    (lam n Nat
+      (f (f n)))))
+
+;; Double: n -> 2n using recursion
+(def double (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) zero)
+      (case (succ m ih) (succ (succ ih))))))
+
+;; Apply double twice to 2: double(double(2)) = double(4) = 8
+(apply_twice double (succ (succ zero)))

@@ -1,0 +1,37 @@
+;; tests/constraints.lrl
+
+(inductive Nat (sort 0)
+  (zero Nat)
+  (succ (pi n Nat Nat)))
+
+(def id 
+     (pi {A} (sort 0) (pi x A A))
+     (lam {A} (sort 0) (lam x A x)))
+
+(def const 
+     (pi {A} (sort 0) (pi {B} (sort 0) (pi a A (pi b B A))))
+     (lam {A} (sort 0) (lam {B} (sort 0) (lam a A (lam b B a)))))
+
+;; Test for constraint postponement logic
+;; This is tricky to construct exactly without explicit holes, but implicit args create metas.
+;; A case where ?m is determined later?
+
+;; ?m : Nat -> Nat
+;; f = (lambda x. ?m x)
+;; g = (lambda y. succ y)
+;; f = g
+;; => ?m = succ
+
+;; Standard unification might fail if ?m handled first.
+;; But let's try a dependent case?
+
+;; Simple identity with hole
+(def z Nat (id _ zero))
+;; Elaborator creates meta ?m for _. 
+;; (id ?m zero).
+;; Unifies ?m with Nat (from zero type) -> Solved.
+;; This worked before too.
+
+;; Let's try to verify it runs without error.
+z
+

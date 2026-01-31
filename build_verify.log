@@ -1,0 +1,263 @@
+warning: hard linking files in the incremental compilation cache failed. copying files instead. consider moving the cache directory to a file system which supports hard linking in session dir `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfc6cyjt4x-1bz6zba-working`
+
+warning: failed to garbage collect incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfc5ncc45t-zphdcf-working`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfbf54dx71-m4ngt3-6xsxirb7xzjaxz8vzmtypj8nq`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfb803a98t-xojspc-3jyesd8ny1r8ez077stbdq54r`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfc613njtd-1k19e5z-4ja1dsihd7kl9gho5lfky24fa`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfc5no54gd-fvni4s-49v5jdgzjca1u2fiv7b3nwllf`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfbf89198o-1cbjm23-dmogrfjet3ftqa8haomfywekk`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfbfaaqihx-1gsdm7v-f4qir7zk556817rcv3pal6aov`: No such file or directory (os error 2)
+
+warning: unused import: `std::fmt`
+ --> kernel/src/ast.rs:2:5
+  |
+2 | use std::fmt;
+  |     ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused variable: `name`
+   --> kernel/src/checker.rs:253:10
+    |
+253 |     for (name, ty) in param_binders.iter().rev() {
+    |          ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `num_ctors`
+   --> kernel/src/checker.rs:285:84
+    |
+285 | fn compute_minor_premise_type(ind_name: &str, ctor_idx: usize, ctor: &Constructor, num_ctors: usize, num_params: usize) -> Rc<Term> {
+    |                                                                                    ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_num_ctors`
+
+warning: unused variable: `env`
+   --> kernel/src/checker.rs:546:25
+    |
+546 | fn try_extract_ctor_app(env: &Env, t: &Rc<Term>) -> Option<(String, usize, Vec<Rc<Term>>)> {
+    |                         ^^^ help: if this is intentional, prefix it with an underscore: `_env`
+
+warning: field `name` is never read
+   --> kernel/src/checker.rs:362:9
+    |
+361 |     struct Binder {
+    |            ------ field in this struct
+362 |         name: String,
+    |         ^^^^
+    |
+    = note: `#[warn(dead_code)]` on by default
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/kernel-zga1vz2pxy60/s-hfc6c647s0-nh8ln4-7pqlmc34kgx33agpyu4ci1y58`: No such file or directory (os error 2)
+
+warning: `kernel` (lib) generated 14 warnings (run `cargo fix --lib -p kernel` to apply 1 suggestion)
+warning: hard linking files in the incremental compilation cache failed. copying files instead. consider moving the cache directory to a file system which supports hard linking in session dir `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfc6cz1ld4-2ds25j-working`
+
+warning: failed to garbage collect incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbvbo2qly-1jwoum5-working`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbvcunba8-xo6i90-db1sudmr040nmhnk8icfe8y0y`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbfoq99pn-15o6io3-e07m9nl1yl4h123ncdyq2runn`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfc614bvqp-1ffblkx-9mhbrha7tvqxp53aso8kfzgl7`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbfqwr5l9-n227m2-5uad2iskruodee2g48cquohd1`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbffh7bef-f3zzi1-756ofcnucbfn2rn7h2cww00j3`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbf89nnsj-ykwykj-11nu4v37dqi1j01djbx1vhw7z`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbg32ep0n-4faojr-7us9n99s4hkzvg21ox1wfq3d4`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfb8vtkals-12zlxpv-d33ub8i09td5ga3fkz8ns27q9`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbg49lz9t-14er2k2-cxnbxjnfi7geg7qmj0zc8mked`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbffx3ixa-can7ws-oawpwybsouk9o26j35qt1rsu`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbfh8vljj-n4vlbd-f4ns7sr9ls9d412sj4o2jja0o`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfc5nozefa-1ofh7nz-5ddu9377alj757pzt1fct266c`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfb8uw1bf2-e3wjk3-2b7lgwh8lkgwt4hu20m345xit`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbf54xggt-1fno95q-85piy6wip9jf7m7rd39igkar9`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbfab6rbt-j51ank-36nhuofbst0red76xzo8gaurc`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbgb68ryj-octr3l-6e8r8tlgksy4y8052pqrq8ume`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfbf21j05g-ny4t3s-6qrmhbzuio624w1akrurafmrb`: No such file or directory (os error 2)
+
+warning: unused import: `Level`
+ --> codegen/src/lib.rs:2:25
+  |
+2 | use kernel::ast::{Term, Level, InductiveDecl};
+  |                         ^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `std::rc::Rc`
+ --> codegen/src/lib.rs:3:5
+  |
+3 | use std::rc::Rc;
+  |     ^^^^^^^^^^^
+
+warning: unused variable: `l`
+  --> codegen/src/lib.rs:56:24
+   |
+56 |             Term::Sort(l) => {
+   |                        ^ help: if this is intentional, prefix it with an underscore: `_l`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `name`
+   --> codegen/src/lib.rs:108:23
+    |
+108 |             Term::Ind(name, _) => {
+    |                       ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: field `indent_level` is never read
+ --> codegen/src/lib.rs:9:5
+  |
+7 | pub struct Codegen {
+  |            ------- field in this struct
+8 |     output: String,
+9 |     indent_level: usize,
+  |     ^^^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` on by default
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/codegen-cje92iv3m9k3/s-hfc6c6iq1r-7swg25-94cdtfr131uksyrdkllctsip3`: No such file or directory (os error 2)
+
+   Compiling frontend v0.1.0 (/Volumes/Crucial X6/MacBook/Code/leanrustlisp/frontend)
+warning: `codegen` (lib) generated 25 warnings (run `cargo fix --lib -p codegen` to apply 2 suggestions)
+warning: hard linking files in the incremental compilation cache failed. copying files instead. consider moving the cache directory to a file system which supports hard linking in session dir `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfc6euj9l0-1isjwcm-working`
+
+warning: failed to garbage collect incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfc5pg4c8m-dcqzwv-working`: No such file or directory (os error 2)
+
+warning: failed to garbage collect incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbvcunbau-yv0c9x-working`: No such file or directory (os error 2)
+
+warning: failed to garbage collect incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbvbo2qmw-gn57fh-working`: No such file or directory (os error 2)
+
+warning: failed to garbage collect incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfc65x7eba-1flj4i0-working`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb88ts6gi-1ju4f40-dgv9ewj97uaxge8u13wleff5i`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbuhxnl87-1503fss-2ss8dmktpphcq9o6q1rymbfcr`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb838tiwb-roi077-3h8hway5zry2suyg77r9m9feq`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbvd58bky-1vrh3kt-dk5tu7uviiyec67vtebjk7xgz`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbg97vnfx-zth8oi-c3wvybh7b9lhrrx5moj0mbosi`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbvhoz9x5-199axn4-8s49wu2g8x78e9omnbaacp9i7`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfc6c6itxl-160xgwl-390isg6eqwgex8rzeixfey3xg`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb85hepgm-181rghw-444ton7k659pa81usupi8pj6f`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb803e6sb-1m2plk3-93dcjpqgd0k5fr9c0m1sewj5y`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfc614bu2w-12711k7-5bgydv2mc5zea0wimimnshm9i`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbumxmpur-11td9hb-7mk2osr6zxml98jnleostmcl7`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb87cuo8q-f9nruy-1esr7alnzdis97vvzkcu4koo7`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb88brqgx-1j6g3d7-ebqlu148zyinue6dn458fx9jn`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbfab6rbt-1msnx8m-2c6lyxhpjog17es8j30qt52xn`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb87v9wh0-5sbzsx-ckbzhyfsnzdcrb3a1a61ef1t9`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbghlmzqt-105r8xk-f5bqmsncn9rjth9ken1bsm5aq`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb8ygefq4-1li0unm-22odiz1fgshsbnbto0hnla6vo`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfb84d0smn-wp0949-3376xhx6fhz8qz6vsx3428mkw`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbg6vv39e-1ms6wi8-5ywo28g4o8wshbudcpwsi6o46`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfc5pqo91o-1dpxmre-2sjejv8cgf4lzzt6fb8zbtwdh`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfc5nozbvn-bv0gix-eib1jk9j3rshl2hhdpzxta68r`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbf54xdxz-11333dt-5qm57zbwqcwnrz0ibg5g2um1n`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbf89no3t-1t901bq-c84l4pd0kl6b28l3p8sopycei`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbgaheodj-19fnkhs-cumnztrnvhv1tje392cv4kjve`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfc66u0dad-1w0jqic-17vihkc99yo185skar2dd8fjm`: No such file or directory (os error 2)
+
+warning: failed to garbage collect finalized incremental compilation session directory `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/target/debug/incremental/frontend-1a2dabr3waodm/s-hfbvgadh5g-zcpa6n-141u1dqy31dxrzlz8gm1ewh3n`: No such file or directory (os error 2)
+
+warning: unused import: `std::rc::Rc`
+ --> frontend/src/surface.rs:1:5
+  |
+1 | use std::rc::Rc;
+  |     ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `std::fmt`
+ --> frontend/src/surface.rs:2:5
+  |
+2 | use std::fmt;
+  |     ^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> frontend/src/macro_expander.rs:133:30
+    |
+133 |             SyntaxKind::List(mut list) => {
+    |                              ----^^^^
+    |                              |
+    |                              help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: unused variable: `c_idx`
+   --> frontend/src/elaborator.rs:204:23
+    |
+204 |                  for (c_idx, ctor) in decl.ctors.iter().enumerate() {
+    |                       ^^^^^ help: if this is intentional, prefix it with an underscore: `_c_idx`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `name`
+   --> frontend/src/elaborator.rs:290:31
+    |
+290 |                          for (name, ty) in binders.iter().rev() {
+    |                               ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+error[E0382]: borrow of moved value: `params`
+   --> frontend/src/elaborator.rs:215:35
+    |
+176 |                  let mut params = Vec::new();
+    |                      ---------- move occurs because `params` has type `Vec<Rc<Term>>`, which does not implement the `Copy` trait
+...
+196 |                  for p in params {
+    |                           ------ `params` moved due to this implicit call to `.into_iter()`
+...
+215 |                          for p in &params {
+    |                                   ^^^^^^^ value borrowed here after move
+    |
+note: `into_iter` takes ownership of the receiver `self`, which moves `params`
+   --> /Users/ihorkendiukhov/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/iter/traits/collect.rs:311:18
+    |
+311 |     fn into_iter(self) -> Self::IntoIter;
+    |                  ^^^^
+help: consider iterating over a slice of the `Vec<Rc<Term>>`'s content to avoid moving into the `for` loop
+    |
+196 |                  for p in &params {
+    |                           +
+
+For more information about this error, try `rustc --explain E0382`.
+warning: `frontend` (lib) generated 36 warnings
+error: could not compile `frontend` (lib) due to 1 previous error; 36 warnings emitted

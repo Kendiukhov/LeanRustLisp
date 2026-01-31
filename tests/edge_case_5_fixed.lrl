@@ -1,0 +1,19 @@
+;; Edge Case 5 Fixed: Factorial using (succ m) instead of n
+;; The match pattern (succ m ih) binds m as the predecessor
+;; To get the current value, we need (succ m), not n (which is the original argument)
+
+(def mul (pi a Nat (pi b Nat Nat))
+  (lam a Nat
+    (lam b Nat
+      (match a Nat
+        (case (zero) zero)
+        (case (succ m ih) (add b ih))))))
+
+(def factorial (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) (succ zero))
+      (case (succ m ih) (mul (succ m) ih)))))
+
+;; factorial 4 = 24
+(factorial (succ (succ (succ (succ zero)))))

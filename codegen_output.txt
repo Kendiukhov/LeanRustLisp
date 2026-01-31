@@ -1,0 +1,661 @@
+TypeMismatch: Term: Lam(Ind("Nat", []), Ind("Nat", []), Default), Expected Pi(Ind("Nat", []), Sort(Zero), Default), Got Pi(Ind("Nat", []), Sort(Succ(Zero)), Default)
+TypeMismatch: Term: Lam(Ind("Nat", []), Ind("Nat", []), Default), Expected Pi(Ind("Nat", []), Sort(Zero), Default), Got Pi(Ind("Nat", []), Sort(Succ(Zero)), Default)
+// MIR Codegen for add:
+fn add() -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                _0 = Value::Closure(closure_3, Box::new(vec![]));
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for add_closure_0:
+fn add_closure_0(env: Value, arg: Value) -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+    let mut _1: Value = env;
+    let mut _2: Value = arg;
+    let mut _3: Value = Value::Unit;
+    let mut _4: Value = Value::Unit;
+    let mut _5: Value = Value::Unit;
+    let mut _6: Value = Value::Unit;
+    let mut _7: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                _3 = _1.as_vector()[0].clone();
+                _4 = _1.as_vector()[1].clone();
+                _5 = _1.as_vector()[2].clone();
+                // StorageLive(Local(6))
+                _6 = succ();
+                state = 2;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            2 => {
+                // StorageLive(Local(7))
+                _7 = _2;
+                state = 3;
+                continue;
+            }
+            3 => {
+                let (f, env) = _6.as_closure();
+                _0 = f(Value::Vector(*env), _7);
+                state = 4;
+                continue;
+            }
+            4 => {
+                // StorageDead(Local(7))
+                // StorageDead(Local(6))
+                state = 1;
+                continue;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for add_closure_1:
+fn add_closure_1(env: Value, arg: Value) -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+    let mut _1: Value = env;
+    let mut _2: Value = arg;
+    let mut _3: Value = Value::Unit;
+    let mut _4: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                _3 = _1.as_vector()[0].clone();
+                _4 = _1.as_vector()[1].clone();
+                _0 = Value::Closure(closure_0, Box::new(vec![_3.clone(), _4.clone(), _2.clone()]));
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for add_closure_2:
+fn add_closure_2(env: Value, arg: Value) -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+    let mut _1: Value = env;
+    let mut _2: Value = arg;
+    let mut _3: Value = Value::Unit;
+    let mut _4: Value = Value::Unit;
+    let mut _5: Value = Value::Unit;
+    let mut _6: Value = Value::Unit;
+    let mut _7: Value = Value::Unit;
+    let mut _8: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                _3 = _1.as_vector()[0].clone();
+                // StorageLive(Local(4))
+                _4 = _3;
+                state = 2;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            2 => {
+                // StorageLive(Local(5))
+                _5 = _4;
+                match _5.as_nat() {
+                    0 => { state = 3; continue; }
+                    1 => { state = 4; continue; }
+                    _ => unreachable!(),
+                }
+            }
+            3 => {
+                // StorageLive(Local(6))
+                _6 = _2;
+                state = 5;
+                continue;
+            }
+            4 => {
+                // StorageLive(Local(7))
+                _7 = Value::Closure(closure_1, Box::new(vec![_3.clone(), _2.clone()]));
+                state = 6;
+                continue;
+            }
+            5 => {
+                _0 = _6;
+                // StorageDead(Local(6))
+                state = 1;
+                continue;
+            }
+            6 => {
+                // StorageLive(Local(8))
+                let (f, env) = _7.as_closure();
+                _8 = f(Value::Vector(*env), _4.as_vector()[0].clone());
+                state = 7;
+                continue;
+            }
+            7 => {
+                let (f, env) = _8.as_closure();
+                _0 = f(Value::Vector(*env), _4.as_vector()[0].clone());
+                state = 8;
+                continue;
+            }
+            8 => {
+                // StorageDead(Local(8))
+                // StorageDead(Local(7))
+                // StorageDead(Local(5))
+                // StorageDead(Local(4))
+                state = 1;
+                continue;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for add_closure_3:
+fn add_closure_3(env: Value, arg: Value) -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+    let mut _1: Value = env;
+    let mut _2: Value = arg;
+
+    loop {
+        match state {
+            0 => {
+                _0 = Value::Closure(closure_2, Box::new(vec![_2.clone()]));
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Bool", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+// MIR Codegen for not:
+fn not() -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                _0 = Value::Closure(closure_0, Box::new(vec![]));
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for not_closure_0:
+fn not_closure_0(env: Value, arg: Value) -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+    let mut _1: Value = env;
+    let mut _2: Value = arg;
+    let mut _3: Value = Value::Unit;
+    let mut _4: Value = Value::Unit;
+    let mut _5: Value = Value::Unit;
+    let mut _6: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                // StorageLive(Local(3))
+                _3 = _2;
+                state = 2;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            2 => {
+                // StorageLive(Local(4))
+                _4 = _3;
+                match _4.as_nat() {
+                    0 => { state = 3; continue; }
+                    1 => { state = 4; continue; }
+                    _ => unreachable!(),
+                }
+            }
+            3 => {
+                // StorageLive(Local(5))
+                _5 = false();
+                state = 5;
+                continue;
+            }
+            4 => {
+                // StorageLive(Local(6))
+                _6 = true();
+                state = 6;
+                continue;
+            }
+            5 => {
+                _0 = _5;
+                // StorageDead(Local(5))
+                state = 1;
+                continue;
+            }
+            6 => {
+                _0 = _6;
+                // StorageDead(Local(6))
+                // StorageDead(Local(4))
+                // StorageDead(Local(3))
+                state = 1;
+                continue;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Nat", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Nat", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Nat", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+// MIR Codegen for if_nat:
+fn if_nat() -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                _0 = Value::Closure(closure_2, Box::new(vec![]));
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for if_nat_closure_0:
+fn if_nat_closure_0(env: Value, arg: Value) -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+    let mut _1: Value = env;
+    let mut _2: Value = arg;
+    let mut _3: Value = Value::Unit;
+    let mut _4: Value = Value::Unit;
+    let mut _5: Value = Value::Unit;
+    let mut _6: Value = Value::Unit;
+    let mut _7: Value = Value::Unit;
+    let mut _8: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                _3 = _1.as_vector()[0].clone();
+                _4 = _1.as_vector()[1].clone();
+                // StorageLive(Local(5))
+                _5 = _3;
+                state = 2;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            2 => {
+                // StorageLive(Local(6))
+                _6 = _5;
+                match _6.as_nat() {
+                    0 => { state = 3; continue; }
+                    1 => { state = 4; continue; }
+                    _ => unreachable!(),
+                }
+            }
+            3 => {
+                // StorageLive(Local(7))
+                _7 = _4;
+                state = 5;
+                continue;
+            }
+            4 => {
+                // StorageLive(Local(8))
+                _8 = _2;
+                state = 6;
+                continue;
+            }
+            5 => {
+                _0 = _7;
+                // StorageDead(Local(7))
+                state = 1;
+                continue;
+            }
+            6 => {
+                _0 = _8;
+                // StorageDead(Local(8))
+                // StorageDead(Local(6))
+                // StorageDead(Local(5))
+                state = 1;
+                continue;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for if_nat_closure_1:
+fn if_nat_closure_1(env: Value, arg: Value) -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+    let mut _1: Value = env;
+    let mut _2: Value = arg;
+    let mut _3: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                _3 = _1.as_vector()[0].clone();
+                _0 = Value::Closure(closure_0, Box::new(vec![_3.clone(), _2.clone()]));
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for if_nat_closure_2:
+fn if_nat_closure_2(env: Value, arg: Value) -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+    let mut _1: Value = env;
+    let mut _2: Value = arg;
+
+    loop {
+        match state {
+            0 => {
+                _0 = Value::Closure(closure_1, Box::new(vec![_2.clone()]));
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Bool", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Bool", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+// MIR Codegen for and:
+fn and() -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                _0 = Value::Closure(closure_1, Box::new(vec![]));
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for and_closure_0:
+fn and_closure_0(env: Value, arg: Value) -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+    let mut _1: Value = env;
+    let mut _2: Value = arg;
+    let mut _3: Value = Value::Unit;
+    let mut _4: Value = Value::Unit;
+    let mut _5: Value = Value::Unit;
+    let mut _6: Value = Value::Unit;
+    let mut _7: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                _3 = _1.as_vector()[0].clone();
+                // StorageLive(Local(4))
+                _4 = _3;
+                state = 2;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            2 => {
+                // StorageLive(Local(5))
+                _5 = _4;
+                match _5.as_nat() {
+                    0 => { state = 3; continue; }
+                    1 => { state = 4; continue; }
+                    _ => unreachable!(),
+                }
+            }
+            3 => {
+                // StorageLive(Local(6))
+                _6 = _2;
+                state = 5;
+                continue;
+            }
+            4 => {
+                // StorageLive(Local(7))
+                _7 = false();
+                state = 6;
+                continue;
+            }
+            5 => {
+                _0 = _6;
+                // StorageDead(Local(6))
+                state = 1;
+                continue;
+            }
+            6 => {
+                _0 = _7;
+                // StorageDead(Local(7))
+                // StorageDead(Local(5))
+                // StorageDead(Local(4))
+                state = 1;
+                continue;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for and_closure_1:
+fn and_closure_1(env: Value, arg: Value) -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+    let mut _1: Value = env;
+    let mut _2: Value = arg;
+
+    loop {
+        match state {
+            0 => {
+                _0 = Value::Closure(closure_0, Box::new(vec![_2.clone()]));
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Bool", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+TypeMismatch: Term: Lam(Ind("Bool", []), Ind("Bool", []), Default), Expected Pi(Ind("Bool", []), Sort(Zero), Default), Got Pi(Ind("Bool", []), Sort(Succ(Zero)), Default)
+// MIR Codegen for or:
+fn or() -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                _0 = Value::Closure(closure_1, Box::new(vec![]));
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for or_closure_0:
+fn or_closure_0(env: Value, arg: Value) -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+    let mut _1: Value = env;
+    let mut _2: Value = arg;
+    let mut _3: Value = Value::Unit;
+    let mut _4: Value = Value::Unit;
+    let mut _5: Value = Value::Unit;
+    let mut _6: Value = Value::Unit;
+    let mut _7: Value = Value::Unit;
+
+    loop {
+        match state {
+            0 => {
+                _3 = _1.as_vector()[0].clone();
+                // StorageLive(Local(4))
+                _4 = _3;
+                state = 2;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            2 => {
+                // StorageLive(Local(5))
+                _5 = _4;
+                match _5.as_nat() {
+                    0 => { state = 3; continue; }
+                    1 => { state = 4; continue; }
+                    _ => unreachable!(),
+                }
+            }
+            3 => {
+                // StorageLive(Local(6))
+                _6 = true();
+                state = 5;
+                continue;
+            }
+            4 => {
+                // StorageLive(Local(7))
+                _7 = _2;
+                state = 6;
+                continue;
+            }
+            5 => {
+                _0 = _6;
+                // StorageDead(Local(6))
+                state = 1;
+                continue;
+            }
+            6 => {
+                _0 = _7;
+                // StorageDead(Local(7))
+                // StorageDead(Local(5))
+                // StorageDead(Local(4))
+                state = 1;
+                continue;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+
+// MIR Codegen for or_closure_1:
+fn or_closure_1(env: Value, arg: Value) -> Value {
+    let mut state = 0;
+    let mut _0: Value = Value::Unit;
+    let mut _1: Value = env;
+    let mut _2: Value = arg;
+
+    loop {
+        match state {
+            0 => {
+                _0 = Value::Closure(closure_0, Box::new(vec![_2.clone()]));
+                state = 1;
+                continue;
+            }
+            1 => {
+                break;
+            }
+            _ => break,
+        }
+    }
+    _0
+}
+
+Declaration Parse Error: Expansion(TransformationError)

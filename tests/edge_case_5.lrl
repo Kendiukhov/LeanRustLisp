@@ -1,0 +1,18 @@
+;; Edge Case 5: Factorial using recursion
+;; Test: factorial 4 = 24
+
+(def mul (pi a Nat (pi b Nat Nat))
+  (lam a Nat
+    (lam b Nat
+      (match a Nat
+        (case (zero) zero)
+        (case (succ m ih) (add b ih))))))
+
+(def factorial (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) (succ zero))
+      (case (succ m ih) (mul n ih)))))
+
+;; factorial 4 = 4 * 3 * 2 * 1 = 24
+(factorial (succ (succ (succ (succ zero)))))

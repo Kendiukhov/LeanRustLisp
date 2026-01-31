@@ -1,0 +1,29 @@
+;; Rely on Prelude for Nat, Bool, Eq
+
+;; Recursive Add (manually defined to test Rec)
+(def my_add (pi n Nat (pi m Nat Nat))
+  (lam n Nat (lam m Nat
+    (rec Nat n (lam _ Nat Nat)
+      m
+      (lam n_pred Nat (lam add_rest Nat (succ add_rest)))))))
+
+;; 1. Higher-Order Capture
+(def make_adder (pi x Nat (pi y Nat Nat))
+  (lam x Nat (lam y Nat (my_add x y))))
+
+(def add_two (pi y Nat Nat) 
+  (make_adder (succ (succ zero))))
+
+;; 2. Higher-Order Application
+(def apply_fn (pi f (pi x Nat Nat) (pi v Nat Nat))
+  (lam f (pi x Nat Nat) (lam v Nat (f v))))
+
+(def test_apply (Nat)
+  (apply_fn add_two (succ zero)))
+
+;; 3. Proof Erasure
+(def ignore_proof (pi n Nat (pi h (Eq Nat n n) Nat))
+  (lam n Nat (lam h (Eq Nat n n) n)))
+
+(def test_erasure (Nat)
+  (ignore_proof zero (refl Nat zero)))

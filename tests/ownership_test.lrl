@@ -1,0 +1,26 @@
+;; Ownership Analysis Integration Tests
+;; Run with: cargo run -p cli -- compile tests/ownership_test.lrl
+
+;; Define a linear type (not Copy)
+(inductive Resource (sort 1)
+  (ctor acquire Resource)
+  (ctor release (pi r Resource Resource)))
+
+;; Simple linear type usage - should pass
+(def use_resource (pi r Resource Nat)
+  (lam r Resource zero))
+
+;; Create and immediately use - should pass
+(def create_and_use Nat
+  (use_resource acquire))
+
+;; Test with Nat (Copy type) - multiple uses should be fine
+(def double_nat (pi n Nat Nat)
+  (lam n Nat (add n n)))
+
+;; Test with Bool (Copy type) - should pass
+(def bool_to_nat (pi b Bool Nat)
+  (lam b Bool
+    (match b Nat
+      (case (true) (succ zero))
+      (case (false) zero))))
