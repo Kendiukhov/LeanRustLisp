@@ -274,27 +274,7 @@ impl<'a> Elaborator<'a> {
             SurfaceTermKind::Match(scrutinee, ret_type, cases) => {
                 self.elaborate_match(*scrutinee, *ret_type, cases, span)
             }
-            SurfaceTermKind::Lam(name, binder_info, ty, body) => {
-                // Lam without expected type - we need to infer the body type
-                // Check the local type annotation
-                let (ty_elab, ty_ty) = self.infer(*ty)?;
-                let ty_ty_whnf = kernel::checker::whnf(self.env, ty_ty, kernel::Transparency::All);
-                if !matches!(&*ty_ty_whnf, Term::Sort(_)) {
-                     // TODO: Better error message
-                     return Err(ElabError::TypeMismatch {
-                        expected: "Sort".to_string(),
-                        got: format!("{:?}", ty_ty_whnf),
-                        span,
-                     });
-                }
-                self.locals.push((name.clone(), ty_elab.clone()));
-                let (body_elab, body_ty) = self.infer(*body)?;
-                self.locals.pop();
 
-                let lam_term = Rc::new(Term::Lam(ty_elab.clone(), body_elab, binder_info));
-                let lam_ty = Rc::new(Term::Pi(ty_elab, body_ty, binder_info));
-                Ok((lam_term, lam_ty))
-            }
             _ => Err(ElabError::NotImplemented(span)),
         }
     }

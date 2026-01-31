@@ -1275,4 +1275,95 @@ mod tests {
         
         assert!(result.is_err(), "Opaque abstraction should prevent type equality between Nat and MyNat");
     }
+
+    #[test]
+    fn test_recursion_on_opaque() {
+        use crate::ast::{BinderInfo, Definition, Transparency, Constructor, InductiveDecl};
+        use crate::checker::{is_def_eq};
+        use crate::nbe::{eval, Value, Neutral};
+
+        let mut env = Env::new();
+        // Nat
+        let nat_ty = Term::sort(Level::Zero);
+        let nat_decl = InductiveDecl {
+            name: "Nat".to_string(),
+            univ_params: vec![],
+            num_params: 0,
+            ty: nat_ty.clone(),
+            ctors: vec![
+                Constructor { name: "zero".to_string(), ty: Rc::new(Term::Ind("Nat".to_string(), vec![])) },
+                Constructor { name: "succ".to_string(), ty: Term::pi(Rc::new(Term::Ind("Nat".to_string(), vec![])), Rc::new(Term::Ind("Nat".to_string(), vec![])), BinderInfo::Default) }
+            ],
+            is_copy: false,
+        };
+        env.add_inductive(nat_decl).unwrap();
+        
+        let zero = Rc::new(Term::Ctor("Nat".to_string(), 0, vec![]));
+        
+        // def my_zero = zero. Opaque.
+        let mut my_zero_def = Definition::total("my_zero".to_string(), Rc::new(Term::Ind("Nat".to_string(), vec![])), zero.clone());
+        my_zero_def.mark_opaque();
+        env.add_definition(my_zero_def).unwrap();
+        
+        let my_zero = Rc::new(Term::Const("my_zero".to_string(), vec![]));
+        
+        // Nat.rec motive base step my_zero
+        let recursor = Term::Rec("Nat".to_string(), vec![]);
+        let motive = Term::lam(Rc::new(Term::Ind("Nat".to_string(), vec![])), Rc::new(Term::Ind("Nat".to_string(), vec![])), BinderInfo::Default);
+        let base = zero.clone();
+        let step = Term::lam(Rc::new(Term::Ind("Nat".to_string(), vec![])), Term::lam(Rc::new(Term::Ind("Nat".to_string(), vec![])), Term::var(0), BinderInfo::Default), BinderInfo::Default);
+        
+        let app = Term::app(Term::app(Term::app(Term::app(Rc::new(recursor), motive), base.clone()), step), my_zero.clone());
+        
+        // 1. With Reducible: Should NOT reduce (stuck on my_zero)
+        let val_red = eval(&app, &vec![], &env, Transparency::Reducible);
+        match val_red {
+            Value::Neutral(head, _) => {
+                // Head should be Rec
+                if let Neutral::Rec(n, _) = *head {
+                    assert_eq!(n, "Nat");
+                } else {
+                    panic!("Expected Rec head, got {:?}", head);
+                }
+            }
+            _ => panic!("Expected Neutral (stuck), got {:?}", val_red),
+        }
+        
+        // 2. With All: Should reduce to base (zero)
+        let val_all = eval(&app, &vec![], &env, Transparency::All);
+        let quoted = crate::nbe::quote(val_all, 0, &env, Transparency::All);
+        assert!(is_def_eq(&env, quoted, base, Transparency::All));
+    }
+
+    #[test]
+    fn test_opaque_prop_usage() {
+        use crate::ast::{BinderInfo, Definition, Transparency};
+        use crate::checker::{infer, is_def_eq};
+
+        let mut env = Env::new();
+        let prop = Term::sort(Level::Zero);
+        
+        // def MyProp = Prop. Opaque.
+        let type0 = Term::sort(Level::Succ(Box::new(Level::Zero)));
+        let mut my_prop_def = Definition::total("MyProp".to_string(), type0, prop.clone());
+        my_prop_def.mark_opaque();
+        env.add_definition(my_prop_def).unwrap();
+        
+        let my_prop = Rc::new(Term::Const("MyProp".to_string(), vec![]));
+        
+        // t = (p : MyProp) -> p
+        let t = Term::pi(my_prop.clone(), Term::var(0), BinderInfo::Default);
+        
+        let inferred = infer(&env, &Context::new(), t).expect("Infer failed");
+        
+        // Inferred type should be MyProp
+        assert!(matches!(&*inferred, Term::Const(n, _) if n == "MyProp"));
+        
+        // Check equality with Prop
+        // Reducible: False (Opaque)
+        assert!(!is_def_eq(&env, inferred.clone(), prop.clone(), Transparency::Reducible));
+        
+        // All: True (Unfolds)
+        assert!(is_def_eq(&env, inferred.clone(), prop.clone(), Transparency::All));
+    }
 }
