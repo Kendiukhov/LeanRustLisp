@@ -1054,6 +1054,99 @@ mod tests {
     }
 
     #[test]
+    fn test_impredicative_edge_cases() {
+        use crate::ast::BinderInfo;
+
+        let env = Env::new();
+        let ctx = Context::new();
+
+        let prop = Term::sort(Level::Zero);
+        let type0 = Term::sort(Level::Succ(Box::new(Level::Zero)));
+        let type1 = Term::sort(Level::Succ(Box::new(Level::Succ(Box::new(Level::Zero)))));
+        let type2 = Term::sort(Level::Succ(Box::new(Level::Succ(Box::new(Level::Succ(Box::new(Level::Zero)))))));
+
+        // Case 1: Deep impredicativity
+        // (A : Type 0) -> (B : Type 0) -> ((p : Prop) -> p)
+        // Inner: (p : Prop) -> p : Prop
+        // Middle: (B : Type 0) -> Prop : Prop (because codomain is Prop)
+        // Outer: (A : Type 0) -> Prop : Prop (because codomain is Prop)
+        // Wait.
+        // Let's trace carefully.
+        // Term T = (p:Prop) -> p.  T : Prop.
+        // Middle Pi: (B : Type 0) -> T.
+        // Domain Type 0 (u=1). Codomain T (inhabits Prop, so type is Prop).
+        // So Body has type Prop. infer(Body) = Prop (Sort 0). v=0.
+        // imax(1, 0) = 0.
+        // So Middle Pi : Prop.
+        // Outer Pi: (A : Type 0) -> MiddlePi.
+        // Domain Type 0 (u=1). Codomain MiddlePi (inhabits Prop).
+        // infer(MiddlePi) = Prop. v=0.
+        // imax(1, 0) = 0.
+        // Result: Prop.
+        
+        let prop_imp = Term::pi(prop.clone(), Term::var(0), BinderInfo::Default); // (p:Prop)->p
+        let middle = Term::pi(type0.clone(), prop_imp, BinderInfo::Default);
+        let outer = Term::pi(type0.clone(), middle, BinderInfo::Default);
+        
+        let inferred1 = infer(&env, &ctx, outer).expect("infer failed");
+        assert!(checker::is_def_eq(&env, inferred1, prop.clone(), crate::Transparency::All), "Expected Deep Impredicativity : Prop");
+
+        // Case 2: Polymorphic identity in Prop
+        // (p : Prop) -> p -> p
+        // Domain 1: Prop (u=1).
+        // Domain 2: p (var 0). infer(p) = Prop. u2 = 0.
+        // Codomain: p (var 1). infer(p) = Prop. v = 0.
+        // Inner Pi: p -> p. imax(0, 0) = 0. Type is Prop.
+        // Outer Pi: (p:Prop) -> (p->p).
+        // Domain Prop (u=1). Body (p->p) (inhabits Prop). infer=Prop. v=0.
+        // imax(1, 0) = 0.
+        // Result: Prop.
+        
+        let id_prop_body = Term::pi(Term::var(0), Term::var(1), BinderInfo::Default); // p -> p (p is var 0 relative to inner, var 0 is bound by outer)
+        // Wait, de Bruijn indices.
+        // Outer binds p (at 0).
+        // Inner binds "x" of type p.
+        // Inner term: Pi (x : p) . p.
+        // x is Var 0. p is Var 1.
+        // Body of inner is p (Var 1).
+        let inner_pi = Term::pi(Term::var(0), Term::var(1), BinderInfo::Default);
+        let outer_pi = Term::pi(prop.clone(), inner_pi, BinderInfo::Default);
+        
+        let inferred2 = infer(&env, &ctx, outer_pi).expect("infer failed");
+        assert!(checker::is_def_eq(&env, inferred2, prop.clone(), crate::Transparency::All), "Expected (p:Prop)->p->p : Prop");
+
+        // Case 3: Type of predicates on A
+        // (A : Type 0) -> (A -> Prop)
+        // Inner: A -> Prop.
+        // A is Var 0. infer(A) = Type 0 (from context). u=1.
+        // Prop is Sort 0. infer(Prop) = Sort 1. v=1.
+        // imax(1, 1) = 1.
+        // So Inner : Type 0.
+        // Outer: (A : Type 0) -> (Type 0).
+        // Domain Type 0. u=2.
+        // Body (Type 0 term). infer(Body) = Type 1. v=2.
+        // imax(2, 2) = 2.
+        // Result: Type 1.
+        
+        let pred_ty = Term::pi(Term::var(0), prop.clone(), BinderInfo::Default); // A -> Prop
+        let predicate_gen = Term::pi(type0.clone(), pred_ty, BinderInfo::Default);
+        
+        let inferred3 = infer(&env, &ctx, predicate_gen).expect("infer failed");
+        assert!(checker::is_def_eq(&env, inferred3, type1.clone(), crate::Transparency::All), "Expected (A:Type 0)->(A->Prop) : Type 1");
+
+        // Case 4: Large Type dependency
+        // (A : Type 1) -> Prop
+        // Domain Type 1 (Sort 2). infer(Type 1) = Type 2 (Sort 3). u=3.
+        // Codomain Prop (Sort 0). infer(Prop) = Type 0 (Sort 1). v=1.
+        // imax(3, 1) = 3.
+        // Result: Sort 3 = Type 2.
+        
+        let large_dep = Term::pi(type1.clone(), prop.clone(), BinderInfo::Default);
+        let inferred4 = infer(&env, &ctx, large_dep).expect("infer failed");
+        assert!(checker::is_def_eq(&env, inferred4, type2.clone(), crate::Transparency::All), "Expected (Type 1 -> Prop) : Type 2");
+    }
+
+    #[test]
     fn test_wellfounded_context() {
         use crate::checker::WellFoundedCtx;
 
