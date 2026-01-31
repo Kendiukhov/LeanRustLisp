@@ -8,15 +8,6 @@ pub mod ownership;
 pub use ast::*;
 pub use ast::{Totality, Definition, WellFoundedInfo};
 
-/// Transparency levels for reduction
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Transparency {
-    All,
-    Reducible,
-    Instances,
-    None,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1147,6 +1138,32 @@ mod tests {
     }
 
     #[test]
+    fn test_opaque_definitions() {
+        use crate::ast::{BinderInfo, Definition, Transparency};
+        use crate::checker::{is_def_eq, whnf};
+
+        let mut env = Env::new();
+        let nat_ty = Term::sort(Level::Zero); // Simplified Nat
+        let zero = Rc::new(Term::Const("zero".to_string(), vec![]));
+        let succ = Rc::new(Term::Const("succ".to_string(), vec![]));
+        
+        // def one := succ zero
+        let one_val = Term::app(succ.clone(), zero.clone());
+        let mut def = Definition::total("one".to_string(), nat_ty.clone(), one_val.clone());
+        def.mark_opaque(); // Mark as Opaque
+        env.add_definition(def).unwrap();
+        
+        let one_term = Rc::new(Term::Const("one".to_string(), vec![]));
+        
+        // 1. With Transparency::Reducible (default), it should NOT unfold
+        // so one != succ zero (because one is Opaque)
+        assert!(!is_def_eq(&env, one_term.clone(), one_val.clone(), Transparency::Reducible), "Opaque def should not unfold with Reducible");
+        
+        // 2. With Transparency::All, it SHOULD unfold
+        assert!(is_def_eq(&env, one_term.clone(), one_val.clone(), Transparency::All), "Opaque def should unfold with All");
+    }
+
+    #[test]
     fn test_wellfounded_context() {
         use crate::checker::WellFoundedCtx;
 
@@ -1168,4 +1185,49 @@ mod tests {
         assert!(extended.is_accessible(3));
     }
 
+    #[test]
+    fn test_large_elimination_rejection() {
+        use crate::ast::{BinderInfo, Constructor, InductiveDecl};
+        use crate::checker::TypeError;
+
+        let mut env = Env::new();
+        let prop = Term::sort(Level::Zero);
+        let or_ref = Term::ind("Or".to_string());
+        
+        // Or p q : Prop
+        let or_decl = InductiveDecl {
+            name: "Or".to_string(),
+            univ_params: vec![],
+            num_params: 2, // p, q
+            // (p:Prop) -> (q:Prop) -> Prop
+            ty: Term::pi(prop.clone(), Term::pi(prop.clone(), prop.clone(), BinderInfo::Default), BinderInfo::Default),
+            ctors: vec![
+                Constructor {
+                    name: "inl".to_string(),
+                    // p -> Or p q (simplified, exact indices not crucial for this test as we fail before checking body)
+                    ty: Term::pi(Term::var(1), Term::app(Term::app(or_ref.clone(), Term::var(2)), Term::var(1)), BinderInfo::Default)
+                },
+                Constructor {
+                    name: "inr".to_string(),
+                    // q -> Or p q
+                    ty: Term::pi(Term::var(0), Term::app(Term::app(or_ref.clone(), Term::var(2)), Term::var(1)), BinderInfo::Default)
+                }
+            ],
+            is_copy: true,
+        };
+        env.add_inductive(or_decl).unwrap();
+        
+        // Try to infer Or.rec eliminating to Type 0 (Level::Succ(Zero))
+        // This is "Large Elimination" from a Prop inductive with >1 constructor.
+        let level_type0 = Level::Succ(Box::new(Level::Zero));
+        let rec = Term::Rec("Or".to_string(), vec![level_type0]);
+        
+        let result = infer(&env, &Context::new(), Rc::new(rec));
+        
+        if let Err(TypeError::LargeElimination(name)) = &result {
+            assert_eq!(name, "Or");
+        } else {
+            panic!("Expected LargeElimination error, got {:?}", result);
+        }
+    }
 }

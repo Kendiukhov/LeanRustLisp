@@ -1,6 +1,6 @@
 use crate::ast::{Term, Level, InductiveDecl, Constructor, Definition, Totality};
 use crate::nbe;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use thiserror::Error;
 
@@ -32,6 +32,8 @@ pub enum TypeError {
     PartialInType(String),
     #[error("Effect violation: {0} definition calls {1} definition {2}")]
     EffectError(String, String, String),
+    #[error("Large elimination from Prop inductive {0} to Type is not allowed")]
+    LargeElimination(String),
     #[error("Not implemented")]
     NotImplemented,
 }
@@ -171,6 +173,21 @@ impl Env {
                 }
             }
         }
+
+        // Compute axiom dependencies
+        let mut used_axioms = HashSet::new();
+        // Include self-declared axioms
+        for ax in &def.axioms {
+            used_axioms.insert(ax.clone());
+        }
+        // Collect from type
+        collect_axioms_rec(self, &def.ty, &mut used_axioms);
+        // Collect from value
+        if let Some(ref val) = def.value {
+            collect_axioms_rec(self, val, &mut used_axioms);
+        }
+        def.axioms = used_axioms.into_iter().collect();
+        def.axioms.sort();
 
         // Also add to legacy defs for backward compatibility
         if let Some(ref val) = def.value {
@@ -1344,7 +1361,9 @@ pub fn compute_recursor_type(decl: &InductiveDecl, univ_levels: &[Level]) -> Rc<
     
     // 2. Build Motive type
     // Motive: (indices...) -> (t: Ind params indices...) -> Sort u
-    let motive_result_sort = Term::sort(Level::Zero); // Placeholder, ideally from univ_levels
+    // Use the last level as the result sort (standard convention: params... result)
+    let result_level = univ_levels.last().cloned().unwrap_or(Level::Zero);
+    let motive_result_sort = Term::sort(result_level);
 
     let mut motive_ty = motive_result_sort;
     
@@ -1740,9 +1759,9 @@ fn extract_ctor_args(ty: &Rc<Term>, ind_name: &str) -> Vec<(Option<String>, Rc<T
 
 /// Weak Head Normal Form reduction with iota reduction
 /// Weak Head Normal Form reduction (Via NbE)
-pub fn whnf(env: &Env, t: Rc<Term>, _transparency: crate::Transparency) -> Rc<Term> {
-    let val = nbe::eval(&t, &vec![], env);
-    nbe::quote(val, 0, env)
+pub fn whnf(env: &Env, t: Rc<Term>, transparency: crate::Transparency) -> Rc<Term> {
+    let val = nbe::eval(&t, &vec![], env, transparency);
+    nbe::quote(val, 0, env, transparency)
 }
 
 // try_iota_reduce removed
@@ -1750,8 +1769,8 @@ pub fn whnf(env: &Env, t: Rc<Term>, _transparency: crate::Transparency) -> Rc<Te
 
 /// Definitional equality checking
 /// Definitional equality checking via NbE
-pub fn is_def_eq(env: &Env, t1: Rc<Term>, t2: Rc<Term>, _transparency: crate::Transparency) -> bool {
-    nbe::is_def_eq(t1, t2, env)
+pub fn is_def_eq(env: &Env, t1: Rc<Term>, t2: Rc<Term>, transparency: crate::Transparency) -> bool {
+    nbe::is_def_eq(t1, t2, env, transparency)
 }
 
 pub fn check(env: &Env, ctx: &Context, term: Rc<Term>, expected_type: Rc<Term>) -> Result<(), TypeError> {
@@ -1760,6 +1779,68 @@ pub fn check(env: &Env, ctx: &Context, term: Rc<Term>, expected_type: Rc<Term>) 
     if !is_def_eq(env, inferred.clone(), expected_type.clone(), crate::Transparency::All) {
         println!("TypeMismatch: Term: {:?}, Expected {:?}, Got {:?}", term, expected_type, inferred);
         return Err(TypeError::TypeMismatch { expected: expected_type, got: inferred });
+    }
+    Ok(())
+}
+
+fn check_elimination_restriction(env: &Env, ind_name: &str, levels: &[Level]) -> Result<(), TypeError> {
+    let decl = env.get_inductive(ind_name).ok_or_else(|| TypeError::UnknownInductive(ind_name.to_string()))?;
+    
+    // 1. Determine target level (convention: last level is result sort)
+    let target_level = levels.last().cloned().unwrap_or(Level::Zero);
+    
+    // 2. If target is Prop (Zero), elimination is always allowed.
+    if matches!(target_level, Level::Zero) {
+        return Ok(());
+    }
+    
+    // 3. Determine if Inductive is Prop
+    // Extract result level from decl.ty
+    let (_binders, result_sort) = extract_pi_binders(&decl.ty);
+    
+    let is_prop = match result_sort {
+        Some(Level::Zero) => true,
+        _ => false,
+    };
+    
+    if is_prop {
+        // 4. Large Elimination Restriction
+        // Allowed only if 0 constructors, OR 1 constructor where all fields are in Prop.
+        
+        if decl.ctors.len() > 1 {
+            return Err(TypeError::LargeElimination(ind_name.to_string()));
+        }
+        
+        if decl.ctors.len() == 1 {
+             // Check fields of the constructor
+             let ctor = &decl.ctors[0];
+             let mut ctx = Context::new();
+             let mut curr = &ctor.ty;
+             
+             // Skip params
+             for _ in 0..decl.num_params {
+                 if let Term::Pi(dom, body, _) = &**curr {
+                     ctx = ctx.push(dom.clone());
+                     curr = body;
+                 }
+             }
+             
+             // Check fields
+             while let Term::Pi(dom, body, _) = &**curr {
+                 // dom is the type of the field.
+                 // infer(dom) should be Sort(Zero) (Prop).
+                 let sort = infer(env, &ctx, dom.clone())?;
+                 let sort_norm = whnf(env, sort, crate::Transparency::All);
+                 let level = extract_level(&sort_norm);
+                 
+                 if level != Some(Level::Zero) {
+                      return Err(TypeError::LargeElimination(ind_name.to_string()));
+                 }
+                 
+                 ctx = ctx.push(dom.clone());
+                 curr = body;
+             }
+        }
     }
     Ok(())
 }
@@ -1848,10 +1929,11 @@ pub fn infer(env: &Env, ctx: &Context, term: Rc<Term>) -> Result<Rc<Term>, TypeE
                 Err(TypeError::UnknownInductive(ind_name.clone()))
             }
         }
-        Term::Rec(ind_name, _levels) => {
+        Term::Rec(ind_name, levels) => {
+            check_elimination_restriction(env, ind_name, levels)?;
             // Compute and return the recursor type
             if let Some(decl) = env.get_inductive(ind_name) {
-                Ok(compute_recursor_type(decl, _levels))
+                Ok(compute_recursor_type(decl, levels))
             } else {
                 Err(TypeError::UnknownInductive(ind_name.clone()))
             }
@@ -1981,6 +2063,32 @@ pub fn check_inductive_soundness(env: &Env, decl: &InductiveDecl) -> Result<(), 
     Ok(())
 }
 
+fn collect_axioms_rec(env: &Env, t: &Rc<Term>, axioms: &mut HashSet<String>) {
+    match &**t {
+        Term::Const(name, _) => {
+            if let Some(def) = env.get_definition(name) {
+                for ax in &def.axioms {
+                    axioms.insert(ax.clone());
+                }
+            }
+        }
+        Term::App(f, a) => {
+            collect_axioms_rec(env, f, axioms);
+            collect_axioms_rec(env, a, axioms);
+        }
+        Term::Lam(ty, body, _) | Term::Pi(ty, body, _) => {
+            collect_axioms_rec(env, ty, axioms);
+            collect_axioms_rec(env, body, axioms);
+        }
+        Term::LetE(ty, val, body) => {
+            collect_axioms_rec(env, ty, axioms);
+            collect_axioms_rec(env, val, axioms);
+            collect_axioms_rec(env, body, axioms);
+        }
+        _ => {}
+    }
+}
+
 // =============================================================================
 // Effect System Checks (Phase 5)
 // =============================================================================
@@ -2059,7 +2167,9 @@ mod tests {
             value: Some(val.clone()),
             totality: Totality::Total,
             rec_arg: None,
-            wf_info: None
+            wf_info: None,
+            transparency: Transparency::Reducible,
+            axioms: vec![],
         });
         
         env.definitions.insert("partial_def".to_string(), Definition {
@@ -2068,7 +2178,9 @@ mod tests {
             value: Some(val.clone()),
             totality: Totality::Partial,
             rec_arg: None,
-            wf_info: None
+            wf_info: None,
+            transparency: Transparency::Reducible,
+            axioms: vec![],
         });
         
         env.definitions.insert("unsafe_def".to_string(), Definition {
@@ -2077,7 +2189,9 @@ mod tests {
             value: Some(val.clone()),
             totality: Totality::Unsafe,
             rec_arg: None,
-            wf_info: None
+            wf_info: None,
+            transparency: Transparency::Reducible,
+            axioms: vec![],
         });
 
         // Test Terms calling these constants
@@ -2124,5 +2238,43 @@ mod tests {
         assert!(check_effects(&env, Totality::Unsafe, &call_total).is_ok());
         assert!(check_effects(&env, Totality::Unsafe, &call_partial).is_ok());
         assert!(check_effects(&env, Totality::Unsafe, &call_unsafe).is_ok());
+    }
+
+    #[test]
+    fn test_axiom_tracking() {
+        let mut env = Env::new();
+        let prop = Rc::new(Term::Sort(Level::Zero));
+        
+        // 1. Declare Axiom "Choice"
+        let choice_def = Definition::axiom("Choice".to_string(), prop.clone());
+        env.add_definition(choice_def).unwrap();
+        
+        // Verify Choice depends on itself
+        let stored_choice = env.get_definition("Choice").unwrap();
+        assert!(stored_choice.axioms.contains(&"Choice".to_string()));
+        
+        // 2. Define Theorem that uses Choice
+        // def use_choice := Choice
+        let use_choice_def = Definition::total(
+            "use_choice".to_string(), 
+            prop.clone(), 
+            Rc::new(Term::Const("Choice".to_string(), vec![]))
+        );
+        env.add_definition(use_choice_def).unwrap();
+        
+        let stored_use = env.get_definition("use_choice").unwrap();
+        assert!(stored_use.axioms.contains(&"Choice".to_string()));
+        
+        // 3. Define Theorem that does NOT use Choice
+        // def no_choice := Prop
+        let no_choice_def = Definition::total(
+            "no_choice".to_string(),
+            Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero)))), // Type 0
+            prop.clone()
+        );
+        env.add_definition(no_choice_def).unwrap();
+        
+        let stored_no = env.get_definition("no_choice").unwrap();
+        assert!(stored_no.axioms.is_empty());
     }
 }

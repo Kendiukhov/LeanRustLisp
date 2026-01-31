@@ -1,4 +1,4 @@
-use crate::ast::{Term, Level, BinderInfo};
+use crate::ast::{Term, Level, BinderInfo, Transparency};
 use crate::checker::Env;
 use std::rc::Rc;
 
@@ -14,7 +14,7 @@ mod tests {
         let id = Term::lam(Term::sort(Level::Zero), Term::var(0), BinderInfo::Default);
         let env = Env::new();
         
-        let val = eval(&id, &vec![], &env);
+        let val = eval(&id, &vec![], &env, Transparency::All);
         if let Value::Lam(_, _, _) = val {
             // OK
         } else {
@@ -29,7 +29,7 @@ mod tests {
         let app = Term::app(id, Rc::new(Term::Const("a".to_string(), vec![]))); // a is opaque neutral
         
         let env = Env::new();
-        let val = eval(&app, &vec![], &env);
+        let val = eval(&app, &vec![], &env, Transparency::All);
         
         // Should reduce to Neutral(Const("a"))
         match val {
@@ -54,7 +54,7 @@ mod tests {
         env.add_definition(def).unwrap();
         
         let t = Rc::new(Term::Const("one".to_string(), vec![]));
-        let val = eval(&t, &vec![], &env);
+        let val = eval(&t, &vec![], &env, Transparency::All);
         
         // Should evaluate to one_tm (reduced to Neutral App(succ, zero))
         // succ and zero are not defined, so they are neutral consts.
@@ -84,7 +84,7 @@ mod tests {
         // y
         let t2 = Rc::new(Term::Const("y".to_string(), vec![]));
         
-        assert!(is_def_eq(t1, t2, &env));
+        assert!(is_def_eq(t1, t2, &env, Transparency::All));
     }
 
     #[test]
@@ -99,7 +99,7 @@ mod tests {
             Term::app(f.clone(), Term::var(0)),
             BinderInfo::Default
         );
-        assert!(is_def_eq(eta, f, &env), "Eta reduction failed");
+        assert!(is_def_eq(eta, f, &env, Transparency::All), "Eta reduction failed");
     }
 
     #[test]
@@ -118,8 +118,8 @@ mod tests {
         term = Term::app(term, b);
         term = Term::app(term, c.clone());
         
-        let val = eval(&term, &vec![], &env);
-        let quoted = quote(val, 0, &env);
+        let val = eval(&term, &vec![], &env, Transparency::All);
+        let quoted = quote(val, 0, &env, Transparency::All);
         
         if let Term::Const(n, _) = &*quoted {
             assert_eq!(n, "c");
@@ -174,32 +174,20 @@ mod tests {
         
         let base = Rc::new(Term::Const("base".to_string(), vec![])); 
         let zero = Rc::new(Term::Ctor("Nat".to_string(), 0, vec![]));
-        let nil = Rc::new(Term::Ctor("Vec".to_string(), 0, vec![])); // nil has params attached in Value::Ctor, but Term::Ctor it is just empty? Term::Ctor does NOT have params?
-        // Term::Ctor(name, idx, levels). Params are applied via App. (Checked AST: Term::Ctor doesn't hold args).
-        // Wait, Ctor args in Term are just App spines.
-        // In Value they are stored.
-        // So `nil` term is `Ctor(..., 0, ...)`.
-        // But `Vec.nil` takes ONE param (A).
-        // So `nil` term application is `App(Ctor(nil), A)`.
+        let nil = Rc::new(Term::Ctor("Vec".to_string(), 0, vec![])); 
         
         let nil_app = Term::app(nil, a.clone());
         
         // rec A P base zero (nil A)
         let app = Term::app(Term::app(Term::app(Term::app(Term::app(recursor, a), motive), base.clone()), zero), nil_app);
         
-        let val = eval(&app, &vec![], &env);
-        let quoted = quote(val, 0, &env);
-        assert!(is_def_eq(quoted, base, &env), "Vec.rec did not reduce to base");
+        let val = eval(&app, &vec![], &env, Transparency::All);
+        let quoted = quote(val, 0, &env, Transparency::All);
+        assert!(is_def_eq(quoted, base, &env, Transparency::All), "Vec.rec did not reduce to base");
     }
     #[test]
     fn test_shadowing() {
         let env = Env::new();
-        // (\x. (\x. x) a) b -> a
-        // Var(0) inside inner is inner x.
-        // Var(1) inside inner is outer x? No.
-        // (\x. (\y. y) a) b -> a.
-        // (\x. (\x. x) x) a -> a.
-        
         // Inner: \x. x  (Var(0))
         let inner = Term::lam(Term::sort(Level::Zero), Term::var(0), BinderInfo::Default);
         // Outer body: app(inner, Var(0)) -> app(\x.x, x)
@@ -212,8 +200,8 @@ mod tests {
         let term = Term::app(outer, a.clone());
         
         // Should reduce to a
-        let val = eval(&term, &vec![], &env);
-        let quoted = quote(val, 0, &env);
+        let val = eval(&term, &vec![], &env, Transparency::All);
+        let quoted = quote(val, 0, &env, Transparency::All);
         
         // a is Const("a")
         // Check if quoted == a
@@ -226,22 +214,13 @@ mod tests {
     
     #[test]
     fn test_partial_app_rec() {
-         // Test that we can partially apply the result of recursion
-         // add one : Nat -> Nat
-         // (from previous test setup)
-         // We duplicate the setup briefly or reuse?
-         // Reuse is hard in unit tests without fixture.
-         // Setup minimal Nat again.
-         
         let mut env = Env::new();
         let nat_decl = crate::ast::InductiveDecl {
             name: "Nat".to_string(),
             univ_params: vec![],
             ty: Term::sort(Level::Zero),
-            ctors: vec![
-                crate::ast::Constructor { name: "zero".to_string(), ty: Rc::new(Term::Ind("Nat".to_string(), vec![])) },
-                crate::ast::Constructor { name: "succ".to_string(), ty: Term::pi(Rc::new(Term::Ind("Nat".to_string(), vec![])), Rc::new(Term::Ind("Nat".to_string(), vec![])), BinderInfo::Default) }
-            ],
+            ctors: vec![crate::ast::Constructor { name: "zero".to_string(), ty: Rc::new(Term::Ind("Nat".to_string(), vec![])) }, crate::ast::Constructor { name: "succ".to_string(), ty: Term::pi(Rc::new(Term::Ind("Nat".to_string(), vec![])), Rc::new(Term::Ind("Nat".to_string(), vec![])), BinderInfo::Default) }]
+            ,
             num_params: 0,
             is_copy: false,
         };
@@ -260,21 +239,20 @@ mod tests {
         let add_one = Term::app(Term::app(Term::app(Term::app(recursor, motive), base), step), one.clone());
         
         // Evaluate add_one
-        let val = eval(&add_one, &vec![], &env);
+        let val = eval(&add_one, &vec![], &env, Transparency::All);
         // Should be a Lambda waiting for m
         match val {
             Value::Lam(_, _, _) | Value::Pi(_, _, _, _) => {}, // OK
-             // Actually it might be a closure? Value::Lam
             _ => panic!("Expected function from partial application, got {:?}", val),
         }
         
         // Now apply it to one
-        let one_val = eval(&one, &vec![], &env);
-        let res = apply(val, one_val, &env);
-        let quoted = quote(res, 0, &env);
+        let one_val = eval(&one, &vec![], &env, Transparency::All);
+        let res = apply(val, one_val, &env, Transparency::All);
+        let quoted = quote(res, 0, &env, Transparency::All);
         
         let two = succ(one.clone());
-        assert!(is_def_eq(quoted, two, &env));
+        assert!(is_def_eq(quoted, two, &env, Transparency::All));
     }
     #[test]
     fn test_nat_add_recursion() {
@@ -284,8 +262,7 @@ mod tests {
             name: "Nat".to_string(),
             univ_params: vec![],
             ty: Term::sort(Level::Zero),
-            ctors: vec![
-                crate::ast::Constructor {
+            ctors: vec![crate::ast::Constructor {
                     name: "zero".to_string(),
                     ty: Rc::new(Term::Ind("Nat".to_string(), vec![])),
                 },
@@ -333,9 +310,6 @@ mod tests {
         );
         
         // Step: \n ih m. succ (ih m)
-        // Var(0) = m
-        // Var(1) = ih
-        // Var(2) = n
         let step = Term::lam(
             Rc::new(Term::Ind("Nat".to_string(), vec![])), // n
             Term::lam(
@@ -367,7 +341,7 @@ mod tests {
         let result = Term::app(add_one, one.clone());
         
         // Check result == two
-        assert!(is_def_eq(result, two, &env));
+        assert!(is_def_eq(result, two, &env, Transparency::All));
     }
     #[test]
     fn test_recursion_detection() {
@@ -383,14 +357,11 @@ mod tests {
         assert!(is_recursive_head(&indexed, tree_name));
         
         // 3. Nested recursion: List Tree
-        // Should be FALSE (handled by map, not primitive rec)
         let list = Rc::new(Term::Ind("List".to_string(), vec![]));
         let nested = Term::app(list, direct.clone());
         assert!(!is_recursive_head(&nested, tree_name), "Nested type (List Tree) should not be marked recursive for primitive Rec");
         
         // 4. Infinitary recursion: Nat -> Tree
-        // Should be FALSE (handled by manual args, not standard Rec without indices)
-        // (Actually, strictly positive types DO allow this, but our Rec implementation doesn't support the IH for it yet)
         let func = Term::pi(Rc::new(Term::Ind("Nat".to_string(), vec![])), direct.clone(), BinderInfo::Default);
         assert!(!is_recursive_head(&func, tree_name), "Infinitary type (Nat -> Tree) should not be marked recursive for primitive Rec");
     }
@@ -415,8 +386,7 @@ mod tests {
                 ),
                 BinderInfo::Default
             ),
-            ctors: vec![
-                crate::ast::Constructor {
+            ctors: vec![crate::ast::Constructor {
                     name: "refl".to_string(),
                     ty: Term::app(
                         Term::app(
@@ -473,10 +443,10 @@ mod tests {
             major // major (refl)
         );
         
-        let val = eval(&app, &vec![], &env);
-        let quoted = quote(val, 0, &env);
+        let val = eval(&app, &vec![], &env, Transparency::All);
+        let quoted = quote(val, 0, &env, Transparency::All);
         
-        assert!(is_def_eq(quoted, base, &env), "J-eliminator (Eq.rec) failed to reduce");
+        assert!(is_def_eq(quoted, base, &env, Transparency::All), "J-eliminator (Eq.rec) failed to reduce");
     }
 
     #[test]
@@ -488,7 +458,7 @@ mod tests {
         // This fails if Level::Param("u") != Level::Param("u")
         // Eval: Term::Sort(u) -> Value::Sort(u)
         let t = Term::Sort(u.clone());
-        let val = eval(&Rc::new(t.clone()), &vec![], &env);
+        let val = eval(&Rc::new(t.clone()), &vec![], &env, Transparency::All);
         
         match val {
             Value::Sort(l) => assert_eq!(l, u),
@@ -496,12 +466,12 @@ mod tests {
         }
         
         // DefEq: Sort u == Sort u
-        assert!(is_def_eq(Rc::new(t.clone()), Rc::new(Term::Sort(u.clone())), &env));
+        assert!(is_def_eq(Rc::new(t.clone()), Rc::new(Term::Sort(u.clone())), &env, Transparency::All));
         
         // DefEq: Sort u != Sort v
         let v = Level::Param("v".to_string());
         let t_v = Term::Sort(v);
-        assert!(!is_def_eq(Rc::new(t_v), Rc::new(Term::Sort(u)), &env));
+        assert!(!is_def_eq(Rc::new(t_v), Rc::new(Term::Sort(u)), &env, Transparency::All));
     }
     #[test]
     fn test_let_recursion_interaction() {
@@ -511,10 +481,8 @@ mod tests {
             name: "Nat".to_string(),
             univ_params: vec![],
             ty: Term::sort(Level::Zero),
-            ctors: vec![
-                crate::ast::Constructor { name: "zero".to_string(), ty: Rc::new(Term::Ind("Nat".to_string(), vec![])) },
-                crate::ast::Constructor { name: "succ".to_string(), ty: Term::pi(Rc::new(Term::Ind("Nat".to_string(), vec![])), Rc::new(Term::Ind("Nat".to_string(), vec![])), BinderInfo::Default) }
-            ],
+            ctors: vec![crate::ast::Constructor { name: "zero".to_string(), ty: Rc::new(Term::Ind("Nat".to_string(), vec![])) }, crate::ast::Constructor { name: "succ".to_string(), ty: Term::pi(Rc::new(Term::Ind("Nat".to_string(), vec![])), Rc::new(Term::Ind("Nat".to_string(), vec![])), BinderInfo::Default) }]
+            ,
             num_params: 0,
             is_copy: false,
         };
@@ -558,17 +526,6 @@ mod tests {
             )
         };
         
-        // Let x = two in add x x
-        // add x x -> add two two -> four
-        // Term: Let(x:Nat, two, App(App(add, x), x))
-        // In body: x is Var(0).
-        // add is lifted? No, add is constructed term.
-        
-        // We need to apply `add` to `Var(0)` and `Var(0)`.
-        // `add` takes 2 args.
-        // `add` term defined above is `\n \m ...`.
-        // So `App(App(add, Var(0)), Var(0))`
-        
         let let_expr = Term::LetE(
             Rc::new(Term::Ind("Nat".to_string(), vec![])), // Type
             two.clone(), // Value
@@ -578,10 +535,10 @@ mod tests {
             ) // Body
         );
         
-        let val = eval(&Rc::new(let_expr), &vec![], &env);
-        let quoted = quote(val, 0, &env);
+        let val = eval(&Rc::new(let_expr), &vec![], &env, Transparency::All);
+        let quoted = quote(val, 0, &env, Transparency::All);
         
-        if !is_def_eq(quoted.clone(), four.clone(), &env) {
+        if !is_def_eq(quoted.clone(), four.clone(), &env, Transparency::All) {
             panic!("Let binding + Recursion failed. Expected: {:?}\nGot: {:?}", four, quoted);
         }
     }
@@ -626,7 +583,7 @@ impl Value {
 pub type EvalEnv = Vec<Value>;
 
 /// Evaluate a term to a value
-pub fn eval(t: &Rc<Term>, env: &EvalEnv, global_env: &Env) -> Value {
+pub fn eval(t: &Rc<Term>, env: &EvalEnv, global_env: &Env, transparency: Transparency) -> Value {
     match &**t {
         Term::Var(idx) => {
             // De Bruijn Index -> Value from Environment
@@ -636,20 +593,22 @@ pub fn eval(t: &Rc<Term>, env: &EvalEnv, global_env: &Env) -> Value {
                 val.clone()
             } else {
                 // Free variable in an open term - create a neutral
-                // This allows normalization of terms with free variables
-                // (e.g., when whnf is called with an empty environment)
                 Value::Neutral(Box::new(Neutral::FreeVar(*idx)), vec![])
             }
         }
         Term::Sort(l) => Value::Sort(l.clone()),
         Term::Const(n, ls) => {
-             // TODO: Check transparency/unfolding here
              if let Some(def) = global_env.get_definition(n) {
-                 if def.is_total() && def.value.is_some() {
-                     // Always unfold total definitions for now (simple consistency)
-                     // Optimization: Use transparency flag
-                     // For now: Always expand definitions
-                     eval(def.value.as_ref().unwrap(), &vec![], global_env)
+                 // Check transparency
+                 let should_unfold = match transparency {
+                     Transparency::All => true,
+                     Transparency::Reducible => def.transparency != Transparency::None,
+                     Transparency::Instances => def.transparency == Transparency::Instances, // Strict match or >=? Usually >=
+                     Transparency::None => false,
+                 };
+
+                 if def.is_total() && def.value.is_some() && should_unfold {
+                     eval(def.value.as_ref().unwrap(), &vec![], global_env, transparency)
                  } else {
                      Value::Neutral(Box::new(Neutral::Const(n.clone(), ls.clone())), vec![])
                  }
@@ -658,31 +617,28 @@ pub fn eval(t: &Rc<Term>, env: &EvalEnv, global_env: &Env) -> Value {
              }
         }
         Term::App(f, a) => {
-            let f_val = eval(f, env, global_env);
-            let a_val = eval(a, env, global_env);
-            apply(f_val, a_val, global_env)
+            let f_val = eval(f, env, global_env, transparency);
+            let a_val = eval(a, env, global_env, transparency);
+            apply(f_val, a_val, global_env, transparency)
         }
         Term::Lam(_, body, info) => {
-             // Type generic ignored in evaluation? Usually yes for untyped evaluation.
-             // We store it if we wanted to reify types, but for equality checking,
-             // only the body matters for computation.
              Value::Lam("x".to_string(), *info, Closure {
                  env: env.clone(),
                  term: body.clone()
              })
         }
         Term::Pi(ty, body, info) => {
-             let dom = eval(ty, env, global_env);
+             let dom = eval(ty, env, global_env, transparency);
              Value::Pi("x".to_string(), *info, Box::new(dom), Closure {
                  env: env.clone(),
                  term: body.clone()
              })
         }
         Term::LetE(_, val, body) => {
-            let v = eval(val, env, global_env);
+            let v = eval(val, env, global_env, transparency);
             let mut new_env = env.clone();
             new_env.push(v);
-            eval(body, &new_env, global_env)
+            eval(body, &new_env, global_env, transparency)
         }
         Term::Ind(n, ls) => Value::Ind(n.clone(), ls.clone(), vec![]),
         Term::Ctor(n, idx, ls) => Value::Ctor(n.clone(), *idx, ls.clone(), vec![]),
@@ -691,12 +647,12 @@ pub fn eval(t: &Rc<Term>, env: &EvalEnv, global_env: &Env) -> Value {
     }
 }
 
-pub fn apply(f: Value, a: Value, global_env: &Env) -> Value {
+pub fn apply(f: Value, a: Value, global_env: &Env, transparency: Transparency) -> Value {
     match f {
         Value::Lam(_, _, closure) => {
             let mut new_env = closure.env.clone();
             new_env.push(a);
-            eval(&closure.term, &new_env, global_env)
+            eval(&closure.term, &new_env, global_env, transparency)
         }
         Value::Neutral(head, mut spine) => {
             spine.push(a);
@@ -704,7 +660,7 @@ pub fn apply(f: Value, a: Value, global_env: &Env) -> Value {
             // Check for Iota reduction if head is Rec
             if let Neutral::Rec(ind_name, levels) = &*head {
                  // Try to reduce
-                 if let Some(reduced) = try_reduce_rec(ind_name, levels, &spine, global_env) {
+                 if let Some(reduced) = try_reduce_rec(ind_name, levels, &spine, global_env, transparency) {
                      return reduced;
                  }
             }
@@ -724,7 +680,7 @@ pub fn apply(f: Value, a: Value, global_env: &Env) -> Value {
 }
 
 /// Try to partially reduce a Rec application
-fn try_reduce_rec(ind_name: &str, levels: &[Level], args: &[Value], global_env: &Env) -> Option<Value> {
+fn try_reduce_rec(ind_name: &str, levels: &[Level], args: &[Value], global_env: &Env, transparency: Transparency) -> Option<Value> {
     if let Some(decl) = global_env.get_inductive(ind_name) {
         let num_params = decl.num_params;
         let num_ctors = decl.ctors.len();
@@ -751,7 +707,7 @@ fn try_reduce_rec(ind_name: &str, levels: &[Level], args: &[Value], global_env: 
                          // We iterate from num_params to end.
                          for i in num_params..c_args.len() {
                               let field_val = c_args[i].clone();
-                              res = apply(res, field_val.clone(), global_env);
+                              res = apply(res, field_val.clone(), global_env, transparency);
                               
                               // Check if recursive
                               if i < recursive_map.len() && recursive_map[i] {
@@ -768,30 +724,6 @@ fn try_reduce_rec(ind_name: &str, levels: &[Level], args: &[Value], global_env: 
                                   if num_ctors > 0 {
                                       ih_args.extend_from_slice(&args[num_params+1 .. num_params+1+num_ctors]);
                                   }
-                                  // Indices?
-                                  // We need indices for the recursive call.
-                                  // The indices come from the FIELD's type.
-                                  // But `Value::Rec` stores them?
-                                  // If `field` is `Vec A m`, then `m` is index.
-                                  // Handling this requires inspecting `field` type or value.
-                                  // For simple types `Nat`, proper indices are empty.
-                                  // For `Vec`, `tail` has index `n`.
-                                  // If we don't pass correct indices, type checking fails, but reduction?
-                                  // NbE is untyped reduction.
-                                  // But we need to push SOMETHING for indices if the Rec expects them.
-                                  // Wait, `Rec` expects `indices` + `major`.
-                                  // Reducing `Rec` on `tail`. `tail` is major.
-                                  // We must supply `tail_indices`.
-                                  // Where do we get them? 
-                                  // `extract_ctor_args` only gives bool.
-                                  // We need `extract_recursive_indices`?
-                                  // This is getting complicated for MVP.
-                                  // HACK: For now, we reuse the OLD indices? NO, that's wrong (n vs succ n).
-                                  // But if we just pass `major`, maybe it works if indices are ignored by runtime?
-                                  // `args` must match length.
-                                  // If we push WRONG indices, it might be fine for reduction logic if Logic doesn't read them.
-                                  // `try_reduce_rec` DOES read indices count but not values (except for skipping).
-                                  // So we can push `Value::Sort(Level::Zero)` as dummy indices?
                                   for _ in 0..num_indices {
                                       // DUMMY INDICES
                                       ih_args.push(Value::Sort(Level::Zero)); 
@@ -801,17 +733,17 @@ fn try_reduce_rec(ind_name: &str, levels: &[Level], args: &[Value], global_env: 
                                   ih_args.push(field_val);
                                   
                                   let ih_val = Value::Neutral(
-                                      Box::new(Neutral::Rec(ind_name.to_string(), levels.to_vec())), 
+                                      Box::new(Neutral::Rec(ind_name.to_string(), levels.to_vec())),
                                       ih_args
                                   );
                                   
-                                  res = apply(res, ih_val, global_env);
+                                  res = apply(res, ih_val, global_env, transparency);
                               }
                          }
                          
                          // Apply ANY extra arguments (if Rec was applied to more than needed)
                          for extra in &args[expected_len..] {
-                             res = apply(res, extra.clone(), global_env);
+                             res = apply(res, extra.clone(), global_env, transparency);
                          }
                          return Some(res);
                     }
@@ -856,11 +788,7 @@ fn is_recursive_head(t: &Rc<Term>, name: &str) -> bool {
     }
 }
 
-
-// Old quote removed
-
-
-pub fn quote(v: Value, level: usize, global_env: &Env) -> Rc<Term> {
+pub fn quote(v: Value, level: usize, global_env: &Env, transparency: Transparency) -> Rc<Term> {
     match v {
         Value::Neutral(head, spine) => {
             let mut t = match *head {
@@ -870,7 +798,7 @@ pub fn quote(v: Value, level: usize, global_env: &Env) -> Rc<Term> {
                 Neutral::Rec(n, ls) => Rc::new(Term::Rec(n, ls)),
             };
             for arg in spine {
-                t = Term::app(t, quote(arg, level, global_env));
+                t = Term::app(t, quote(arg, level, global_env, transparency));
             }
             t
         }
@@ -878,29 +806,29 @@ pub fn quote(v: Value, level: usize, global_env: &Env) -> Rc<Term> {
              let var = Value::var(level);
              let mut new_env = closure.env.clone();
              new_env.push(var);
-             let body_val = eval(&closure.term, &new_env, global_env);
-             Term::lam(Rc::new(Term::Sort(Level::Zero)), quote(body_val, level + 1, global_env), info) // Type erased in Value::Lam
+             let body_val = eval(&closure.term, &new_env, global_env, transparency);
+             Term::lam(Rc::new(Term::Sort(Level::Zero)), quote(body_val, level + 1, global_env, transparency), info) // Type erased in Value::Lam
         }
         Value::Pi(_, info, dom, closure) => {
-             let dom_t = quote(*dom, level, global_env);
+             let dom_t = quote(*dom, level, global_env, transparency);
              let var = Value::var(level);
              let mut new_env = closure.env.clone();
              new_env.push(var);
-             let body_val = eval(&closure.term, &new_env, global_env);
-             Term::pi(dom_t, quote(body_val, level + 1, global_env), info)
+             let body_val = eval(&closure.term, &new_env, global_env, transparency);
+             Term::pi(dom_t, quote(body_val, level + 1, global_env, transparency), info)
         }
         Value::Sort(l) => Rc::new(Term::Sort(l)),
         Value::Ind(n, ls, args) => {
             let mut t = Rc::new(Term::Ind(n, ls));
             for arg in args {
-                t = Term::app(t, quote(arg, level, global_env));
+                t = Term::app(t, quote(arg, level, global_env, transparency));
             }
             t
         }
         Value::Ctor(n, idx, ls, args) => {
              let mut t = Rc::new(Term::Ctor(n, idx, ls));
              for arg in args {
-                 t = Term::app(t, quote(arg, level, global_env));
+                 t = Term::app(t, quote(arg, level, global_env, transparency));
              }
              t
         }
@@ -908,56 +836,51 @@ pub fn quote(v: Value, level: usize, global_env: &Env) -> Rc<Term> {
     }
 }
 
-pub fn is_def_eq(t1: Rc<Term>, t2: Rc<Term>, global_env: &Env) -> bool {
-    let v1 = eval(&t1, &vec![], global_env);
-    let v2 = eval(&t2, &vec![], global_env);
+pub fn is_def_eq(t1: Rc<Term>, t2: Rc<Term>, global_env: &Env, transparency: Transparency) -> bool {
+    let v1 = eval(&t1, &vec![], global_env, transparency);
+    let v2 = eval(&t2, &vec![], global_env, transparency);
     
-    check_eq(v1, v2, 0, global_env)
+    check_eq(v1, v2, 0, global_env, transparency)
 }
 
-fn check_eq(v1: Value, v2: Value, level: usize, global_env: &Env) -> bool {
-    // Optimization: Physical equality check? 
-    // NbE values can be complex, physical equality hard.
-    
+fn check_eq(v1: Value, v2: Value, level: usize, global_env: &Env, transparency: Transparency) -> bool {
     match (v1, v2) {
         (Value::Lam(_, _, cls1), Value::Lam(_, _, cls2)) => {
             // Recurse with fresh var
             let var = Value::var(level);
             let mut env1 = cls1.env.clone(); env1.push(var.clone());
             let mut env2 = cls2.env.clone(); env2.push(var);
-            let body1 = eval(&cls1.term, &env1, global_env);
-            let body2 = eval(&cls2.term, &env2, global_env);
-            check_eq(body1, body2, level + 1, global_env)
+            let body1 = eval(&cls1.term, &env1, global_env, transparency);
+            let body2 = eval(&cls2.term, &env2, global_env, transparency);
+            check_eq(body1, body2, level + 1, global_env, transparency)
         }
         (Value::Lam(_, _, cls), other) | (other, Value::Lam(_, _, cls)) => {
             // Eta expansion
-            // \x. body == other
-            // body[x] == other x
             let var = Value::var(level);
             let mut env = cls.env.clone(); env.push(var.clone());
-            let body = eval(&cls.term, &env, global_env);
-            let app = apply(other, var, global_env);
-            check_eq(body, app, level + 1, global_env)
+            let body = eval(&cls.term, &env, global_env, transparency);
+            let app = apply(other, var, global_env, transparency);
+            check_eq(body, app, level + 1, global_env, transparency)
         }
         (Value::Pi(_, _, d1, cls1), Value::Pi(_, _, d2, cls2)) => {
-            if !check_eq(*d1, *d2, level, global_env) { return false; }
+            if !check_eq(*d1, *d2, level, global_env, transparency) { return false; }
             let var = Value::var(level);
             let mut env1 = cls1.env.clone(); env1.push(var.clone());
             let mut env2 = cls2.env.clone(); env2.push(var);
-            let body1 = eval(&cls1.term, &env1, global_env);
-            let body2 = eval(&cls2.term, &env2, global_env);
-            check_eq(body1, body2, level + 1, global_env)
+            let body1 = eval(&cls1.term, &env1, global_env, transparency);
+            let body2 = eval(&cls2.term, &env2, global_env, transparency);
+            check_eq(body1, body2, level + 1, global_env, transparency)
         }
         (Value::Sort(l1), Value::Sort(l2)) => l1 == l2,
         (Value::Ind(n1, ls1, a1), Value::Ind(n2, ls2, a2)) => {
-            n1 == n2 && ls1 == ls2 && check_eq_vec(&a1, &a2, level, global_env)
+            n1 == n2 && ls1 == ls2 && check_eq_vec(&a1, &a2, level, global_env, transparency)
         }
         (Value::Ctor(n1, i1, ls1, a1), Value::Ctor(n2, i2, ls2, a2)) => {
-             n1 == n2 && i1 == i2 && ls1 == ls2 && check_eq_vec(&a1, &a2, level, global_env)
+             n1 == n2 && i1 == i2 && ls1 == ls2 && check_eq_vec(&a1, &a2, level, global_env, transparency)
         }
         (Value::Rec(n1, ls1), Value::Rec(n2, ls2)) => n1 == n2 && ls1 == ls2,
         (Value::Neutral(h1, s1), Value::Neutral(h2, s2)) => {
-             check_neutral_head(&*h1, &*h2) && check_eq_vec(&s1, &s2, level, global_env)
+             check_neutral_head(&*h1, &*h2) && check_eq_vec(&s1, &s2, level, global_env, transparency)
         }
         _ => false,
     }
@@ -973,10 +896,10 @@ fn check_neutral_head(h1: &Neutral, h2: &Neutral) -> bool {
     }
 }
 
-fn check_eq_vec(bs1: &[Value], bs2: &[Value], level: usize, global_env: &Env) -> bool {
+fn check_eq_vec(bs1: &[Value], bs2: &[Value], level: usize, global_env: &Env, transparency: Transparency) -> bool {
     if bs1.len() != bs2.len() { return false; }
     for (b1, b2) in bs1.iter().zip(bs2.iter()) {
-        if !check_eq(b1.clone(), b2.clone(), level, global_env) {
+        if !check_eq(b1.clone(), b2.clone(), level, global_env, transparency) {
             return false;
         }
     }

@@ -25,6 +25,15 @@ pub enum Totality {
     Unsafe,
 }
 
+/// Transparency levels for reduction
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Transparency {
+    None,       // Opaque / Irreducible
+    Instances,  // Type class instances
+    Reducible,  // Standard definitions (Transparent)
+    All,        // Unfold everything (including Opaque if forced)
+}
+
 /// Specification for well-founded recursion
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WellFoundedInfo {
@@ -45,6 +54,10 @@ pub struct Definition {
     pub rec_arg: Option<usize>,
     /// For well-founded recursion: the WF specification
     pub wf_info: Option<WellFoundedInfo>,
+    /// Unfolding transparency hint
+    pub transparency: Transparency,
+    /// Axioms used by this definition (transitive closure)
+    pub axioms: Vec<String>,
 }
 
 impl Definition {
@@ -55,6 +68,8 @@ impl Definition {
             totality: Totality::Total,
             rec_arg: None,
             wf_info: None,
+            transparency: Transparency::Reducible, // Default: Transparent
+            axioms: vec![],
         }
     }
 
@@ -65,6 +80,8 @@ impl Definition {
             totality: Totality::Total,
             rec_arg: Some(rec_arg),
             wf_info: None,
+            transparency: Transparency::Reducible,
+            axioms: vec![],
         }
     }
 
@@ -75,6 +92,8 @@ impl Definition {
             totality: Totality::WellFounded,
             rec_arg: Some(wf_info.decreasing_arg),
             wf_info: Some(wf_info),
+            transparency: Transparency::Reducible,
+            axioms: vec![],
         }
     }
 
@@ -85,16 +104,21 @@ impl Definition {
             totality: Totality::Partial,
             rec_arg: None,
             wf_info: None,
+            transparency: Transparency::Reducible,
+            axioms: vec![],
         }
     }
 
     /// Create an axiom (assumed without proof)
     pub fn axiom(name: String, ty: Rc<Term>) -> Self {
+        let axiom_name = name.clone();
         Definition {
             name, ty, value: None,
             totality: Totality::Axiom,
             rec_arg: None,
             wf_info: None,
+            transparency: Transparency::None, // Axioms don't unfold
+            axioms: vec![axiom_name], // Axiom depends on itself
         }
     }
 
@@ -105,6 +129,8 @@ impl Definition {
             totality: Totality::Unsafe,
             rec_arg: None,
             wf_info: None,
+            transparency: Transparency::Reducible,
+            axioms: vec![],
         }
     }
 
@@ -116,6 +142,11 @@ impl Definition {
     /// Check if this definition is total (terminates)
     pub fn is_total(&self) -> bool {
         matches!(self.totality, Totality::Total | Totality::WellFounded)
+    }
+
+    /// Mark this definition as Opaque (Irreducible)
+    pub fn mark_opaque(&mut self) {
+        self.transparency = Transparency::None;
     }
 }
 
