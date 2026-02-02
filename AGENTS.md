@@ -1,0 +1,30 @@
+# Repository Guidelines
+
+## Project Structure & Module Organization
+- `Cargo.toml` defines a Rust workspace with crates: `kernel/` (type checker + core), `frontend/` (parser/macro expansion/elaboration), `mir/` (mid-level IR + borrow checking), `codegen/` (Rust code generation), `cli/` (compiler/REPL entrypoint).
+- `stdlib/` contains the LRL standard library and `prelude.lrl` (auto-loaded by the CLI).
+- `tests/` holds `.lrl` programs used for integration/regression checks.
+- `docs/` contains design notes and test plans; `report*.md` are historical reports.
+- Build artifacts live in `target/` and should not be committed.
+
+## Build, Test, and Development Commands
+- `cargo build` -- build all workspace crates.
+- `cargo test --all` -- run Rust unit/integration tests across crates.
+- `cargo test -p frontend` / `cargo test -p cli` -- focus tests for a single crate.
+- `cargo run -p cli -- tests/ownership_test.lrl` -- run a program in the interpreter (loads `stdlib/prelude.lrl`).
+- `cargo run -p cli -- compile tests/ownership_test.lrl` -- compile to Rust (optionally `-o/--output <path>`).
+- `cargo run -p cli -- compile-mir tests/ownership_test.lrl` -- lower to MIR for inspection.
+
+## Coding Style & Naming Conventions
+- Rust: follow `rustfmt` defaults (4-space indent). Keep modules small and focused.
+- Naming: `snake_case` for functions/variables/modules, `CamelCase` for types/traits, `SCREAMING_SNAKE_CASE` for consts.
+- LRL files: descriptive `snake_case` names (e.g., `ownership_test.lrl`); definitions generally use lower_snake_case.
+
+## Testing Guidelines
+- Rust tests live in `*/tests/*.rs` and `src/*` test modules; snapshots use `insta` in `frontend/tests/snapshots` and `cli/tests`.
+- To update snapshots, run `INSTA_UPDATE=always cargo test -p frontend` (or `-p cli`).
+- `.lrl` programs in `tests/` are run via the CLI; add new cases alongside related files.
+
+## Commit & Pull Request Guidelines
+- Commit messages are short, capitalized imperatives (e.g., "Add ...", "Implement ...", "Remove ...").
+- PRs should describe scope, list tests run, and call out snapshot/output changes. Link relevant issues or design docs when available.

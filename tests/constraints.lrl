@@ -1,6 +1,6 @@
 ;; tests/constraints.lrl
 
-(inductive Nat (sort 0)
+(inductive copy Nat (sort 0)
   (zero Nat)
   (succ (pi n Nat Nat)))
 

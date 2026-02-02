@@ -1,0 +1,7 @@
+---
+source: frontend/tests/elaboration_tests.rs
+expression: output
+---
+ElaboratedDef id
+  ty: Pi(Sort(Succ(Zero)), Pi(Var(0), Var(1), Default), Default)
+  val: Lam(Sort(Succ(Zero)), Lam(Var(0), Var(0), Default), Default)

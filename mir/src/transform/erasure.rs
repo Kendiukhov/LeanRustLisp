@@ -1,6 +1,5 @@
-use crate::{Body, Statement, Rvalue, Operand, Constant, Literal, Place};
-use kernel::ast::{Term, Level};
-use std::rc::Rc;
+use crate::{Body, Statement, Rvalue, Operand, Constant, Literal};
+use crate::types::MirType;
 
 /// Erase computationally irrelevant values (Prop) from the MIR body.
 /// Replaces assignments to Prop-typed locals with a dummy unit value.
@@ -17,8 +16,8 @@ pub fn erase_proofs(body: &mut Body) {
                 if body.local_decls[decl_idx].is_prop {
                     // It's a proof! Erase the computation.
                     *rvalue = Rvalue::Use(Operand::Constant(Box::new(Constant {
-                        literal: Literal::Term(Rc::new(Term::Sort(Level::Zero))),
-                        ty: Rc::new(Term::Sort(Level::Zero)),
+                        literal: Literal::Unit,
+                        ty: MirType::Unit,
                     })));
                 }
             }
@@ -34,8 +33,7 @@ pub fn erase_proofs(body: &mut Body) {
                      body.local_decls[p.local.index()].is_prop
                  },
                  Operand::Constant(_) => false, // Constants (Nat/Bool) are data? Or Prop constant?
-                 // Constant(Sort(0)) is Prop value (Unit).
-                 // But Literal::Term... we assume constants are well-typed.
+                 // Constant(Unit) is Prop value.
              };
 
              if is_prop_discr {
@@ -60,8 +58,8 @@ pub fn erase_proofs(body: &mut Body) {
                      block.statements.push(Statement::Assign(
                          destination.clone(),
                          Rvalue::Use(Operand::Constant(Box::new(Constant {
-                            literal: Literal::Term(Rc::new(Term::Sort(Level::Zero))),
-                            ty: Rc::new(Term::Sort(Level::Zero)),
+                            literal: Literal::Unit,
+                            ty: MirType::Unit,
                         })))
                      ));
                      

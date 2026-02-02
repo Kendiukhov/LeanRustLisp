@@ -7,7 +7,7 @@ This document outlines how LeanRustLisp integrates Rust-style ownership into a d
 **Affine Types**: Values are affine by default.
 *   Usage: 0 or 1 times.
 *   Drop: Allowed (destructors run).
-*   Copy: Opt-in via `is_copy` metadata on inductive type declarations.
+*   Copy: Opt-in via `is_copy` metadata on inductive type declarations (surface syntax: `(inductive copy ...)`).
 
 ## 2. Borrowing & References
 

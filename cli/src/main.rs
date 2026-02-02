@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
-mod repl;
-mod compiler;
+use cli::{compiler, repl};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -11,6 +10,10 @@ struct Cli {
     /// Source file to run (interprets)
     #[arg(required = false)]
     file: Option<String>,
+
+    /// Show expanded macro syntax
+    #[arg(long)]
+    show_expanded: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -42,7 +45,15 @@ fn main() {
             if let Some(file) = cli.file {
                 let mut env = kernel::checker::Env::new();
                 let mut expander = frontend::macro_expander::Expander::new();
-                repl::run_file(&file, &mut env, &mut expander, false);
+                expander.verbose = cli.show_expanded;
+                
+                let prelude_path = "stdlib/prelude.lrl";
+                if std::path::Path::new(prelude_path).exists() {
+                     let _ = repl::run_file(prelude_path, &mut env, &mut expander, false);
+                }
+                
+                let _ = repl::run_file(&file, &mut env, &mut expander, false);
+                return;
             } else {
                 repl::start();
             }

@@ -1,0 +1,6 @@
+;; Expected: reject (case bodies do not match the motive/result type)
+(def bad_match (pi b Bool Nat)
+  (lam b Bool
+    (match b Nat
+      (case (true) false)
+      (case (false) true))))

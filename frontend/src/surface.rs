@@ -1,5 +1,4 @@
-use std::rc::Rc;
-use std::fmt;
+use kernel::ast::{AxiomTag, Totality, Transparency};
 
 /// Source location info
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
@@ -11,7 +10,7 @@ pub struct Span {
 }
 
 /// Scope identifier (for hygiene)
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct ScopeId(pub usize);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +68,7 @@ pub enum SurfaceTermKind {
     Ind(String),
     Ctor(String, usize),
     Rec(String),
+    Fix(String, Box<SurfaceTerm>, Box<SurfaceTerm>), // Name, Type, Body
     Match(Box<SurfaceTerm>, Box<SurfaceTerm>, Vec<(String, Vec<String>, SurfaceTerm)>), // Scrutinee, RetType, Cases
     Hole,
 }
@@ -79,16 +79,19 @@ pub enum Declaration {
         name: String,
         ty: SurfaceTerm,
         val: SurfaceTerm,
-        is_partial: bool,
+        totality: Totality,
+        transparency: Transparency,
     },
     Axiom {
         name: String,
         ty: SurfaceTerm,
+        tags: Vec<AxiomTag>,
     },
     Inductive {
         name: String,
         ty: SurfaceTerm,
         ctors: Vec<(String, SurfaceTerm)>,
+        is_copy: bool,
     },
     DefMacro {
         name: String,

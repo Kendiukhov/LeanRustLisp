@@ -1,6 +1,128 @@
-use crate::{Body, BasicBlock, Statement, Terminator, Operand, Rvalue, Place, Literal, Local, PlaceElem};
-use kernel::ast::Term;
+use crate::{Body, Statement, Terminator, Operand, Rvalue, Place, Literal, PlaceElem, RuntimeCheckKind};
+use kernel::ast::{Term, InductiveDecl};
 use std::rc::Rc;
+use std::collections::HashMap;
+
+use kernel::checker::{Env, Builtin};
+
+fn count_indices(ty: &Rc<Term>, num_params: usize) -> usize {
+    let mut current = ty;
+    let mut count = 0;
+    while let Term::Pi(_, body, _) = &**current {
+        count += 1;
+        current = body;
+    }
+    if count >= num_params {
+        count - num_params
+    } else {
+        0
+    }
+}
+
+/// Check if a type is recursive (references the given inductive type).
+fn is_recursive_arg(ty: &Rc<Term>, ind_name: &str) -> bool {
+    match &**ty {
+        Term::Ind(n, _) => n == ind_name,
+        Term::App(f, _) => is_recursive_arg(f, ind_name),
+        _ => false,
+    }
+}
+
+pub fn codegen_recursors(inductives: &HashMap<String, InductiveDecl>, env: &Env) -> String {
+    let mut code = String::new();
+    for (ind_name, decl) in inductives {
+        if env.is_builtin(Builtin::Nat, ind_name) || 
+           env.is_builtin(Builtin::Bool, ind_name) || 
+           env.is_builtin(Builtin::List, ind_name) { continue; }
+
+        let num_params = decl.num_params;
+        let num_ctors = decl.ctors.len();
+        let num_indices = count_indices(&decl.ty, num_params);
+        let total_args = num_params + 1 + num_ctors + num_indices + 1;
+
+        // Entry point
+        code.push_str(&format!("fn rec_{}_entry(arg_0: Value) -> Value {{\n", ind_name));
+        for i in 1..total_args {
+            code.push_str(&format!("    Value::Func(Rc::new(move |arg_{}: Value| {{\n", i));
+            for j in 0..i {
+                code.push_str(&format!("        let arg_{} = arg_{}.clone();\n", j, j));
+            }
+        }
+        
+        code.push_str(&format!("        rec_{}_impl(", ind_name));
+        for i in 0..total_args {
+            if i > 0 { code.push_str(", "); }
+            code.push_str(&format!("arg_{}", i));
+        }
+        code.push_str(")\n");
+        
+        for _ in 1..total_args {
+            code.push_str("    }))\n");
+        }
+        code.push_str("}\n\n");
+
+        // Impl
+        code.push_str(&format!("fn rec_{}_impl(", ind_name));
+        for i in 0..total_args {
+            if i > 0 { code.push_str(", "); }
+            code.push_str(&format!("arg_{}: Value", i));
+        }
+        code.push_str(") -> Value {\n");
+        
+        let major_idx = total_args - 1;
+        let first_minor_idx = num_params + 1;
+        
+        code.push_str(&format!("    match arg_{} {{\n", major_idx));
+        code.push_str("        Value::Inductive(n, idx, ctor_args) => {\n");
+        code.push_str(&format!("            if n != \"{}\" {{ panic!(\"rec_{}: type mismatch\"); }}\n", ind_name, ind_name));
+        code.push_str("            match idx {\n");
+        
+        for (c_idx, ctor) in decl.ctors.iter().enumerate() {
+            code.push_str(&format!("                {} => {{\n", c_idx));
+            let minor_idx = first_minor_idx + c_idx;
+            
+            // Extract arg types
+            let mut curr = &ctor.ty;
+            for _ in 0..num_params {
+                if let Term::Pi(_, b, _) = &**curr { curr = b; }
+            }
+            let mut arg_types = Vec::new();
+            while let Term::Pi(ty, b, _) = &**curr {
+                arg_types.push(ty.clone());
+                curr = b;
+            }
+            
+            code.push_str(&format!("                    let mut curr_fn = arg_{}.clone();\n", minor_idx));
+            
+            for (a_i, a_ty) in arg_types.iter().enumerate() {
+                code.push_str(&format!("                    let val_{} = ctor_args[{}].clone();\n", a_i, a_i));
+                let is_rec = is_recursive_arg(a_ty, ind_name);
+                
+                code.push_str(&format!("                    match curr_fn {{ Value::Func(f) => curr_fn = f(val_{}.clone()), _ => panic!(\"rec_{}: expected func\") }}\n", a_i, ind_name));
+                
+                if is_rec {
+                    code.push_str(&format!("                    let ih_{} = rec_{}_impl(", a_i, ind_name));
+                    for k in 0..total_args-1 {
+                        code.push_str(&format!("arg_{}.clone(), ", k));
+                    }
+                    code.push_str(&format!("val_{}.clone());\n", a_i));
+                    
+                    code.push_str(&format!("                    match curr_fn {{ Value::Func(f) => curr_fn = f(ih_{}), _ => panic!(\"rec_{}: expected func for IH\") }}\n", a_i, ind_name));
+                }
+            }
+            code.push_str("                    curr_fn\n");
+            code.push_str("                }\n");
+        }
+        
+        code.push_str(&format!("                _ => panic!(\"rec_{}: invalid ctor idx\"),\n", ind_name));
+        code.push_str("            }\n");
+        code.push_str("        }\n");
+        code.push_str(&format!("        _ => panic!(\"rec_{}: expected Inductive\"),\n", ind_name));
+        code.push_str("    }\n");
+        code.push_str("}\n");
+    }
+    code
+}
 
 /// Generates the unified runtime prelude (same as legacy codegen).
 /// This includes the Value enum and all recursor helpers.
@@ -45,6 +167,37 @@ impl std::fmt::Debug for Value {
                 Ok(())
             }
         }
+    }
+}
+
+fn runtime_refcell_borrow_check(_value: &Value) {
+    // TODO: hook into RefCell runtime representation
+}
+
+fn runtime_mutex_lock(_value: &Value) {
+    // TODO: hook into Mutex runtime representation
+}
+
+fn runtime_bounds_check(container: &Value, index: &Value) {
+    let idx = match index {
+        Value::Nat(n) => *n as usize,
+        _ => return,
+    };
+
+    let len = match container {
+        Value::List(list) => list_len(list),
+        _ => return,
+    };
+
+    if idx >= len {
+        panic!("index out of bounds");
+    }
+}
+
+fn list_len(list: &List) -> usize {
+    match &**list {
+        List::Nil => 0,
+        List::Cons(_, tail) => 1 + list_len(tail),
     }
 }
 
@@ -228,8 +381,30 @@ fn codegen_statement(stmt: &Statement, is_closure: bool) -> String {
             let val = codegen_rvalue(rvalue, is_closure);
             format!("                {} = {};\n", dest, val)
         },
+        Statement::RuntimeCheck(check) => codegen_runtime_check(check, is_closure),
         Statement::StorageLive(_) | Statement::StorageDead(_) | Statement::Nop => {
             format!("                // {:?}\n", stmt)
+        }
+    }
+}
+
+fn codegen_runtime_check(check: &RuntimeCheckKind, is_closure: bool) -> String {
+    match check {
+        RuntimeCheckKind::RefCellBorrow { local } => {
+            let value = codegen_place_read(&Place::from(*local), is_closure);
+            format!("                runtime_refcell_borrow_check(&{});\n", value)
+        }
+        RuntimeCheckKind::MutexLock { local } => {
+            let value = codegen_place_read(&Place::from(*local), is_closure);
+            format!("                runtime_mutex_lock(&{});\n", value)
+        }
+        RuntimeCheckKind::BoundsCheck { local, index } => {
+            let container = codegen_place_read(&Place::from(*local), is_closure);
+            let idx = codegen_place_read(&Place::from(*index), is_closure);
+            format!(
+                "                runtime_bounds_check(&{}, &{});\n",
+                container, idx
+            )
         }
     }
 }
@@ -345,18 +520,15 @@ fn codegen_operand(op: &Operand, is_closure: bool) -> String {
     match op {
         Operand::Copy(place) | Operand::Move(place) => {
             let s = codegen_place_read(place, is_closure);
-            if matches!(op, Operand::Copy(_)) {
-                 format!("{}.clone()", s)
-            } else {
-                 s // Move semantics (Value is Clone in Rust)
-            }
+            format!("{}.clone()", s)
         },
         Operand::Constant(c) => codegen_constant(&c.literal),
     }
 }
 
-fn codegen_constant(lit: &Literal) -> String {
+pub fn codegen_constant(lit: &Literal) -> String {
     match lit {
+        Literal::Unit => "Value::Unit".to_string(),
         Literal::Nat(n) => format!("Value::Nat({})", n),
         Literal::Bool(b) => format!("Value::Bool({})", b),
         Literal::Closure(idx, captures) => {
@@ -381,6 +553,70 @@ fn codegen_constant(lit: &Literal) -> String {
                     func_name,
                     cap_vec.join(", ")
                 )
+            }
+        },
+        Literal::Fix(idx, captures) => {
+            // Recursive closure: env[0] is self, env[1..] are captures
+            let func_name = format!("closure_{}", idx);
+            if captures.is_empty() {
+                format!("Value::Func(Rc::new_cyclic(|self_ref| {{ let self_val = Value::Func(self_ref.clone()); move |arg| {}(vec![self_val.clone()], arg) }}))", func_name)
+            } else {
+                let cap_clones: Vec<String> = captures.iter().enumerate()
+                    .map(|(i, op)| format!("let __cap{} = {}.clone();", i, codegen_operand(op, false)))
+                    .collect();
+                let cap_vec: Vec<String> = (0..captures.len())
+                    .map(|i| format!("__cap{}.clone()", i))
+                    .collect();
+                format!("{{ {} Value::Func(Rc::new_cyclic(|self_ref| {{ let self_val = Value::Func(self_ref.clone()); let __env = vec![self_val.clone(), {}]; move |arg| {}(__env.clone(), arg) }})) }}",
+                    cap_clones.join(" "),
+                    cap_vec.join(", "),
+                    func_name
+                )
+            }
+        },
+        Literal::InductiveCtor(name, idx, arity) => {
+            if name == "Nat" {
+                if *idx == 0 {
+                    "Value::Nat(0)".to_string()
+                } else {
+                    "Value::Func(Rc::new(|n| match n { Value::Nat(i) => Value::Nat(i+1), _ => panic!(\"succ expects Nat\") }))".to_string()
+                }
+            } else if name == "Bool" {
+                if *idx == 0 {
+                    "Value::Bool(true)".to_string()
+                } else {
+                    "Value::Bool(false)".to_string()
+                }
+            } else if name == "List" {
+                if *idx == 0 {
+                    "Value::Func(Rc::new(|_| Value::List(Rc::new(List::Nil))))".to_string()
+                } else {
+                    "Value::Func(Rc::new(|_| Value::Func(Rc::new(|h| { let h = h.clone(); Value::Func(Rc::new(move |t| match t { Value::List(l) => Value::List(Rc::new(List::Cons(h.clone(), l))), _ => panic!(\"cons expects List\") })) }))))".to_string()
+                }
+            } else {
+                if *arity == 0 {
+                    format!("Value::Inductive(\"{}\".to_string(), {}, vec![])", name, idx)
+                } else {
+                    let mut s = String::new();
+                    for i in 0..*arity {
+                        s.push_str(&format!("Value::Func(Rc::new(move |a{}| {{\n", i));
+                        for j in 0..=i {
+                            s.push_str(&format!("let a{} = a{}.clone();\n", j, j));
+                        }
+                    }
+                    
+                    s.push_str(&format!("Value::Inductive(\"{}\".to_string(), {}, vec![", name, idx));
+                    for i in 0..*arity {
+                        if i > 0 { s.push_str(", "); }
+                        s.push_str(&format!("a{}", i));
+                    }
+                    s.push_str("])\n");
+                    
+                    for _ in 0..*arity {
+                        s.push_str("}))\n");
+                    }
+                    s
+                }
             }
         },
         Literal::Term(t) => {
@@ -433,7 +669,7 @@ fn codegen_constant(lit: &Literal) -> String {
     }
 }
 
-fn sanitize_name(name: &str) -> String {
+pub fn sanitize_name(name: &str) -> String {
     match name {
         "true" | "false" | "if" | "else" | "match" | "let" | "fn" | "struct" | "enum" | "type" | "return" |
         "loop" | "while" | "for" | "in" | "use" | "mod" | "crate" | "pub" | "impl" | "trait" | "where" |

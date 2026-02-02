@@ -1,0 +1,15 @@
+(inductive copy Nat Type
+  (zero Nat)
+  (succ (pi n Nat Nat)))
+
+(def T Type Nat)
+(def zero_T T zero)
+
+(def id (pi A Type (pi x A A))
+  (lam A Type (lam x A x)))
+
+(def id_nat (pi n Nat Nat)
+  (id Nat))
+
+(def zero_let Nat
+  (let x Nat zero x))

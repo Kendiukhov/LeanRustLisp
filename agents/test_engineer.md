@@ -84,3 +84,75 @@ Add regression and integration tests reflecting new decisions:
 
 Deliverables
 - A “decision coverage” test matrix doc listing each decision and which test files verify it.
+
+Also:
+Add tests specifically for:
+	•	unified pipeline
+	•	MIR typed invariants
+	•	NLL acceptance cases (non-lexical)
+	•	“panic-free safe subset” lint behavior
+	•	deterministic macro expansion snapshots
+
+
+
+
+  TESTER MODE A: Semantics & IR Stability (Pre-Codegen / Pre-Typed-Backend)
+
+Context
+- The typed backend path is NOT implemented yet (or is not the focus).
+- Your task is to lock down language semantics and compiler intermediate artifacts so later codegen work cannot silently change meaning.
+
+Scope (DO focus on)
+1) Kernel semantics
+- typing/inference
+- definitional equality (β/δ/ι/ζ) behavior
+- Prop/Type rules (impredicative Prop) and restrictions (proof irrelevance / elimination)
+- inductives + recursors correctness
+
+2) Frontend semantics
+- deterministic macro expansion
+- hygiene correctness (capture-avoidance)
+- span preservation
+- elaboration output stability (core term shape)
+
+3) MIR & Borrow Checker semantics
+- MIR lowering correctness and stability (snapshot/golden output)
+- NLL borrow checker accept/reject corpus
+- interior mutability policy classification tests:
+  - RefCell-like permitted in normal mode
+  - panic-free safe subset profile (lint) flags RefCell-like (if lints exist)
+
+4) Determinism
+- same input program -> identical expanded syntax/core/MIR outputs across runs
+
+Artifacts to produce (must)
+A) “Golden semantics suite”
+- For each test case, store one or more snapshots:
+  - expanded syntax snapshot
+  - elaborated core snapshot
+  - MIR snapshot (before borrowck)
+  - borrowck decision snapshot (accepted/rejected + diagnostic code)
+  - normalized core term snapshot for defeq-heavy cases (if applicable)
+B) Negative tests
+- must-fail programs with stable error category assertions (not string matching)
+C) Fuzz / no-panic checks
+- parser/macro expander should not crash on random-ish inputs (bounded)
+- kernel checker should not panic on malformed core terms (bounded)
+
+Explicit non-goals (DO NOT focus on)
+- runtime performance benchmarks
+- typed backend code generation correctness
+- eliminating runtime panics in generated code (except if they indicate semantic bugs upstream)
+- LLVM/Cranelift backend work
+
+Acceptance criteria
+- A CI-run test suite exists that fails on any change to:
+  - macro expansion determinism/hygiene
+  - core term / MIR shape (unless explicitly updated snapshots)
+  - borrow checker decisions for the corpus
+- Each major language decision has at least one test:
+  - impredicative Prop
+  - proof irrelevance (Prop elimination restriction)
+  - transparency (transparent default + opaque escape)
+  - classical axiom tracking (if implemented; otherwise TODO test scaffold)
+  - NLL-specific cases (accepted that lexical would reject)

@@ -1,4 +1,4 @@
-AGENT TASK: Implement LRL Package Management (Option A + controlled slices of B)
+AGENT TASK: Implement LRL Package Management 
 
 Goal: Add a deterministic, lockfile-driven package/workspace system with Cargo-like behavior (Option A), plus explicit aliasing for ambiguous multiple-version imports (a controlled slice of Option B).
 

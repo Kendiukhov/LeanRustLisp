@@ -1,0 +1,21 @@
+(inductive copy Nat Type
+  (zero Nat)
+  (succ (pi n Nat Nat)))
+
+(inductive List (pi T (sort 1) (sort 1))
+  (ctor nil (pi {T (sort 1)} (List T)))
+  (ctor cons (pi {T (sort 1)} (pi h T (pi t (List T) (List T)))))
+)
+
+(def length (pi l (List Nat) Nat)
+  (lam l (List Nat)
+    (match l Nat
+      (case (nil) zero)
+      (case (cons h t ih) (succ ih))
+    )
+  )
+)
+
+(def one Nat (succ zero))
+(def singleton (List Nat) (cons one (nil)))
+(def len1 Nat (length singleton))

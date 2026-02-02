@@ -1,0 +1,13 @@
+---
+source: cli/tests/golden_suite.rs
+expression: output
+---
+ElaboratedDef eq_unit_elim
+  ty: Pi(App(App(App(Ind("Eq", []), Ind("Unit", [])), Const("unit", [])), Const("unit", [])), App(App(App(Ind("Eq", []), Ind("Unit", [])), Const("unit", [])), Const("unit", [])), Default)
+  val: Lam(App(App(App(Ind("Eq", []), Ind("Unit", [])), Const("unit", [])), Const("unit", [])), App(App(App(App(App(App(Rec("Eq", [Zero]), Ind("Unit", [])), Ctor("Unit", 0, [])), Lam(Ind("Unit", []), Lam(App(App(App(Ind("Eq", []), Ind("Unit", [])), Ctor("Unit", 0, [])), Var(0)), App(App(App(Ind("Eq", []), Ind("Unit", [])), Const("unit", [])), Const("unit", [])), Default), Default)), App(App(Const("refl", []), Ind("Unit", [])), Const("unit", []))), Ctor("Unit", 0, [])), Var(0)), Default)
+
+MirBody eq_unit_elim
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(2, []), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([Unit], Unit), name: Some("_0"), is_prop: true, is_copy: true }], arg_count: 0 }
+
+BorrowCheck eq_unit_elim
+  ok

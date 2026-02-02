@@ -3,9 +3,10 @@
 ;; Recursive Add (manually defined to test Rec)
 (def my_add (pi n Nat (pi m Nat Nat))
   (lam n Nat (lam m Nat
-    (rec Nat n (lam _ Nat Nat)
+    (rec Nat (lam _ Nat Nat)
       m
-      (lam n_pred Nat (lam add_rest Nat (succ add_rest)))))))
+      (lam n_pred Nat (lam add_rest Nat (succ add_rest)))
+      n))))
 
 ;; 1. Higher-Order Capture
 (def make_adder (pi x Nat (pi y Nat Nat))

@@ -1,0 +1,18 @@
+(inductive copy Nat Type
+  (zero Nat)
+  (succ (pi n Nat Nat)))
+
+(inductive copy Bool Type
+  (true Bool)
+  (false Bool))
+
+(def nested_match (pi b Bool (pi n Nat Nat))
+  (lam b Bool
+    (lam n Nat
+      (match b Nat
+        (case (true) (let x Nat n (succ x)))
+        (case (false) (let x Nat zero x))
+      )
+    )
+  )
+)

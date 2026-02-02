@@ -17,8 +17,10 @@ The kernel is based on the **Calculus of Inductive Constructions (CIC)** depende
 The kernel supports inductive definitions.
 
 *   **Large Elimination Restriction**: To maintain proof irrelevance, elimination from an inductive type in `Prop` to a type in `Type u` (where `u > 0`) is restricted.
-    *   Allowed only if the inductive type has **zero constructors** (e.g., `False`) or **one constructor** where all non-parameter fields are in `Prop` (e.g., `Eq`, `True`, `Acc`).
+    *   Allowed only if the inductive type has **zero constructors** (e.g., `False`) or **one constructor** where all constructor fields are in `Prop` (e.g., `True`).
+    *   Exception: inductives matching the **equality shape** `(A : Type u) -> (a : A) -> (b : A) -> Prop` with `refl : (A : Type u) -> (a : A) -> Eq A a a` may eliminate into `Type` (transport/J), even though their parameters are in `Type`.
     *   Elimination from `Prop` to `Prop` is always allowed.
+*   **Explicit Recursor Universes**: Recursor terms must carry explicit universe levels (e.g., `Rec Nat [u]`). The kernel rejects `Rec` with missing levels. The elaborator computes the level from the motive type and supplies it.
 
 ## 4. Definitional Equality and Unfolding
 
@@ -34,6 +36,8 @@ Definitional equality (`a ≡ b`) is decided by a Normalization-by-Evaluation (N
 The kernel supports classical logic via axioms (e.g., Excluded Middle, Choice).
 
 *   **Explicit Tracking**: Axioms must be declared explicitly.
+*   **Explicit Classification**: Axioms may carry tags (e.g., `classical`) that the kernel uses to classify dependencies; no name-based heuristics are used.
+    *   Surface syntax attaches tags via `(axiom classical name ty)` or `(axiom (classical) name ty)`. Untagged axioms are treated as non-classical.
 *   **Dependency Tracking**: Every definition tracks the set of axioms it depends on (transitively). This allows users to know if a theorem relies on classical logic or specific axioms.
 
 ## 6. Completeness & Totality

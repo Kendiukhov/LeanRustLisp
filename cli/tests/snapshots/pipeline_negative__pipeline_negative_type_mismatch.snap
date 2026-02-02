@@ -1,0 +1,7 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Error: Elaboration error (Value) in 'bad': Unification failed: Pi(Ind("Nat", []), Ind("Nat", []), Default) vs Ind("Nat", [])

@@ -1,0 +1,6 @@
+(inductive copy Nat Type
+  (zero Nat)
+  (succ (pi n Nat Nat)))
+
+(def bad Nat
+  (lam x Nat x))

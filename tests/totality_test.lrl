@@ -6,12 +6,12 @@
 ;; - (axiom name type) - Axioms (assumed without proof)
 
 ;; Define Nat and Bool (self-contained test)
-(inductive Nat (sort 0)
+(inductive copy Nat (sort 0)
   (ctor zero Nat)
   (ctor succ (pi n Nat Nat))
 )
 
-(inductive Bool (sort 0)
+(inductive copy Bool (sort 0)
   (ctor true Bool)
   (ctor false Bool)
 )

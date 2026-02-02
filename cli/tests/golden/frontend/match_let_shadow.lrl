@@ -1,0 +1,18 @@
+(inductive copy Nat Type
+  (zero Nat)
+  (succ (pi n Nat Nat)))
+
+(def shadow_let Nat
+  (let x Nat (succ zero)
+    (let x Nat (succ x) x)))
+
+(def shadow_match (pi n Nat Nat)
+  (lam n Nat
+    (let n Nat (succ n)
+      (match n Nat
+        (case (zero) n)
+        (case (succ n) (let n Nat n n))
+      )
+    )
+  )
+)

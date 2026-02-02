@@ -1,0 +1,43 @@
+---
+source: cli/tests/golden_suite.rs
+expression: output
+---
+ElaboratedDef length
+  ty: Pi(App(Ind("List", []), Ind("Nat", [])), Ind("Nat", []), Default)
+  val: Lam(App(Ind("List", []), Ind("Nat", [])), App(App(App(App(App(Rec("List", [Succ(Zero)]), Ind("Nat", [])), Lam(App(Ind("List", []), Ind("Nat", [])), Ind("Nat", []), Default)), Const("zero", [])), Lam(Ind("Nat", []), Lam(App(Ind("List", []), Ind("Nat", [])), Lam(Ind("Nat", []), App(Const("succ", []), Var(0)), Default), Default), Default)), Var(0)), Default)
+
+MirBody length
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(4, []), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([Adt(AdtId("List"), [Nat])], Nat), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0 }
+
+BorrowCheck length
+  ok
+
+ElaboratedDef one
+  ty: Ind("Nat", [])
+  val: App(Const("succ", []), Const("zero", []))
+
+MirBody one
+  Body { basic_blocks: [BasicBlockData { statements: [StorageLive(Local(1)), Assign(Place { local: Local(1), projection: [] }, Use(Constant(Constant { literal: Term(Const("succ", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(2) }) }, BasicBlockData { statements: [], terminator: Some(Return) }, BasicBlockData { statements: [StorageLive(Local(2)), Assign(Place { local: Local(2), projection: [] }, Use(Constant(Constant { literal: Term(Const("zero", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(3) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Move(Place { local: Local(1), projection: [] }), args: [Copy(Place { local: Local(2), projection: [] })], destination: Place { local: Local(0), projection: [] }, target: Some(BasicBlock(4)) }) }, BasicBlockData { statements: [StorageDead(Local(2)), StorageDead(Local(1))], terminator: Some(Goto { target: BasicBlock(1) }) }], local_decls: [LocalDecl { ty: Nat, name: Some("_0"), is_prop: false, is_copy: true }, LocalDecl { ty: Fn([Nat], Nat), name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Nat, name: None, is_prop: false, is_copy: true }], arg_count: 0 }
+
+BorrowCheck one
+  ok
+
+ElaboratedDef singleton
+  ty: App(Ind("List", []), Ind("Nat", []))
+  val: App(App(App(Const("cons", []), Ind("Nat", [])), Const("one", [])), App(Const("nil", []), Ind("Nat", [])))
+
+MirBody singleton
+  Body { basic_blocks: [BasicBlockData { statements: [StorageLive(Local(1)), Assign(Place { local: Local(1), projection: [] }, Use(Constant(Constant { literal: Term(Const("cons", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(2) }) }, BasicBlockData { statements: [], terminator: Some(Return) }, BasicBlockData { statements: [StorageLive(Local(2)), Assign(Place { local: Local(2), projection: [] }, Use(Constant(Constant { literal: Term(Ind("Nat", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(3) }) }, BasicBlockData { statements: [StorageLive(Local(3))], terminator: Some(Call { func: Move(Place { local: Local(1), projection: [] }), args: [Copy(Place { local: Local(2), projection: [] })], destination: Place { local: Local(3), projection: [] }, target: Some(BasicBlock(4)) }) }, BasicBlockData { statements: [StorageDead(Local(2)), StorageDead(Local(1)), StorageLive(Local(4)), Assign(Place { local: Local(4), projection: [] }, Use(Constant(Constant { literal: Term(Const("one", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(5) }) }, BasicBlockData { statements: [StorageLive(Local(5))], terminator: Some(Call { func: Move(Place { local: Local(3), projection: [] }), args: [Copy(Place { local: Local(4), projection: [] })], destination: Place { local: Local(5), projection: [] }, target: Some(BasicBlock(6)) }) }, BasicBlockData { statements: [StorageDead(Local(4)), StorageDead(Local(3)), StorageLive(Local(6)), StorageLive(Local(7)), Assign(Place { local: Local(7), projection: [] }, Use(Constant(Constant { literal: Term(Const("nil", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(8) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Move(Place { local: Local(5), projection: [] }), args: [Move(Place { local: Local(6), projection: [] })], destination: Place { local: Local(0), projection: [] }, target: Some(BasicBlock(11)) }) }, BasicBlockData { statements: [StorageLive(Local(8)), Assign(Place { local: Local(8), projection: [] }, Use(Constant(Constant { literal: Term(Ind("Nat", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(9) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Move(Place { local: Local(7), projection: [] }), args: [Copy(Place { local: Local(8), projection: [] })], destination: Place { local: Local(6), projection: [] }, target: Some(BasicBlock(10)) }) }, BasicBlockData { statements: [StorageDead(Local(8)), StorageDead(Local(7))], terminator: Some(Goto { target: BasicBlock(7) }) }, BasicBlockData { statements: [StorageDead(Local(6)), StorageDead(Local(5))], terminator: Some(Goto { target: BasicBlock(1) }) }], local_decls: [LocalDecl { ty: Adt(AdtId("List"), [Nat]), name: Some("_0"), is_prop: false, is_copy: false }, LocalDecl { ty: Fn([Unit], Fn([Unit], Fn([Adt(AdtId("List"), [Unit])], Adt(AdtId("List"), [Unit])))), name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Unit, name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Fn([Unit], Fn([Adt(AdtId("List"), [Unit])], Adt(AdtId("List"), [Unit]))), name: None, is_prop: false, is_copy: false }, LocalDecl { ty: Nat, name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Fn([Adt(AdtId("List"), [Unit])], Adt(AdtId("List"), [Unit])), name: None, is_prop: false, is_copy: false }, LocalDecl { ty: Adt(AdtId("List"), [Nat]), name: None, is_prop: false, is_copy: false }, LocalDecl { ty: Fn([Unit], Adt(AdtId("List"), [Unit])), name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Unit, name: None, is_prop: false, is_copy: true }], arg_count: 0 }
+
+BorrowCheck singleton
+  ok
+
+ElaboratedDef len1
+  ty: Ind("Nat", [])
+  val: App(Const("length", []), Const("singleton", []))
+
+MirBody len1
+  Body { basic_blocks: [BasicBlockData { statements: [StorageLive(Local(1)), Assign(Place { local: Local(1), projection: [] }, Use(Constant(Constant { literal: Term(Const("length", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(2) }) }, BasicBlockData { statements: [], terminator: Some(Return) }, BasicBlockData { statements: [StorageLive(Local(2)), Assign(Place { local: Local(2), projection: [] }, Use(Constant(Constant { literal: Term(Const("singleton", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(3) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Move(Place { local: Local(1), projection: [] }), args: [Move(Place { local: Local(2), projection: [] })], destination: Place { local: Local(0), projection: [] }, target: Some(BasicBlock(4)) }) }, BasicBlockData { statements: [StorageDead(Local(2)), StorageDead(Local(1))], terminator: Some(Goto { target: BasicBlock(1) }) }], local_decls: [LocalDecl { ty: Nat, name: Some("_0"), is_prop: false, is_copy: true }, LocalDecl { ty: Fn([Adt(AdtId("List"), [Nat])], Nat), name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Adt(AdtId("List"), [Nat]), name: None, is_prop: false, is_copy: false }], arg_count: 0 }
+
+BorrowCheck len1
+  ok

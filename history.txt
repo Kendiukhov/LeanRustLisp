@@ -74,3 +74,16 @@ zero
 :eval (not true)
 :eval (and true false)
 :eval (or false true)
+(def id (pi {T (sort 1)} (pi x T T))
+(lam {T} (sort 1) (lam x T x))
+)
+(inductive List (pi T (sort 1) (sort 1))
+(ctor nil (pi {T (sort 1)} (List T)))
+(ctor cons (pi {T (sort 1)} (pi h T (pi t (List T) (List T)))))
+)
+;; Simple non-dependent version - return nil
+(def append_simple (pi {T (sort 1)} (pi l1 (List T) (pi l2 (List T) (List T))))
+(lam {T} (sort 1) (lam l1 (List T) (lam l2 (List T) nil)))
+)
+(def x Nat 42)
+x

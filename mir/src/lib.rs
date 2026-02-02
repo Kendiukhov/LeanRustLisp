@@ -1,11 +1,19 @@
-use kernel::ast::{Term, Level};
 use std::rc::Rc;
+use kernel::ast::Term; // Still needed for Literal::Term escape hatch if kept
 
+pub mod types;
 pub mod lower;
 pub mod analysis;
 pub mod codegen;
 pub mod transform;
 pub mod errors;
+pub mod lints;
+pub mod pretty;
+
+#[cfg(test)]
+mod snapshots;
+
+use crate::types::{MirType, Mutability};
 
 // Id types for type safety
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -50,20 +58,19 @@ impl Body {
 
 #[derive(Debug, Clone)]
 pub struct LocalDecl {
-    pub ty: Rc<Term>,
+    pub ty: MirType, // Use MirType instead of Term
     pub name: Option<String>,
     pub is_prop: bool, // Optimization: Pre-computed universe level check
-    pub is_copy: bool, // Whether this type has Copy semantics (can be used without moving)
+    pub is_copy: bool, // Whether this type has Copy semantics
 }
 
 impl LocalDecl {
-    pub fn new(ty: Rc<Term>, name: Option<String>) -> Self {
-        LocalDecl { ty, name, is_prop: false, is_copy: false }
+    pub fn new(ty: MirType, name: Option<String>) -> Self {
+        let is_copy = ty.is_copy();
+        LocalDecl { ty, name, is_prop: false, is_copy }
     }
-
-    pub fn new_copy(ty: Rc<Term>, name: Option<String>) -> Self {
-        LocalDecl { ty, name, is_prop: false, is_copy: true }
-    }
+    
+    // Deprecated helpers if needed, or updated
 }
 
 #[derive(Debug, Clone)]
@@ -73,8 +80,23 @@ pub struct BasicBlockData {
 }
 
 #[derive(Debug, Clone)]
+pub enum RuntimeCheckKind {
+    RefCellBorrow {
+        local: Local,
+    },
+    MutexLock {
+        local: Local,
+    },
+    BoundsCheck {
+        local: Local,
+        index: Local,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub enum Statement {
     Assign(Place, Rvalue),
+    RuntimeCheck(RuntimeCheckKind),
     StorageLive(Local),
     StorageDead(Local),
     Nop,
@@ -101,9 +123,6 @@ pub enum Terminator {
 pub struct SwitchTargets {
     pub values: Vec<u128>,
     pub targets: Vec<BasicBlock>,
-    // Fallback if no value matches (standard 'otherwise')
-    // usually the last target in targets list or separate?
-    // Let's keep it simple: targets.len() == values.len() + 1
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -129,14 +148,8 @@ impl From<Local> for Place {
 #[derive(Debug, Clone)]
 pub enum Rvalue {
     Use(Operand),
-    // BinaryOp, UnaryOp... we lower LRL ops to function calls usually?
-    // But basic arithmetic might be intrinsic.
-    // For now, LRL treats almost everything as function calls (App).
-    // But we might want specific ref handling.
     Ref(BorrowKind, Place),
-    // Discriminant of an enum/inductive
     Discriminant(Place),
-    // Standard aggregate creation (tuple, struct)
     // Aggregate(Box<AggregateKind>, Vec<Operand>),
 }
 
@@ -146,24 +159,36 @@ pub enum BorrowKind {
     Mut,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)] // Added Hash
+impl From<BorrowKind> for Mutability {
+    fn from(k: BorrowKind) -> Self {
+        match k {
+            BorrowKind::Shared => Mutability::Not,
+            BorrowKind::Mut => Mutability::Mut,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Operand {
     Copy(Place),
     Move(Place),
     Constant(Box<Constant>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)] // Added Hash
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Constant {
     pub literal: Literal,
-    pub ty: Rc<Term>,
+    pub ty: MirType, // Use MirType
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)] // Added Hash
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Literal {
+    Unit, // Unit value
     Nat(u64), // For simplified constants
     Bool(bool),
-    // Or just a raw Term?
+    // Raw Term literal (e.g. for non-primitive constants not yet lowered to Mir values)
     Term(Rc<Term>),
     Closure(usize, Vec<Operand>), // Index into bodies, captured environment
+    Fix(usize, Vec<Operand>), // Recursive closure with self in env[0]
+    InductiveCtor(String, usize, usize), // Name, Index, Arity
 }

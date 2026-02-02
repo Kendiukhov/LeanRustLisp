@@ -5,7 +5,7 @@
 //! 2. Unused local variables
 //! 3. Storage statements for unused locals
 
-use crate::{Body, BasicBlock, Statement, Terminator, Operand, Rvalue, Place, Local};
+use crate::{Body, BasicBlock, Statement, Terminator, Operand, Rvalue, RuntimeCheckKind};
 use std::collections::{HashSet, HashMap};
 
 /// Remove unreachable basic blocks and unused locals from a MIR body.
@@ -144,6 +144,20 @@ fn find_used_locals(body: &Body) -> HashSet<usize> {
 
                     // Collect uses from rvalue
                     collect_rvalue_uses(rvalue, &mut used);
+                }
+                Statement::RuntimeCheck(check) => {
+                    match check {
+                        RuntimeCheckKind::RefCellBorrow { local } => {
+                            used.insert(local.index());
+                        }
+                        RuntimeCheckKind::MutexLock { local } => {
+                            used.insert(local.index());
+                        }
+                        RuntimeCheckKind::BoundsCheck { local, index } => {
+                            used.insert(local.index());
+                            used.insert(index.index());
+                        }
+                    }
                 }
                 Statement::StorageLive(_) | Statement::StorageDead(_) | Statement::Nop => {}
             }
@@ -350,12 +364,11 @@ fn build_predecessor_map(body: &Body) -> HashMap<usize, HashSet<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BasicBlockData, LocalDecl, SwitchTargets};
-    use kernel::ast::{Term, Level};
-    use std::rc::Rc;
+    use crate::{BasicBlockData, LocalDecl, SwitchTargets, Place, Local};
+    use crate::types::MirType;
 
-    fn dummy_ty() -> Rc<Term> {
-        Rc::new(Term::Sort(Level::Zero))
+    fn dummy_ty() -> MirType {
+        MirType::Unit
     }
 
     #[test]

@@ -1,0 +1,40 @@
+;; tests/macro_hygiene.lrl
+
+;; 1. Simple macro identity
+(defmacro id (x) x)
+(def test1 Nat (id 42))
+
+;; 2. Hygiene: Argument preservation
+;; The `x` passed to `m1` should not be captured by the `lam x` inside `m1`
+(defmacro m1 (body) (lam x Nat body))
+;; exp: (lam x Nat x_from_arg)
+;; If unhygienic, (m1 x) -> (lam x Nat x) which is identity.
+;; If hygienic, (m1 x) -> (lam x_fresh Nat x_original).
+;; We test this by passing a variable `y`.
+(def y Nat 10)
+(def test2 (pi _ Nat Nat) (m1 y)) 
+;; test2 applied to anything should return 10 (y), not the argument.
+(def res2 Nat (app test2 99)) ;; Should be 10
+
+;; 3. Hygiene: Macro-introduced binding preservation
+;; The `x` introduced by `m2` should not capture the `x` at the call site.
+(defmacro m2 () (lam x Nat x))
+(def x Nat 5)
+(def test3 (pi _ Nat Nat) (m2)) 
+;; (m2) -> (lam x_fresh Nat x_fresh)
+;; Calling it with 100 should return 100.
+(def res3 Nat (app test3 100)) ;; Should be 100
+
+;; 4. Hygiene: Free variable in macro
+;; `z` is free in `m3`. It should refer to global `z` (if we had global resolution in macros fully working),
+;; or at least NOT capture local `z`.
+(def z Nat 7)
+(defmacro m3 () z)
+;; (let z 8 (m3)) -> should evaluate to 7 (global z), NOT 8.
+;; Since we don't have `let` yet (except via macro), let's use `lam`.
+;; ((lam z Nat (m3)) 8)
+(def test4 Nat (app (lam z Nat (m3)) 8)) 
+;; If capture: returns 8.
+;; If hygienic: returns 7.
+
+test4

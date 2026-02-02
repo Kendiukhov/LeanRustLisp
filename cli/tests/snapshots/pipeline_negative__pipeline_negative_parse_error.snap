@@ -1,0 +1,8 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Err
+DriverError: ParseValidations(["UnexpectedEof(Span { start: 9, end: 9, line: 1, col: 9 })"])
+Diagnostics:
+- Error: Parse error: UnexpectedEof(Span { start: 9, end: 9, line: 1, col: 9 })

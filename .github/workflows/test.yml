@@ -1,0 +1,133 @@
+# CI Configuration for LeanRustLisp
+# Mode A: Semantics & IR Stability Testing
+#
+# This workflow ensures that:
+# 1. All unit tests pass (kernel, frontend, mir, cli)
+# 2. Semantic tests verify language correctness
+# 3. Determinism tests pass (same input -> same output)
+# 4. Negative tests correctly reject ill-formed programs
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # =============================================================================
+  # CORE TEST SUITE
+  # =============================================================================
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build all packages
+        run: cargo build --all --all-targets
+
+      - name: Run unit tests
+        run: cargo test --all --lib
+
+      - name: Run kernel semantic tests
+        run: cargo test --package kernel --test semantic_tests
+
+      - name: Run kernel negative tests
+        run: cargo test --package kernel --test negative_tests
+
+      - name: Run frontend determinism tests
+        run: cargo test --package frontend --test determinism_tests
+
+      - name: Run MIR borrow checker corpus
+        run: cargo test --package mir --test borrowck_corpus
+
+      - name: Run all integration tests
+        run: cargo test --all --test '*'
+
+  # =============================================================================
+  # LINTING & FORMATTING
+  # =============================================================================
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all --all-targets -- -D warnings
+
+  # =============================================================================
+  # DOCUMENTATION
+  # =============================================================================
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build documentation
+        run: cargo doc --all --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # =============================================================================
+  # SNAPSHOT TESTS (when insta is added)
+  # =============================================================================
+  # snapshots:
+  #   name: Snapshot Tests
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - name: Install cargo-insta
+  #       run: cargo install cargo-insta
+  #     - name: Check snapshots
+  #       run: cargo insta test --check
+
+  # =============================================================================
+  # FUZZ TESTS (scheduled/manual)
+  # =============================================================================
+  # fuzz:
+  #   name: Fuzz Tests
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'schedule' || contains(github.event.head_commit.message, '[fuzz]')
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@nightly
+  #     - name: Install cargo-fuzz
+  #       run: cargo install cargo-fuzz
+  #     - name: Run parser fuzz (bounded)
+  #       run: cargo fuzz run parser_fuzz -- -max_total_time=60

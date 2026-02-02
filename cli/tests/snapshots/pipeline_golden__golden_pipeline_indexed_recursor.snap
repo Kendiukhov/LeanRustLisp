@@ -1,0 +1,14 @@
+---
+source: cli/tests/pipeline_golden.rs
+assertion_line: 139
+expression: output
+---
+ElaboratedDef vlen
+  ty: Pi(Sort(Succ(Zero)), Pi(Ind("Nat", []), Pi(App(App(Ind("Vec", []), Var(1)), Var(0)), Ind("Nat", []), Default), Default), Default)
+  val: Lam(Sort(Succ(Zero)), Lam(Ind("Nat", []), Lam(App(App(Ind("Vec", []), Var(1)), Var(0)), App(App(App(App(App(App(Rec("Vec", [Succ(Zero)]), Var(2)), Lam(Ind("Nat", []), Lam(App(App(Ind("Vec", []), Var(3)), Var(0)), Ind("Nat", []), Default), Default)), Const("zero", [])), Lam(Ind("Nat", []), Lam(Var(3), Lam(App(App(Ind("Vec", []), Var(4)), Var(1)), Lam(Ind("Nat", []), App(Const("succ", []), Var(0)), Default), Default), Default), Default)), Var(1)), Var(0)), Default), Default), Default)
+
+MirBody vlen
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(8, []), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([Unit], Fn([Nat], Fn([Unit], Nat))), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0 }
+
+BorrowCheck vlen
+  ok

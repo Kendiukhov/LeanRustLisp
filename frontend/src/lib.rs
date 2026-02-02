@@ -1,10 +1,9 @@
-pub mod surface;
 pub mod parser;
-pub mod macro_expander;
 pub mod elaborator;
+pub mod surface;
+pub mod macro_expander;
 pub mod declaration_parser;
-
-pub use surface::*;
+pub mod diagnostics;
 
 #[cfg(test)]
 mod tests {
@@ -34,7 +33,7 @@ mod tests {
 
          match &term.kind {
              surface::SurfaceTermKind::Lam(n, _, _, _) => {
-                 assert_eq!(n, "x");
+                 assert!(n.starts_with("x_g"), "Expected name starting with x_g, got {}", n);
              }
              _ => panic!("Expected Lam"),
          }

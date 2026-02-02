@@ -1,0 +1,5 @@
+---
+source: frontend/tests/macro_expansion_tests.rs
+expression: expand(input)
+---
+"Macro defined\nMacro defined\nSurfaceTerm { kind: App(SurfaceTerm { kind: Ctor(\"Nat\", 1), span: Span { start: 21, end: 22, line: 2, col: 20 } }, SurfaceTerm { kind: Ctor(\"Nat\", 0), span: Span { start: 21, end: 22, line: 2, col: 20 } }, true), span: Span { start: 21, end: 22, line: 2, col: 20 } }\n"

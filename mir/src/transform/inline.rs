@@ -7,7 +7,7 @@
 //! Note: Full function inlining is complex for functional languages with closures.
 //! This module provides a foundation that can be extended.
 
-use crate::{Body, Statement, Rvalue, Operand, Place, Local, Constant, Literal};
+use crate::{Body, Statement, Rvalue, Operand, Local, Constant};
 use std::collections::HashMap;
 
 /// Perform constant folding and copy propagation on a MIR body.
@@ -107,7 +107,7 @@ fn build_copy_map(body: &Body) -> HashMap<usize, KnownValue> {
 
     // Resolve chains: if A = B and B = C, then A = C
     let mut resolved = HashMap::new();
-    for (&local, value) in &copy_map {
+    for (&local, _) in &copy_map {
         let final_value = resolve_chain(local, &copy_map);
         resolved.insert(local, final_value);
     }
@@ -186,12 +186,11 @@ pub fn fold_constants(_body: &mut Body) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BasicBlockData, LocalDecl, Terminator, BasicBlock};
-    use kernel::ast::{Term, Level};
-    use std::rc::Rc;
+    use crate::{BasicBlockData, LocalDecl, Terminator, Place, Literal};
+    use crate::types::MirType;
 
-    fn dummy_ty() -> Rc<Term> {
-        Rc::new(Term::Sort(Level::Zero))
+    fn dummy_ty() -> MirType {
+        MirType::Unit
     }
 
     #[test]

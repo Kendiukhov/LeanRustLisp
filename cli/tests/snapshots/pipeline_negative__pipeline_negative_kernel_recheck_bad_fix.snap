@@ -1,0 +1,7 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Error: Kernel re-check failed for 'bad_fix': ExpectedFunction(Ind("Nat", []))

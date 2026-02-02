@@ -1,0 +1,12 @@
+;; Expected: accept (Prop -> Type elimination via Eq/transport)
+(def proof_to_nat
+  (pi A Type
+    (pi a A
+      (pi b A
+        (pi p (Eq A a b) Nat))))
+  (lam A Type
+    (lam a A
+      (lam b A
+        (lam p (Eq A a b)
+          (match p Nat
+            (case (refl A' a') (succ zero))))))))

@@ -74,3 +74,59 @@ Target the following new decision surfaces:
 Deliverables
 - Minimal repro cases + severity rating
 - Concrete fixes or tests that should be added for each found issue
+
+Also:
+	Attack:
+	•	NLL soundness holes
+	•	defeq/perf cliffs
+	•	classical axiom laundering via macros
+	•	runtime panics in “safe” paths
+
+
+
+RED TEAM MODE A: Semantic Red Teaming (Pre-Codegen / Focus on Soundness & Semantics)
+
+Context
+- Typed backend codegen is not yet the focus. Do not evaluate runtime performance or emitted code quality.
+- Your job is to break the *semantic guarantees* of the language and compiler pipeline.
+
+Primary targets (attack these hard)
+1) Kernel soundness boundary
+- Attempt to construct programs that:
+  - should be rejected by typing but are accepted
+  - exploit definitional equality weaknesses (incorrect defeq)
+  - cause nontermination or explosive behavior via transparent unfolding
+- Verify the opaque escape hatch prevents defeq blowups.
+
+2) Proof irrelevance and Prop restrictions
+- Try to compute runtime data based on proofs (Prop -> Type elimination loopholes).
+- Try to “smuggle” proof structure into Type.
+
+3) Classical logic tracking
+- Attempt “axiom laundering”:
+  - use classical axioms indirectly through macros or imports
+  - see whether dependency tracking fails or becomes invisible
+
+4) Macro hygiene
+- Attempt identifier capture attacks:
+  - macros that introduce bindings that capture caller variables
+  - nested macro expansions that cause scope leakage
+- Attempt nondeterminism:
+  - any reliance on HashMap iteration producing different expansions
+
+5) NLL borrow checker soundness
+- Try to produce an aliasing violation or use-after-free scenario that borrowck accepts.
+- Focus on CFG-sensitive cases (branches, early returns, reborrows).
+
+Interior mutability policy attacks
+- Verify that “RefCell-like is safe but may panic” does not become an unsound hole:
+  - it can cause runtime panic, but should not allow UB or violate safety invariants
+
+Deliverables
+- Minimal repro programs for each vulnerability class
+- Severity labels (blocker/high/med/low)
+- For each repro: where the bug likely is (module/function) and what test should be added
+
+Explicit non-goals
+- backend codegen panics or Rust emission quality
+- performance microbenchmarks (except defeq blowups as a semantic DoS)

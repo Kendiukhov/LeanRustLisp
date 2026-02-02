@@ -1,0 +1,10 @@
+(inductive copy Nat (sort 1)
+  (ctor zero Nat)
+  (ctor succ (pi n Nat Nat))
+)
+
+(def bad (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) zero)
+    )))

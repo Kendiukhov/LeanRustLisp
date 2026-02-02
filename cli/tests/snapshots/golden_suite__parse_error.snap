@@ -1,0 +1,7 @@
+---
+source: cli/tests/golden_suite.rs
+expression: output
+---
+DriverError: ParseValidations(["UnexpectedEof(Span { start: 28, end: 28, line: 2, col: 0 })"])
+Diagnostics:
+- Error: Parse error: UnexpectedEof(Span { start: 28, end: 28, line: 2, col: 0 })

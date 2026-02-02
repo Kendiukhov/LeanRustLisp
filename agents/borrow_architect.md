@@ -45,3 +45,8 @@ Required deliverables
   - plus specific tests for RefCell-like behavior:
     - allowed in safe code
     - flagged by panic-free linter profile (if linter exists)
+
+  Also:
+  	•	Implement MIR with CFG + places + region variables.
+	•	Implement NLL constraint generation/solving.
+	•	Interior mutability classification and panic-free lint hooks (policy design).

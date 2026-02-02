@@ -15,7 +15,7 @@ pub enum UsageMode {
 }
 
 pub struct UsageContext {
-    used: Vec<bool>,
+    used: Vec<VarUsage>,
 }
 
 impl UsageContext {
@@ -23,8 +23,8 @@ impl UsageContext {
         UsageContext { used: Vec::new() }
     }
 
-    pub fn push(&mut self) {
-        self.used.push(false);
+    pub fn push(&mut self, is_copy: bool) {
+        self.used.push(VarUsage { used: false, is_copy });
     }
 
     pub fn pop(&mut self) {
@@ -37,15 +37,26 @@ impl UsageContext {
         }
         let stack_idx = self.used.len() - 1 - idx;
         
-        if self.used[stack_idx] {
+        let var = &mut self.used[stack_idx];
+        if mode == UsageMode::Observational || var.is_copy {
+            return Ok(());
+        }
+
+        if var.used {
             return Err(OwnershipError::UseAfterMove(idx));
         }
 
         if mode == UsageMode::Consuming {
-            self.used[stack_idx] = true;
+            var.used = true;
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Copy)]
+struct VarUsage {
+    used: bool,
+    is_copy: bool,
 }
 
 pub fn check_ownership(term: &Rc<Term>, ctx: &mut UsageContext, mode: UsageMode) -> Result<(), OwnershipError> {
@@ -60,7 +71,7 @@ pub fn check_ownership(term: &Rc<Term>, ctx: &mut UsageContext, mode: UsageMode)
             // body is evaluated with x: ty
             // ty is evaluated in current context
             check_ownership(ty, ctx, UsageMode::Observational)?; // Assuming original signature for ty
-            ctx.push(); // Original push
+            ctx.push(false); // Untyped check assumes affine
             let res = check_ownership(body, ctx, mode); // Original call
             ctx.pop(); // Original pop
             res
@@ -69,7 +80,7 @@ pub fn check_ownership(term: &Rc<Term>, ctx: &mut UsageContext, mode: UsageMode)
             // Depedent types usually don't consume resources linearly in type position,
             // but the body is a type that might depend on x
             check_ownership(ty, ctx, UsageMode::Observational)?; // Assuming original signature for ty
-            ctx.push(); // Original push
+            ctx.push(false); // Untyped check assumes affine
             let res = check_ownership(body, ctx, UsageMode::Observational); // Original call
             ctx.pop(); // Original pop
             res
@@ -77,7 +88,7 @@ pub fn check_ownership(term: &Rc<Term>, ctx: &mut UsageContext, mode: UsageMode)
         Term::LetE(ty, val, body) => {
             check_ownership(ty, ctx, UsageMode::Observational)?;
             check_ownership(val, ctx, mode)?; 
-            ctx.push();
+            ctx.push(false);
             let res = check_ownership(body, ctx, mode);
             ctx.pop();
             res

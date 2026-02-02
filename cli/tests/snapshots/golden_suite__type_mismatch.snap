@@ -1,0 +1,6 @@
+---
+source: cli/tests/golden_suite.rs
+expression: output
+---
+Diagnostics:
+- Error: Elaboration error (Value) in 'bad': Unification failed: Pi(Ind("Nat", []), Ind("Nat", []), Default) vs Ind("Nat", [])

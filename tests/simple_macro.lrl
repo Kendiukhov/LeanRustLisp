@@ -1,0 +1,16 @@
+
+(def q1 (List Nat) (quote (1)))
+q1
+
+(def q2 (List Nat) (quasiquote (1)))
+q2
+
+(def x Nat 10)
+(def q3 (List Nat) (quasiquote (1 (unquote x))))
+q3
+
+;; (quote x) inside macro should substitute x if substitution descends
+(defmacro basic-quote (val) 
+  (quote val))
+
+(basic-quote 42)

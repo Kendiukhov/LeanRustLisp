@@ -1,0 +1,14 @@
+(inductive copy Nat Type
+  (zero Nat)
+  (succ (pi n Nat Nat)))
+
+(defmacro id (x) x)
+
+(def one Nat
+  (id (succ zero)))
+
+(defmacro wrap (x)
+  (let y Nat x y))
+
+(def two Nat
+  (wrap (succ (succ zero))))

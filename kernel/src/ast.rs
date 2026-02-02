@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::rc::Rc;
 
 // =============================================================================
@@ -34,6 +35,12 @@ pub enum Transparency {
     All,        // Unfold everything (including Opaque if forced)
 }
 
+/// Tags for axioms to track logical assumptions explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum AxiomTag {
+    Classical,
+}
+
 /// Specification for well-founded recursion
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WellFoundedInfo {
@@ -54,8 +61,12 @@ pub struct Definition {
     pub rec_arg: Option<usize>,
     /// For well-founded recursion: the WF specification
     pub wf_info: Option<WellFoundedInfo>,
+    /// Whether well-founded recursion has been verified (guard for unfolding)
+    pub wf_checked: bool,
     /// Unfolding transparency hint
     pub transparency: Transparency,
+    /// Explicit axiom tags (e.g., classical) when this definition is an axiom.
+    pub axiom_tags: Vec<AxiomTag>,
     /// Axioms used by this definition (transitive closure)
     pub axioms: Vec<String>,
 }
@@ -68,7 +79,9 @@ impl Definition {
             totality: Totality::Total,
             rec_arg: None,
             wf_info: None,
+            wf_checked: true,
             transparency: Transparency::Reducible, // Default: Transparent
+            axiom_tags: vec![],
             axioms: vec![],
         }
     }
@@ -80,7 +93,9 @@ impl Definition {
             totality: Totality::Total,
             rec_arg: Some(rec_arg),
             wf_info: None,
+            wf_checked: true,
             transparency: Transparency::Reducible,
+            axiom_tags: vec![],
             axioms: vec![],
         }
     }
@@ -92,7 +107,9 @@ impl Definition {
             totality: Totality::WellFounded,
             rec_arg: Some(wf_info.decreasing_arg),
             wf_info: Some(wf_info),
+            wf_checked: false,
             transparency: Transparency::Reducible,
+            axiom_tags: vec![],
             axioms: vec![],
         }
     }
@@ -104,20 +121,36 @@ impl Definition {
             totality: Totality::Partial,
             rec_arg: None,
             wf_info: None,
+            wf_checked: true,
             transparency: Transparency::Reducible,
+            axiom_tags: vec![],
             axioms: vec![],
         }
     }
 
     /// Create an axiom (assumed without proof)
     pub fn axiom(name: String, ty: Rc<Term>) -> Self {
+        Self::axiom_with_tags(name, ty, vec![])
+    }
+
+    /// Create a classical axiom (e.g., EM/Choice)
+    pub fn axiom_classical(name: String, ty: Rc<Term>) -> Self {
+        Self::axiom_with_tags(name, ty, vec![AxiomTag::Classical])
+    }
+
+    /// Create an axiom with explicit tags.
+    pub fn axiom_with_tags(name: String, ty: Rc<Term>, mut tags: Vec<AxiomTag>) -> Self {
+        tags.sort();
+        tags.dedup();
         let axiom_name = name.clone();
         Definition {
             name, ty, value: None,
             totality: Totality::Axiom,
             rec_arg: None,
             wf_info: None,
+            wf_checked: true,
             transparency: Transparency::None, // Axioms don't unfold
+            axiom_tags: tags,
             axioms: vec![axiom_name], // Axiom depends on itself
         }
     }
@@ -129,24 +162,33 @@ impl Definition {
             totality: Totality::Unsafe,
             rec_arg: None,
             wf_info: None,
+            wf_checked: true,
             transparency: Transparency::Reducible,
+            axiom_tags: vec![],
             axioms: vec![],
         }
     }
 
     /// Check if this definition can be unfolded in type contexts
     pub fn is_type_safe(&self) -> bool {
-        matches!(self.totality, Totality::Total | Totality::WellFounded | Totality::Axiom)
+        matches!(self.totality, Totality::Total | Totality::Axiom)
+            || (self.totality == Totality::WellFounded && self.wf_checked)
     }
 
     /// Check if this definition is total (terminates)
     pub fn is_total(&self) -> bool {
-        matches!(self.totality, Totality::Total | Totality::WellFounded)
+        matches!(self.totality, Totality::Total)
+            || (self.totality == Totality::WellFounded && self.wf_checked)
     }
 
     /// Mark this definition as Opaque (Irreducible)
     pub fn mark_opaque(&mut self) {
         self.transparency = Transparency::None;
+    }
+
+    /// Check if this definition is tagged as a classical axiom.
+    pub fn is_classical_axiom(&self) -> bool {
+        self.axiom_tags.contains(&AxiomTag::Classical)
     }
 }
 
@@ -162,6 +204,100 @@ pub enum Level {
     Max(Box<Level>, Box<Level>),
     IMax(Box<Level>, Box<Level>),
     Param(String),
+}
+
+fn level_key(level: &Level) -> String {
+    match level {
+        Level::Zero => "0".to_string(),
+        Level::Param(name) => format!("P({})", name),
+        Level::Succ(inner) => format!("S({})", level_key(inner)),
+        Level::Max(a, b) => format!("M({}, {})", level_key(a), level_key(b)),
+        Level::IMax(a, b) => format!("I({}, {})", level_key(a), level_key(b)),
+    }
+}
+
+fn collect_max(level: Level, out: &mut Vec<Level>) {
+    match level {
+        Level::Max(a, b) => {
+            collect_max(*a, out);
+            collect_max(*b, out);
+        }
+        other => out.push(other),
+    }
+}
+
+fn normalize_max(levels: Vec<Level>) -> Level {
+    let mut flat = Vec::new();
+    for level in levels {
+        collect_max(level, &mut flat);
+    }
+
+    flat.retain(|level| !matches!(level, Level::Zero));
+
+    if flat.is_empty() {
+        return Level::Zero;
+    }
+
+    if flat.len() == 1 {
+        return flat.pop().expect("non-empty");
+    }
+
+    if flat.iter().all(|level| matches!(level, Level::Succ(_))) {
+        let inners: Vec<Level> = flat
+            .into_iter()
+            .map(|level| match level {
+                Level::Succ(inner) => *inner,
+                _ => unreachable!("all entries are Succ"),
+            })
+            .collect();
+        return Level::Succ(Box::new(normalize_max(inners)));
+    }
+
+    let mut seen = HashSet::new();
+    flat.retain(|level| seen.insert(level.clone()));
+    flat.sort_by(|a, b| level_key(a).cmp(&level_key(b)));
+
+    let mut iter = flat.into_iter();
+    let first = iter.next().expect("non-empty");
+    iter.fold(first, |acc, level| Level::Max(Box::new(acc), Box::new(level)))
+}
+
+pub fn normalize_level(level: Level) -> Level {
+    match level {
+        Level::Zero | Level::Param(_) => level,
+        Level::Succ(inner) => Level::Succ(Box::new(normalize_level(*inner))),
+        Level::IMax(a, b) => {
+            let a_norm = normalize_level(*a);
+            let b_norm = normalize_level(*b);
+            if matches!(b_norm, Level::Zero) {
+                Level::Zero
+            } else {
+                normalize_max(vec![a_norm, b_norm])
+            }
+        }
+        Level::Max(a, b) => {
+            let a_norm = normalize_level(*a);
+            let b_norm = normalize_level(*b);
+            normalize_max(vec![a_norm, b_norm])
+        }
+    }
+}
+
+pub fn normalize_levels(levels: &[Level]) -> Vec<Level> {
+    levels.iter().cloned().map(normalize_level).collect()
+}
+
+pub fn level_eq(l1: &Level, l2: &Level) -> bool {
+    normalize_level(l1.clone()) == normalize_level(l2.clone())
+}
+
+pub fn levels_eq(ls1: &[Level], ls2: &[Level]) -> bool {
+    if ls1.len() != ls2.len() {
+        return false;
+    }
+    ls1.iter()
+        .zip(ls2.iter())
+        .all(|(l1, l2)| level_eq(l1, l2))
 }
 
 /// Binder information (explicit, implicit, strict implicit)
@@ -195,6 +331,8 @@ pub enum Term {
     Ctor(String, usize, Vec<Level>),
     /// Recursor/eliminator: (Rec "Nat" [levels])
     Rec(String, Vec<Level>),
+    /// Fixpoint combinator: fix x:T. body
+    Fix(Rc<Term>, Rc<Term>),
     /// Metavariable (hole) to be solved by unification
     Meta(usize),
 }
@@ -275,8 +413,8 @@ impl Term {
         Rc::new(Term::Ctor(ind_name, idx, vec![]))
     }
 
-    pub fn rec(ind_name: String) -> Rc<Self> {
-        Rc::new(Term::Rec(ind_name, vec![]))
+    pub fn rec(ind_name: String, levels: Vec<Level>) -> Rc<Self> {
+        Rc::new(Term::Rec(ind_name, levels))
     }
 
     /// Shift indices in a term by `d` above cutoff `c`.
@@ -302,6 +440,7 @@ impl Term {
             Term::Ind(n, ls) => Rc::new(Term::Ind(n.clone(), ls.clone())),
             Term::Ctor(n, idx, ls) => Rc::new(Term::Ctor(n.clone(), *idx, ls.clone())),
             Term::Rec(n, ls) => Rc::new(Term::Rec(n.clone(), ls.clone())),
+            Term::Fix(ty, body) => Rc::new(Term::Fix(ty.shift(c, d), body.shift(c + 1, d))),
             Term::Meta(id) => Rc::new(Term::Meta(*id)),
         }
     }
@@ -340,8 +479,8 @@ impl Term {
             Term::Ind(n, ls) => Rc::new(Term::Ind(n.clone(), ls.clone())),
             Term::Ctor(n, idx, ls) => Rc::new(Term::Ctor(n.clone(), *idx, ls.clone())),
             Term::Rec(n, ls) => Rc::new(Term::Rec(n.clone(), ls.clone())),
+            Term::Fix(ty, body) => Rc::new(Term::Fix(ty.subst(k, s), body.subst(k + 1, &s.shift(0, 1)))),
             Term::Meta(id) => Rc::new(Term::Meta(*id)),
         }
     }
 }
-

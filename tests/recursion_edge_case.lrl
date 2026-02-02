@@ -1,0 +1,13 @@
+(inductive MyNat (sort 1)
+  (ctor my_zero MyNat)
+  (ctor my_succ (pi n MyNat MyNat)))
+
+(def my_add (pi n MyNat (pi m MyNat MyNat))
+  (lam n MyNat
+    (lam m MyNat
+      (match n MyNat
+        (case (my_zero) m)
+        (case (my_succ n_pred ih) (my_succ ih))))))
+
+(def entry_point MyNat (my_add (my_succ my_zero) (my_succ my_zero)))
+entry_point

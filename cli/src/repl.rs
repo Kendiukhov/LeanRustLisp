@@ -1,14 +1,11 @@
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
-use frontend::parser::Parser;
 use frontend::macro_expander::Expander;
-use frontend::elaborator::{Elaborator, ElabError};
-use frontend::declaration_parser::DeclarationParser;
-use frontend::surface::Declaration;
-use kernel::checker::{Env, whnf};
-use std::rc::Rc;
+use frontend::diagnostics::DiagnosticCollector;
+use kernel::checker::{Env, classical_axiom_dependencies};
 use std::fs;
 use std::path::Path;
+use crate::driver::{self, PipelineOptions};
 
 pub fn start() {
     let mut rl = DefaultEditor::new().expect("Failed to init readline");
@@ -18,11 +15,12 @@ pub fn start() {
 
     let mut env = Env::new();
     let mut expander = Expander::new();
+    let mut last_defined: Option<String> = None;
     
     let prelude_path = "stdlib/prelude.lrl";
     if Path::new(prelude_path).exists() {
         println!("Loading prelude from {}...", prelude_path);
-        run_file(prelude_path, &mut env, &mut expander, false);
+        let _ = run_file(prelude_path, &mut env, &mut expander, false);
     } else {
         println!("Warning: Prelude not found at {}", prelude_path);
     }
@@ -51,14 +49,42 @@ pub fn start() {
                             println!("  :load <file>    Load a file");
                             println!("  :type <expr>    Check the type of an expression");
                             println!("  :eval <expr>    Evaluate an expression to WHNF");
-                            println!("  :expand <expr>  Expand macros in an expression");
+                            println!("  :expand <expr>  Show the macro-expanded syntax");
+                            println!("  :axioms <name...>  Show axiom dependencies (defaults to last defined)");
+                        },
+                        ":axioms" => {
+                            let names: Vec<String> = if parts.len() >= 2 {
+                                parts[1..].iter().map(|s| s.to_string()).collect()
+                            } else if let Some(name) = last_defined.clone() {
+                                vec![name]
+                            } else {
+                                println!("Usage: :axioms <name...>");
+                                continue;
+                            };
+
+                            for (idx, name) in names.iter().enumerate() {
+                                if idx > 0 {
+                                    println!();
+                                }
+                                match env.get_definition(name) {
+                                    Some(def) => {
+                                        let classical = classical_axiom_dependencies(&env, def);
+                                        println!("{}:", name);
+                                        println!("Axioms: {:?}", def.axioms);
+                                        println!("Classical: {:?}", classical);
+                                    }
+                                    None => println!("Unknown definition: {}", name),
+                                }
+                            }
                         },
                         ":load" => {
                             if parts.len() < 2 {
                                 println!("Usage: :load <file>");
                             } else {
                                 let path = parts[1];
-                                run_file(path, &mut env, &mut expander, true);
+                                if let Some(name) = run_file(path, &mut env, &mut expander, true) {
+                                    last_defined = Some(name);
+                                }
                             }
                         },
                         ":type" => {
@@ -66,7 +92,17 @@ pub fn start() {
                                 println!("Usage: :type <expr>");
                             } else {
                                 let input_expr = line[parts[0].len()..].trim();
-                                process_line(input_expr, &mut env, &mut expander, true, false);
+                                let options = PipelineOptions { show_types: true, show_eval: false, verbose: false, collect_artifacts: false };
+                                let mut diagnostics = DiagnosticCollector::new();
+                                let result = driver::process_code(input_expr, "repl", &mut env, &mut expander, &options, &mut diagnostics);
+                                update_last_defined(&result, &diagnostics, &env, &mut last_defined);
+                                // Diagnostics are printed by driver? No, driver returns/collects them.
+                                // Driver logic needs to print them or return them.
+                                // My driver implementation collected them but processed valid ones.
+                                // Let's check driver implementation.
+                                // Ah, driver *handles* diagnostics but doesn't print them to stdout unless I make it do so?
+                                // Actually, I passed DiagnosticCollector. I need to print them here.
+                                print_diagnostics(&diagnostics, "repl", input_expr);
                             }
                         },
                         ":eval" => {
@@ -74,7 +110,11 @@ pub fn start() {
                                 println!("Usage: :eval <expr>");
                             } else {
                                 let input_expr = line[parts[0].len()..].trim();
-                                process_line(input_expr, &mut env, &mut expander, false, true);
+                                let options = PipelineOptions { show_types: false, show_eval: true, verbose: false, collect_artifacts: false };
+                                let mut diagnostics = DiagnosticCollector::new();
+                                let result = driver::process_code(input_expr, "repl", &mut env, &mut expander, &options, &mut diagnostics);
+                                update_last_defined(&result, &diagnostics, &env, &mut last_defined);
+                                print_diagnostics(&diagnostics, "repl", input_expr);
                             }
                         },
                         ":expand" => {
@@ -82,25 +122,40 @@ pub fn start() {
                                 println!("Usage: :expand <expr>");
                             } else {
                                 let input_expr = line[parts[0].len()..].trim();
-                                let mut parser = Parser::new(input_expr);
-                                let syntax_nodes = match parser.parse() {
-                                    Ok(nodes) => nodes,
-                                    Err(e) => {
-                                        println!("Parse Error: {:?}", e);
-                                        continue;
-                                    }
-                                };
-                                for syntax in syntax_nodes {
-                                    if let Some(expanded_syntax) = expander.expand_all_macros(syntax).unwrap() {
-                                        println!("{}", expanded_syntax.pretty_print());
-                                    }
+                                let mut parser = frontend::parser::Parser::new(input_expr);
+                                match parser.parse() {
+                                    Ok(exprs) => {
+                                        for expr in exprs {
+                                            match expander.expand_syntax(expr) {
+                                                Ok(expanded) => {
+                                                    println!("{}", expanded.pretty_print());
+                                                },
+                                                Err(e) => {
+                                                    println!("Expansion Error: {:?}", e);
+                                                    if !expander.expansion_trace.is_empty() {
+                                                        println!("Macro Trace:");
+                                                        for (name, span) in &expander.expansion_trace {
+                                                            println!("  In macro '{}' at {:?}", name, span);
+                                                        }
+                                                        // Clear trace for next command
+                                                        expander.expansion_trace.clear();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    Err(e) => println!("Parse Error: {:?}", e),
                                 }
                             }
                         },
                         _ => println!("Unknown command. Type :help for help."),
                     }
                 } else {
-                    process_line(line, &mut env, &mut expander, true, false);
+                     let options = PipelineOptions { show_types: true, show_eval: false, verbose: true, collect_artifacts: false };
+                     let mut diagnostics = DiagnosticCollector::new();
+                     let result = driver::process_code(line, "repl", &mut env, &mut expander, &options, &mut diagnostics);
+                     update_last_defined(&result, &diagnostics, &env, &mut last_defined);
+                     print_diagnostics(&diagnostics, "repl", line);
                 }
             },
             Err(ReadlineError::Interrupted) => {
@@ -120,268 +175,80 @@ pub fn start() {
     rl.save_history("history.txt").unwrap();
 }
 
-pub fn run_file(path: &str, env: &mut Env, expander: &mut Expander, verbose: bool) {
+pub fn run_file(path: &str, env: &mut Env, expander: &mut Expander, verbose: bool) -> Option<String> {
     match fs::read_to_string(path) {
         Ok(content) => {
-            process_line(&content, env, expander, verbose, false);
+             // For file execution, show_eval=true to see output of top-level expressions
+             let options = PipelineOptions { show_types: verbose, show_eval: true, verbose, collect_artifacts: false };
+             let mut diagnostics = DiagnosticCollector::new();
+             let result = driver::process_code(&content, path, env, expander, &options, &mut diagnostics);
+             print_diagnostics(&diagnostics, path, &content);
+             return extract_last_defined(&result, &diagnostics, env);
         },
         Err(e) => println!("Error reading file {}: {:?}", path, e),
     }
+    None
 }
 
-fn process_line(input: &str, env: &mut Env, expander: &mut Expander, show_type: bool, do_eval: bool) {
-    let mut parser = Parser::new(input);
-    let syntax_nodes = match parser.parse() {
-        Ok(nodes) => nodes,
-        Err(e) => {
-            println!("Parse Error: {:?}", e);
-            return;
-        }
-    };
+fn print_diagnostics(diagnostics: &DiagnosticCollector, filename: &str, content: &str) {
+    use ariadne::{Report, ReportKind, Label, Source, Color};
+    use frontend::diagnostics::Level;
 
-    let mut decl_parser = DeclarationParser::new(expander);
-    let decls = match decl_parser.parse(syntax_nodes) {
-        Ok(decls) => decls,
-        Err(e) => {
-            println!("Declaration Parse Error: {:?}", e);
-            return;
-        }
-    };
-
-    for decl in decls {
-        match decl {
-            Declaration::Def { name, ty, val, is_partial } => {
-                let mut elab = Elaborator::new(env);
-                let ty_core = match elab.infer(ty) {
-                    Ok((t, s)) => {
-                        if !matches!(*s, kernel::ast::Term::Sort(_)) {
-                            println!("Type of a definition must be a Sort, but got {:?}", s);
-                            continue;
-                        }
-                        t
-                    },
-                    Err(e) => { println!("Elaboration Error (Type): {:?}", e); continue; }
-                };
-
-                let val_core = match elab.check(val, &ty_core) {
-                    Ok(t) => {
-                         if let Err(e) = elab.solve_constraints() {
-                             println!("Elaboration Error (Constraints): {:?}", e);
-                             continue;
-                         }
-                         t
-                    },
-                    Err(e) => { println!("Elaboration Error (Value): {:?}", e); continue; }
-                };
-                
-                let def = if is_partial {
-                    kernel::ast::Definition::partial(name.clone(), ty_core, val_core)
-                } else {
-                    kernel::ast::Definition::total(name.clone(), ty_core, val_core)
-                };
-                match env.add_definition(def) {
-                    Ok(_) => {
-                        if show_type { println!("Defined {} ({})", name, if is_partial { "partial" } else { "total" }); }
-                    }
-                    Err(e) => {
-                        println!("Definition Error in {}: {:?}", name, e);
-                    }
-                }
-            }
-            Declaration::Axiom { name, ty } => {
-                let mut elab = Elaborator::new(env);
-                let (ty_core, ty_ty) = match elab.infer(ty) {
-                    Ok((t, s)) => (t, s),
-                    Err(e) => { println!("Elaboration Error (Type): {:?}", e); continue; }
-                };
-                if !matches!(*ty_ty, kernel::ast::Term::Sort(_)) {
-                    println!("Error: axiom type must be a type, got {:?}", ty_ty);
-                    continue;
-                }
-                env.add_axiom(name.clone(), ty_core);
-                if show_type { println!("Axiom {} declared", name); }
-            }
-            Declaration::Inductive { name, ty, ctors } => {
-                // Elaborate the type
-                let mut elab = Elaborator::new(env);
-                let (ty_core, ty_ty) = match elab.infer(ty) {
-                    Ok((t, s)) => (t, s),
-                    Err(e) => { println!("Elaboration Error (Inductive Type): {:?}", e); continue; }
-                };
-                if !matches!(*ty_ty, kernel::ast::Term::Sort(_)) {
-                    println!("Error: inductive type must be a type, got {:?}", ty_ty);
-                    continue;
-                }
-
-                // Count parameters (pi binders in the type)
-                let num_params = {
-                    let mut n = 0;
-                    let mut t = &ty_core;
-                    while let kernel::ast::Term::Pi(_, b, _) = &**t {
-                        n += 1;
-                        t = b;
-                    }
-                    n
-                };
-
-                // Pre-register the inductive to allow self-references in constructors
-                let placeholder = kernel::ast::InductiveDecl {
-                    name: name.clone(),
-                    univ_params: vec![],
-                    num_params,
-                    ty: ty_core.clone(),
-                    ctors: vec![],
-                    is_copy: false,
-                };
-                if let Err(e) = env.add_inductive(placeholder) {
-                    println!("Error adding placeholder inductive: {:?}", e);
-                    continue;
-                }
-
-                // Elaborate constructors
-                let mut kernel_ctors = Vec::new();
-                let mut failed = false;
-                for (cname, cty) in ctors {
-                    let mut elab_c = Elaborator::new(env);
-                    let (cty_core, _) = match elab_c.infer(cty) {
-                        Ok((t, s)) => (t, s),
-                        Err(e) => {
-                            println!("Elaboration Error (Constructor {}): {:?}", cname, e);
-                            failed = true;
-                            break;
-                        }
-                    };
-                    kernel_ctors.push(kernel::ast::Constructor { name: cname, ty: cty_core });
-                }
-                if failed { continue; }
-
-                // Create the full inductive declaration
-                let decl = kernel::ast::InductiveDecl {
-                    name: name.clone(),
-                    univ_params: vec![],
-                    num_params,
-                    ty: ty_core,
-                    ctors: kernel_ctors,
-                    is_copy: false,
-                };
-
-                // Re-register with full constructors (replacing placeholder)
-                env.inductives.insert(name.clone(), decl.clone());
-
-                // Verify soundness
-                if let Err(e) = kernel::checker::check_inductive_soundness(env, &decl) {
-                    println!("Inductive soundness check failed for {}: {:?}", name, e);
-                    env.inductives.remove(&name);
-                    continue;
-                }
-
-                if show_type { println!("Defined inductive {}", name); }
-            }
-            Declaration::DefMacro { name, args, body } => {
-                let macro_def = frontend::macro_expander::MacroDef { args, body };
-                expander.macros.insert(name.clone(), macro_def);
-                if show_type { println!("Defined macro {}", name); }
-            }
-            Declaration::Expr(term) => {
-                let mut elab = Elaborator::new(env);
-                let (core_term, ty) = match elab.infer(term) {
-                    Ok((term, ty)) => (term, ty),
-                    Err(e) => {
-                        match e {
-                            ElabError::OccursCheck(id, t) => {
-                                println!("Occurs Check Failed: {} in {:?}", id, t);
-                            }
-                            ElabError::UnificationError(t1, t2) => {
-                                println!("Unification Error: {:?} vs {:?}", t1, t2);
-                            }
-                            ElabError::SolutionContainsFreeVariables(t) => {
-                                println!("Solution Contains Free Variables: {:?}", t);
-                            }
-                            _ => {
-                                println!("Elaboration Error: {:?}", e);
-                            }
-                        }
-                        continue;
-                    }
-                };
-
-                if show_type {
-                    let ty_norm = whnf(env, ty, kernel::Transparency::All);
-                    println!(": {:?}", ty_norm);
-                }
-                
-                if do_eval {
-                    let val_norm = strong_normalize(env, core_term);
-                    println!("= {}", pretty_print(env, &val_norm));
-                }
-            }
-        }
-    }
-}
-
-fn strong_normalize(env: &Env, term: Rc<kernel::ast::Term>) -> Rc<kernel::ast::Term> {
-    use kernel::ast::Term;
-    let whnf = kernel::checker::whnf(env, term, kernel::Transparency::All);
-    match &*whnf {
-        Term::App(f, a) => {
-            Rc::new(Term::App(
-                strong_normalize(env, f.clone()),
-                strong_normalize(env, a.clone())
-            ))
-        }
-        Term::Lam(ty, body, info) => {
-            Rc::new(Term::Lam(
-                strong_normalize(env, ty.clone()),
-                strong_normalize(env, body.clone()),
-                *info
-            ))
-        }
-        Term::Pi(ty, body, info) => {
-            Rc::new(Term::Pi(
-                strong_normalize(env, ty.clone()),
-                strong_normalize(env, body.clone()),
-                *info
-            ))
-        }
-        Term::LetE(_ty, v, b) => { 
-             strong_normalize(env, b.subst(0, v)) 
-        }
-        _ => whnf,
-    }
-}
-
-fn pretty_print(env: &Env, term: &kernel::ast::Term) -> String {
-    use kernel::ast::Term;
-    match term {
-        Term::Var(i) => format!("#{}", i),
-        Term::Sort(l) => format!("Sort({:?})", l),
-        Term::Const(n, _) => n.clone(),
-        Term::App(f, a) => {
-            let mut args = vec![a];
-            let mut curr = f;
-            while let Term::App(sub_f, sub_a) = &**curr {
-                args.push(sub_a);
-                curr = sub_f;
-            }
-            args.reverse();
+    for diag in &diagnostics.diagnostics {
+        let kind = match diag.level {
+            Level::Error => ReportKind::Error,
+            Level::Warning => ReportKind::Warning,
+            Level::Info => ReportKind::Advice,
+        };
+        
+        let mut builder = Report::build(kind, filename, diag.span.map(|s| s.start).unwrap_or(0))
+            .with_message(&diag.message);
             
-            let head = pretty_print(env, &**curr);
-            let ar_str: Vec<String> = args.iter().map(|arg| pretty_print(env, &***arg)).collect();
-            format!("({} {})", head, ar_str.join(" "))
+        if let Some(span) = diag.span {
+             let color = match diag.level {
+                Level::Error => Color::Red,
+                Level::Warning => Color::Yellow,
+                Level::Info => Color::Blue,
+            };
+            builder = builder.with_label(Label::new((filename, span.start..span.end))
+                .with_message(&diag.message)
+                .with_color(color));
         }
-        Term::Lam(_, body, _) => format!("(lam {})", pretty_print(env, &**body)),
-        Term::Pi(_, body, _) => format!("(pi {})", pretty_print(env, &**body)),
-        Term::LetE(_, val, body) => format!("(let {} {})", pretty_print(env, &**val), pretty_print(env, &**body)),
-        Term::Ind(n, _) => n.clone(),
-        Term::Ctor(ind_name, idx, _) => {
-            if let Some(decl) = env.get_inductive(ind_name) {
-                if let Some(ctor) = decl.ctors.get(*idx) {
-                    return ctor.name.clone();
-                }
-            }
-            format!("{}.{}", ind_name, idx)
-        }
-        Term::Rec(n, _) => format!("Rec({})", n),
-        Term::Meta(id) => format!("?{}", id),
+        
+        builder.finish().print((filename, Source::from(content))).unwrap();
     }
+}
+
+fn update_last_defined(
+    result: &Result<driver::ProcessingResult, driver::DriverError>,
+    diagnostics: &DiagnosticCollector,
+    env: &Env,
+    last_defined: &mut Option<String>,
+) {
+    if diagnostics.has_errors() {
+        return;
+    }
+    if let Some(name) = extract_last_defined(result, diagnostics, env) {
+        *last_defined = Some(name);
+    }
+}
+
+fn extract_last_defined(
+    result: &Result<driver::ProcessingResult, driver::DriverError>,
+    diagnostics: &DiagnosticCollector,
+    env: &Env,
+) -> Option<String> {
+    if diagnostics.has_errors() {
+        return None;
+    }
+    if let Ok(processed) = result {
+        let mut last = None;
+        for name in &processed.deployed_definitions {
+            if env.get_definition(name).is_some() {
+                last = Some(name.clone());
+            }
+        }
+        return last;
+    }
+    None
 }

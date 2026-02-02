@@ -149,10 +149,11 @@ impl<'a> Parser<'a> {
                        Ok(Term::ctor(ind_name, idx))
                    }
                    "rec" => {
-                       // (rec IndName) - recursor reference
+                       // (rec IndName level) - recursor reference with explicit universe
                        let name = self.expect_symbol()?;
+                       let level = self.expect_int()?;
                        self.expect_rparen()?;
-                       Ok(Term::rec(name))
+                       Ok(Term::rec(name, vec![Self::level_from_int(level)]))
                    }
                    _ => Err(ParseError::UnknownToken(head)),
                 }
@@ -181,6 +182,14 @@ impl<'a> Parser<'a> {
         match self.lexer.next_token() {
             Some(Ok(Token::Int(n))) => Ok(n),
             _ => Err(ParseError::Expected("integer".to_string())),
+        }
+    }
+
+    fn level_from_int(level: usize) -> Level {
+        if level == 0 {
+            Level::Zero
+        } else {
+            Level::Succ(Box::new(Level::Zero))
         }
     }
 }

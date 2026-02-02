@@ -3,6 +3,9 @@ name = "frontend"
 version = "0.1.0"
 edition = "2021"
 
+[dev-dependencies]
+insta = "1.34"
+
 [dependencies]
 kernel = { path = "../kernel" }
 thiserror = "1.0"

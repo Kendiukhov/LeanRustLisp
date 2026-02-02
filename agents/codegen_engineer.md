@@ -38,3 +38,8 @@ ADDITIONAL TASKS / DECISIONS (BACKEND MUST RESPECT)
 Deliverables
 - A backend contract doc: what codegen assumes after kernel+borrow-check pass.
 - Regression tests for proof erasure and for “no tag-check panics in typed backend subset.”
+
+Also:
+	•	Implement typed backend for subsets using MIR.
+	•	Replace string-based codegen with structured AST builder.
+	•	Enforce “no panics for well-typed programs” in typed subset.

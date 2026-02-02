@@ -1,8 +1,8 @@
 use crate::surface::{SurfaceTerm, SurfaceTermKind, Span};
 use kernel::ast::{Term, Level};
-use kernel::checker::{Env, Context, infer as infer_type, is_def_eq, TypeError};
+use kernel::checker::{Env, Context, infer as infer_type, TypeError, compute_recursor_type, check_elimination_restriction};
 use std::rc::Rc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -21,6 +21,24 @@ pub enum ElabError {
         got: String,
         span: Span,
     },
+    #[error("Non-exhaustive match on {ind}: missing cases {missing:?}")]
+    NonExhaustiveMatch {
+        ind: String,
+        missing: Vec<String>,
+        span: Span,
+    },
+    #[error("Duplicate case {ctor} in match on {ind}")]
+    DuplicateMatchCase {
+        ind: String,
+        ctor: String,
+        span: Span,
+    },
+    #[error("Unknown constructor {ctor} in match on {ind}")]
+    UnknownMatchCase {
+        ind: String,
+        ctor: String,
+        span: Span,
+    },
     #[error("Unification failed: {0:?} vs {1:?}")]
     UnificationError(Rc<Term>, Rc<Term>),
     #[error("Occurs check failed: tried to solve {0} with {1:?}")]
@@ -29,6 +47,8 @@ pub enum ElabError {
     SolutionContainsFreeVariables(Rc<Term>),
     #[error("Unsolved constraints remaining: {0}")]
     UnsolvedConstraints(String),
+    #[error("Recursor requires a motive to infer universe level")]
+    RecursorNeedsMotive(Span),
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +58,17 @@ pub enum Constraint {
         t2: Rc<Term>,
         span: Span,
         context: Vec<(String, Rc<Term>)>,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MetaContext {
+    binders: Vec<(String, Rc<Term>)>,
+}
+
+impl MetaContext {
+    fn len(&self) -> usize {
+        self.binders.len()
     }
 }
 
@@ -52,12 +83,28 @@ pub enum UnifyResult {
     Failed(Rc<Term>, Rc<Term>),
 }
 
+fn collect_app_spine(term: SurfaceTerm) -> (SurfaceTerm, Vec<(SurfaceTerm, bool)>) {
+    let mut args = Vec::new();
+    let mut head = term;
+    loop {
+        match head.kind {
+            SurfaceTermKind::App(f, x, is_explicit) => {
+                args.push((*x, is_explicit));
+                head = *f;
+            }
+            _ => break,
+        }
+    }
+    args.reverse();
+    (head, args)
+}
+
 pub struct Elaborator<'a> {
     env: &'a Env,
     locals: Vec<(String, Rc<Term>)>,
     meta_counter: usize,
     meta_solutions: HashMap<usize, Rc<Term>>,
-    meta_contexts: HashMap<usize, Vec<(String, Rc<Term>)>>,
+    meta_contexts: HashMap<usize, MetaContext>,
     constraints: Vec<Constraint>,
 }
 
@@ -71,6 +118,28 @@ impl<'a> Elaborator<'a> {
             meta_contexts: HashMap::new(),
             constraints: Vec::new(),
         }
+    }
+
+    fn defeq_transparency(&self) -> kernel::Transparency {
+        kernel::Transparency::Reducible
+    }
+
+    fn whnf(&self, term: Rc<Term>) -> Result<Rc<Term>, ElabError> {
+        let ctx = self.build_context();
+        kernel::checker::whnf_in_ctx(self.env, &ctx, term, self.defeq_transparency())
+            .map_err(|e| ElabError::InferenceError(e, Span { start: 0, end: 0, line: 0, col: 0 }))
+    }
+
+    fn is_def_eq_in_ctx(&self, t1: &Rc<Term>, t2: &Rc<Term>) -> Result<bool, ElabError> {
+        let ctx = self.build_context();
+        kernel::checker::is_def_eq_in_ctx(
+            self.env,
+            &ctx,
+            t1.clone(),
+            t2.clone(),
+            self.defeq_transparency(),
+        )
+        .map_err(|e| ElabError::InferenceError(e, Span { start: 0, end: 0, line: 0, col: 0 }))
     }
 
     fn resolve_name(&self, name: &str) -> Option<Rc<Term>> {
@@ -89,7 +158,11 @@ impl<'a> Elaborator<'a> {
             return Some(Rc::new(Term::Ind(name.to_string(), vec![])));
         }
         
-        if let Some(_) = self.env.get_def(name) {
+        if let Some(_) = self.env.get_definition(name) {
+            // This branch would return an ElabError, but resolve_name returns Option<Rc<Term>>.
+            // To maintain syntactic correctness and the existing return type, we must return Some or None.
+            // Assuming the intent was to resolve to a Const if it's a definition, similar to get_def.
+            // If the intent was to make resolve_name return a Result, that would be a larger change.
             return Some(Rc::new(Term::Const(name.to_string(), vec![])));
         }
 
@@ -112,6 +185,40 @@ impl<'a> Elaborator<'a> {
         ctx
     }
 
+    fn recursor_type(&self, ind_name: &str, levels: &[Level]) -> Result<Rc<Term>, ElabError> {
+        let decl = self.env.get_inductive(ind_name)
+            .ok_or_else(|| ElabError::UnknownInductive(ind_name.to_string(), Span { start: 0, end: 0, line: 0, col: 0 }))?;
+        Ok(compute_recursor_type(decl, levels))
+    }
+
+    fn extract_result_sort_level(&self, ty: Rc<Term>, span: Span) -> Result<Level, ElabError> {
+        let mut current = self.whnf(ty)?;
+        loop {
+            match &*current {
+                Term::Pi(_, body, _) => {
+                    current = self.whnf(body.clone())?;
+                }
+                Term::Sort(level) => return Ok(level.clone()),
+                _ => {
+                    return Err(ElabError::TypeMismatch {
+                        expected: "Sort".to_string(),
+                        got: format!("{:?}", current),
+                        span,
+                    });
+                }
+            }
+        }
+    }
+
+    fn apply_pi_type(&self, ty: Rc<Term>, arg: &Rc<Term>, span: Span) -> Result<Rc<Term>, ElabError> {
+        let ty_whnf = self.whnf(ty)?;
+        if let Term::Pi(_, body, _) = &*ty_whnf {
+            Ok(body.subst(0, arg))
+        } else {
+            Err(ElabError::InferenceError(TypeError::ExpectedFunction(ty_whnf), span))
+        }
+    }
+
     pub fn infer(&mut self, term: SurfaceTerm) -> Result<(Rc<Term>, Rc<Term>), ElabError> {
         let span = term.span;
         match term.kind {
@@ -127,57 +234,67 @@ impl<'a> Elaborator<'a> {
                 Ok((term, ty))
             }
             SurfaceTermKind::App(f, x, is_explicit) => {
-                let (mut f_elab, mut f_ty) = self.infer(*f)?;
-                let mut f_ty_whnf = kernel::checker::whnf(self.env, f_ty.clone(), kernel::Transparency::All);
+                let term = SurfaceTerm { kind: SurfaceTermKind::App(f, x, is_explicit), span };
+                let (head, args) = collect_app_spine(term);
+                if let SurfaceTermKind::Rec(ind_name) = head.kind {
+                    return self.infer_rec_application(ind_name, args, span);
+                }
 
-                // Insert implicit arguments
-                loop {
-                    match &*f_ty_whnf {
-                        Term::Pi(arg_ty, ret_ty, info) => {
-                            match info {
-                                kernel::ast::BinderInfo::Implicit | kernel::ast::BinderInfo::StrictImplicit => {
-                                    if is_explicit {
-                                        // Insert meta
-                                        let meta_id = self.meta_counter;
-                                        self.meta_counter += 1;
-                                        let meta_term = Rc::new(Term::Meta(meta_id));
-                                        self.meta_contexts.insert(meta_id, self.locals.clone());
-                                        
-                                        f_elab = Rc::new(Term::App(f_elab, meta_term.clone()));
-                                        f_ty = ret_ty.subst(0, &meta_term);
-                                        f_ty_whnf = kernel::checker::whnf(self.env, f_ty.clone(), kernel::Transparency::All);
-                                    } else {
+                let (mut f_elab, mut f_ty) = self.infer(head)?;
+
+                for (arg, is_explicit) in args {
+                    let mut f_ty_whnf = self.whnf(f_ty.clone())?;
+
+                    // Insert implicit arguments
+                    loop {
+                        match &*f_ty_whnf {
+                            Term::Pi(_, ret_ty, info) => {
+                                match info {
+                                    kernel::ast::BinderInfo::Implicit | kernel::ast::BinderInfo::StrictImplicit => {
+                                        if is_explicit {
+                                            let meta_id = self.meta_counter;
+                                            self.meta_counter += 1;
+                                            let meta_term = Rc::new(Term::Meta(meta_id));
+                                            self.meta_contexts.insert(meta_id, MetaContext { binders: self.locals.clone() });
+
+                                            f_elab = Rc::new(Term::App(f_elab, meta_term.clone()));
+                                            f_ty = ret_ty.subst(0, &meta_term);
+                                            f_ty_whnf = self.whnf(f_ty.clone())?;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    kernel::ast::BinderInfo::Default => {
+                                        if !is_explicit {
+                                            return Err(ElabError::TypeMismatch {
+                                                expected: "Implicit binder".to_string(),
+                                                got: "Explicit argument".to_string(),
+                                                span,
+                                            });
+                                        }
                                         break;
                                     }
                                 }
-                                kernel::ast::BinderInfo::Default => {
-                                    if !is_explicit {
-                                         return Err(ElabError::TypeMismatch {
-                                            expected: "Implicit binder".to_string(),
-                                            got: "Explicit argument".to_string(),
-                                            span,
-                                         });
-                                    }
-                                    break;
-                                }
                             }
+                            _ => break,
                         }
-                        _ => break,
+                    }
+
+                    if let Term::Pi(arg_ty, ret_ty, _) = &*f_ty_whnf {
+                        let x_elab = self.check(arg, &arg_ty)?;
+                        f_elab = Rc::new(Term::App(f_elab, x_elab.clone()));
+                        f_ty = ret_ty.subst(0, &x_elab);
+                    } else {
+                        return Err(ElabError::InferenceError(TypeError::ExpectedFunction(f_ty_whnf), span));
                     }
                 }
 
-                if let Term::Pi(arg_ty, ret_ty, _) = &*f_ty_whnf {
-                    let x_elab = self.check(*x, arg_ty)?;
-                    let final_ty = ret_ty.subst(0, &x_elab);
-                    Ok((Rc::new(Term::App(f_elab, x_elab)), final_ty))
-                } else {
-                    Err(ElabError::InferenceError(TypeError::ExpectedFunction(f_ty_whnf), span))
-                }
+                Ok((f_elab, f_ty))
             }
             SurfaceTermKind::Pi(name, binder_info, ty, body) => {
                 // Infer the domain type and check it's a Sort
                 let (ty_elab, ty_ty) = self.infer(*ty)?;
-                let ty_ty_whnf = kernel::checker::whnf(self.env, ty_ty, kernel::Transparency::All);
+                let ty_ty_whnf = self.whnf(ty_ty)?;
                 if !matches!(&*ty_ty_whnf, Term::Sort(_)) {
                     return Err(ElabError::TypeMismatch {
                         expected: "Sort".to_string(),
@@ -198,7 +315,7 @@ impl<'a> Elaborator<'a> {
             SurfaceTermKind::Lam(name, binder_info, ty, body) => {
                 // Infer the type annotation and check it's a Sort
                 let (ty_elab, ty_ty) = self.infer(*ty)?;
-                let ty_ty_whnf = kernel::checker::whnf(self.env, ty_ty, kernel::Transparency::All);
+                let ty_ty_whnf = self.whnf(ty_ty)?;
                 if !matches!(&*ty_ty_whnf, Term::Sort(_)) {
                     return Err(ElabError::TypeMismatch {
                         expected: "Sort".to_string(),
@@ -217,7 +334,7 @@ impl<'a> Elaborator<'a> {
             SurfaceTermKind::Let(name, ty, val, body) => {
                 // Infer the type annotation and check it's a Sort
                 let (ty_elab, ty_ty) = self.infer(*ty)?;
-                let ty_ty_whnf = kernel::checker::whnf(self.env, ty_ty, kernel::Transparency::All);
+                let ty_ty_whnf = self.whnf(ty_ty)?;
                 if !matches!(&*ty_ty_whnf, Term::Sort(_)) {
                     return Err(ElabError::TypeMismatch {
                         expected: "Sort".to_string(),
@@ -238,12 +355,12 @@ impl<'a> Elaborator<'a> {
                 let meta_id = self.meta_counter;
                 self.meta_counter += 1;
                 let meta_term = Rc::new(Term::Meta(meta_id));
-                self.meta_contexts.insert(meta_id, self.locals.clone());
+                self.meta_contexts.insert(meta_id, MetaContext { binders: self.locals.clone() });
 
                 let type_meta_id = self.meta_counter;
                 self.meta_counter += 1;
                 let type_meta_term = Rc::new(Term::Meta(type_meta_id));
-                self.meta_contexts.insert(type_meta_id, self.locals.clone());
+                self.meta_contexts.insert(type_meta_id, MetaContext { binders: self.locals.clone() });
 
                 Ok((meta_term, type_meta_term))
             }
@@ -264,19 +381,116 @@ impl<'a> Elaborator<'a> {
                 Ok((ctor_term, ty))
             }
             SurfaceTermKind::Rec(ind_name) => {
-                let decl = self.env.get_inductive(&ind_name)
+                let _ = self.env.get_inductive(&ind_name)
                     .ok_or_else(|| ElabError::UnknownInductive(ind_name.clone(), span))?;
-                let rec_term = Rc::new(Term::Rec(ind_name.clone(), vec![]));
-                // Build recursor type: (C : ind -> Sort u) -> minor premises -> (x : ind) -> C x
-                let rec_ty = self.build_recursor_type(&ind_name, &decl)?;
-                Ok((rec_term, rec_ty))
+                Err(ElabError::RecursorNeedsMotive(span))
             }
             SurfaceTermKind::Match(scrutinee, ret_type, cases) => {
                 self.elaborate_match(*scrutinee, *ret_type, cases, span)
             }
+            SurfaceTermKind::Fix(name, ty, body) => {
+                // Infer the type annotation and check it's a Sort
+                let (ty_elab, ty_ty) = self.infer(*ty)?;
+                let ty_ty_whnf = self.whnf(ty_ty)?;
+                if !matches!(&*ty_ty_whnf, Term::Sort(_)) {
+                    return Err(ElabError::TypeMismatch {
+                        expected: "Sort".to_string(),
+                        got: format!("{:?}", ty_ty_whnf),
+                        span,
+                    });
+                }
+                
+                // Fix f:T. body. body should have type T under f:T.
+                self.locals.push((name, ty_elab.clone()));
+                let body_elab = self.check(*body, &ty_elab)?;
+                self.locals.pop();
+                
+                let fix_term = Rc::new(Term::Fix(ty_elab.clone(), body_elab));
+                Ok((fix_term, ty_elab))
+            }
 
             _ => Err(ElabError::NotImplemented(span)),
         }
+    }
+
+    fn infer_rec_application(
+        &mut self,
+        ind_name: String,
+        args: Vec<(SurfaceTerm, bool)>,
+        span: Span,
+    ) -> Result<(Rc<Term>, Rc<Term>), ElabError> {
+        let decl = self.env.get_inductive(&ind_name)
+            .ok_or_else(|| ElabError::UnknownInductive(ind_name.clone(), span))?;
+
+        let num_params = decl.num_params;
+        if args.len() <= num_params {
+            return Err(ElabError::RecursorNeedsMotive(span));
+        }
+
+        // Infer the motive argument to determine the universe level.
+        let (motive_term, motive_ty) = self.infer(args[num_params].0.clone())?;
+        let motive_level = self.extract_result_sort_level(motive_ty.clone(), span)?;
+        let levels = vec![motive_level];
+
+        check_elimination_restriction(self.env, &ind_name, &levels)
+            .map_err(|e| ElabError::InferenceError(e, span))?;
+
+        let mut f_elab = Rc::new(Term::Rec(ind_name.clone(), levels.clone()));
+        let mut f_ty = self.recursor_type(&ind_name, &levels)?;
+
+        for (idx, (arg, is_explicit)) in args.into_iter().enumerate() {
+            let mut f_ty_whnf = self.whnf(f_ty.clone())?;
+
+            // Insert implicit arguments
+            loop {
+                match &*f_ty_whnf {
+                    Term::Pi(_, ret_ty, info) => {
+                        match info {
+                            kernel::ast::BinderInfo::Implicit | kernel::ast::BinderInfo::StrictImplicit => {
+                                if is_explicit {
+                                    let meta_id = self.meta_counter;
+                                    self.meta_counter += 1;
+                                    let meta_term = Rc::new(Term::Meta(meta_id));
+                                    self.meta_contexts.insert(meta_id, MetaContext { binders: self.locals.clone() });
+
+                                    f_elab = Rc::new(Term::App(f_elab, meta_term.clone()));
+                                    f_ty = ret_ty.subst(0, &meta_term);
+                                    f_ty_whnf = self.whnf(f_ty.clone())?;
+                                } else {
+                                    break;
+                                }
+                            }
+                            kernel::ast::BinderInfo::Default => {
+                                if !is_explicit {
+                                    return Err(ElabError::TypeMismatch {
+                                        expected: "Implicit binder".to_string(),
+                                        got: "Explicit argument".to_string(),
+                                        span,
+                                    });
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    _ => break,
+                }
+            }
+
+            if let Term::Pi(arg_ty, ret_ty, _) = &*f_ty_whnf {
+                let x_elab = if idx == num_params {
+                    self.unify_with_span(&motive_ty, &arg_ty, span)?;
+                    motive_term.clone()
+                } else {
+                    self.check(arg, &arg_ty)?
+                };
+                f_elab = Rc::new(Term::App(f_elab, x_elab.clone()));
+                f_ty = ret_ty.subst(0, &x_elab);
+            } else {
+                return Err(ElabError::InferenceError(TypeError::ExpectedFunction(f_ty_whnf), span));
+            }
+        }
+
+        Ok((f_elab, f_ty))
     }
 
     pub fn check(&mut self, term: SurfaceTerm, expected_type: &Rc<Term>) -> Result<Rc<Term>, ElabError> {
@@ -296,7 +510,7 @@ impl<'a> Elaborator<'a> {
                  } else {
                      // Standard checking - verify the type annotation is a Sort (any level)
                      let (ty_elab, ty_ty) = self.infer(*ty)?;
-                     let ty_ty_whnf = kernel::checker::whnf(self.env, ty_ty, kernel::Transparency::All);
+                     let ty_ty_whnf = self.whnf(ty_ty)?;
                      if !matches!(&*ty_ty_whnf, Term::Sort(_)) {
                          return Err(ElabError::TypeMismatch {
                              expected: "Sort".to_string(),
@@ -315,58 +529,32 @@ impl<'a> Elaborator<'a> {
                  }
             }
             _ => {
-                let (elab_term, inferred_type) = self.infer(SurfaceTerm { kind, span })?;
+                let (mut elab_term, mut inferred_type) = self.infer(SurfaceTerm { kind, span })?;
+
+                // Insert implicit arguments if inferred type has leading implicit Pis
+                // This handles cases like checking `nil` against `List Nat`
+                let mut inferred_whnf = self.whnf(inferred_type.clone())?;
+                loop {
+                    match &*inferred_whnf {
+                        Term::Pi(_, ret_ty, info) if *info == kernel::ast::BinderInfo::Implicit || *info == kernel::ast::BinderInfo::StrictImplicit => {
+                            // Insert a meta for this implicit argument
+                            let meta_id = self.meta_counter;
+                            self.meta_counter += 1;
+                            let meta_term = Rc::new(Term::Meta(meta_id));
+                            self.meta_contexts.insert(meta_id, MetaContext { binders: self.locals.clone() });
+
+                            elab_term = Rc::new(Term::App(elab_term, meta_term.clone()));
+                            inferred_type = ret_ty.subst(0, &meta_term);
+                            inferred_whnf = self.whnf(inferred_type.clone())?;
+                        }
+                        _ => break,
+                    }
+                }
+
                 self.unify_with_span(&inferred_type, expected_type, span)?;
                 Ok(elab_term)
             }
         }
-    }
-
-    /// Build the type of a recursor for an inductive type
-    fn build_recursor_type(&self, ind_name: &str, decl: &kernel::ast::InductiveDecl) -> Result<Rc<Term>, ElabError> {
-        // Recursor type: (C : Ind -> Sort u) -> (minor premises) -> (x : Ind) -> C x
-        // For simplicity, we return Sort 0 as a placeholder - the kernel will infer the actual type
-        let ind_term = Rc::new(Term::Ind(ind_name.to_string(), vec![]));
-
-        // Motive type: Ind -> Sort 0
-        let motive_ty = Rc::new(Term::Pi(
-            ind_term.clone(),
-            Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero)))),
-            kernel::ast::BinderInfo::Default
-        ));
-
-        // Build: (C : motive_ty) -> ... -> (x : Ind) -> C x
-        // For now, we construct a simplified recursor type
-        // The kernel checker will validate the actual type
-        let mut result_ty = Rc::new(Term::App(
-            Rc::new(Term::Var(decl.ctors.len())), // C
-            Rc::new(Term::Var(0))  // x
-        ));
-
-        // Wrap with (x : Ind) -> ...
-        result_ty = Rc::new(Term::Pi(ind_term.clone(), result_ty, kernel::ast::BinderInfo::Default));
-
-        // Wrap with minor premises for each constructor
-        for (i, ctor) in decl.ctors.iter().enumerate().rev() {
-            let minor_ty = self.build_minor_premise_type(ind_name, decl, i)?;
-            result_ty = Rc::new(Term::Pi(minor_ty, result_ty, kernel::ast::BinderInfo::Default));
-        }
-
-        // Wrap with motive: (C : Ind -> Sort) -> ...
-        result_ty = Rc::new(Term::Pi(motive_ty, result_ty, kernel::ast::BinderInfo::Default));
-
-        Ok(result_ty)
-    }
-
-    /// Build the type of a minor premise for a constructor
-    fn build_minor_premise_type(&self, ind_name: &str, decl: &kernel::ast::InductiveDecl, ctor_idx: usize) -> Result<Rc<Term>, ElabError> {
-        let ctor = &decl.ctors[ctor_idx];
-        // For a constructor like (succ : Nat -> Nat), the minor premise is:
-        // (n : Nat) -> C n -> C (succ n)
-        // This is simplified - just return the constructor's result type applied to the motive
-        // The kernel handles the actual typing
-        let ind_term = Rc::new(Term::Ind(ind_name.to_string(), vec![]));
-        Ok(ind_term)
     }
 
     /// Elaborate a match expression to a recursor application
@@ -380,9 +568,9 @@ impl<'a> Elaborator<'a> {
         // Infer the scrutinee type to get the inductive name
         let (scrut_elab, scrut_ty) = self.infer(scrutinee)?;
 
-        // Extract the inductive name from the scrutinee type
-        let scrut_ty_whnf = kernel::checker::whnf(self.env, scrut_ty.clone(), kernel::Transparency::All);
-        let ind_name = self.extract_inductive_name(&scrut_ty_whnf)
+        // Extract the inductive name and args from the scrutinee type
+        let scrut_ty_whnf = self.whnf(scrut_ty.clone())?;
+        let (ind_name, ind_args) = self.extract_inductive_info(&scrut_ty_whnf)
             .ok_or_else(|| ElabError::TypeMismatch {
                 expected: "inductive type".to_string(),
                 got: format!("{:?}", scrut_ty_whnf),
@@ -394,30 +582,136 @@ impl<'a> Elaborator<'a> {
             .ok_or_else(|| ElabError::UnknownInductive(ind_name.clone(), span))?
             .clone();
 
-        // Elaborate the return type (motive)
-        // The return type should be a function from the inductive to a type
-        let (ret_type_elab, _) = self.infer(ret_type)?;
+        // Validate match cases: no unknown constructors, no duplicates, and exhaustive coverage.
+        let ctor_names: HashSet<String> = decl.ctors.iter().map(|ctor| ctor.name.clone()).collect();
+        let mut seen_cases: HashSet<String> = HashSet::new();
+        for (case_name, _, _) in &cases {
+            if !ctor_names.contains(case_name) {
+                return Err(ElabError::UnknownMatchCase {
+                    ind: ind_name.clone(),
+                    ctor: case_name.clone(),
+                    span,
+                });
+            }
+            if !seen_cases.insert(case_name.clone()) {
+                return Err(ElabError::DuplicateMatchCase {
+                    ind: ind_name.clone(),
+                    ctor: case_name.clone(),
+                    span,
+                });
+            }
+        }
 
-        // Build the motive as a lambda: (λ x : Ind. ret_type)
-        let motive = Rc::new(Term::Lam(
-            Rc::new(Term::Ind(ind_name.clone(), vec![])),
-            ret_type_elab.clone(),
-            kernel::ast::BinderInfo::Default
+        let mut missing = Vec::new();
+        for ctor in &decl.ctors {
+            if !seen_cases.contains(&ctor.name) {
+                missing.push(ctor.name.clone());
+            }
+        }
+        if !missing.is_empty() {
+            return Err(ElabError::NonExhaustiveMatch {
+                ind: ind_name.clone(),
+                missing,
+                span,
+            });
+        }
+
+        // Elaborate the return type (motive body) and ensure it is a type
+        let (ret_type_elab, ret_type_ty) = self.infer(ret_type)?;
+        let ret_type_ty_whnf = self.whnf(ret_type_ty)?;
+        if !matches!(&*ret_type_ty_whnf, Term::Sort(_)) {
+            return Err(ElabError::TypeMismatch {
+                expected: "Sort".to_string(),
+                got: format!("{:?}", ret_type_ty_whnf),
+                span,
+            });
+        }
+
+        // Split params/indices from scrutinee type arguments
+        let num_params = decl.num_params;
+        let (param_args, index_args) = if ind_args.len() >= num_params {
+            (ind_args[..num_params].to_vec(), ind_args[num_params..].to_vec())
+        } else {
+            return Err(ElabError::TypeMismatch {
+                expected: format!("{} parameters", num_params),
+                got: format!("{}", ind_args.len()),
+                span,
+            });
+        };
+
+        // Instantiate index binder types using parameters
+        let mut index_types = Vec::new();
+        let mut current = self.instantiate_params(decl.ty.clone(), &param_args);
+        while let Term::Pi(dom, body, _) = &*current {
+            index_types.push(dom.clone());
+            current = body.clone();
+        }
+
+        // Build major type: Ind params indices (with index vars)
+        let mut major_ty = Rc::new(Term::Ind(ind_name.clone(), vec![]));
+        for param in &param_args {
+            major_ty = Rc::new(Term::App(major_ty, param.shift(0, index_types.len())));
+        }
+        for i in 0..index_types.len() {
+            let idx = index_types.len() - 1 - i;
+            major_ty = Rc::new(Term::App(major_ty, Rc::new(Term::Var(idx))));
+        }
+
+        // Build motive as lambdas over indices then major.
+        // Lift the return type into the index-binder context, then add major,
+        // then wrap index binders without shifting (they're already accounted for).
+        let index_count = index_types.len();
+        let mut motive = ret_type_elab.shift(0, index_count);
+        motive = Rc::new(Term::Lam(
+            major_ty.clone(),
+            motive.shift(0, 1),
+            kernel::ast::BinderInfo::Default,
         ));
+        for ty in index_types.iter().rev() {
+            motive = Rc::new(Term::Lam(ty.clone(), motive, kernel::ast::BinderInfo::Default));
+        }
 
-        // Start building the recursor application: Ind.rec motive
-        let rec_term = Rc::new(Term::Rec(ind_name.clone(), vec![]));
-        let mut result = Rc::new(Term::App(rec_term, motive.clone()));
+        // Determine universe level from motive type
+        let motive_ty = infer_type(self.env, &self.build_context(), motive.clone())
+            .map_err(|e| ElabError::InferenceError(e, span))?;
+        let motive_level = self.extract_result_sort_level(motive_ty, span)?;
+
+        check_elimination_restriction(self.env, &ind_name, &[motive_level.clone()])
+            .map_err(|e| ElabError::InferenceError(e, span))?;
+
+        // Start building the recursor application: Ind.rec [params] motive
+        let rec_term = Rc::new(Term::Rec(ind_name.clone(), vec![motive_level.clone()]));
+        let mut result = rec_term;
+        
+        // Apply parameters first
+        for arg in &param_args {
+            result = Rc::new(Term::App(result, arg.clone()));
+        }
+        
+        // Apply motive
+        result = Rc::new(Term::App(result, motive.clone()));
+
+        // Compute expected minor premise types from recursor type
+        let mut rec_ty = self.recursor_type(&ind_name, &[motive_level])?;
+        for arg in &param_args {
+            rec_ty = self.apply_pi_type(rec_ty, arg, span)?;
+        }
+        rec_ty = self.apply_pi_type(rec_ty, &motive, span)?;
 
         // Elaborate each case and apply as a minor premise
-        for (i, ctor) in decl.ctors.iter().enumerate() {
-            let case = cases.iter().find(|(name, _, _)| name == &ctor.name);
+        for ctor in decl.ctors.iter() {
+            let current_whnf = self.whnf(rec_ty.clone())?;
+            let minor_ty = if let Term::Pi(dom, _, _) = &*current_whnf {
+                dom.clone()
+            } else {
+                return Err(ElabError::InferenceError(TypeError::ExpectedFunction(current_whnf), span));
+            };
 
-            match case {
+            let case = cases.iter().find(|(name, _, _)| name == &ctor.name);
+            let case_elab = match case {
                 Some((_, bindings, body)) => {
-                    // Build lambda for this case
-                    let case_elab = self.elaborate_case(&ind_name, &decl, i, bindings, body, &ret_type_elab, span)?;
-                    result = Rc::new(Term::App(result, case_elab));
+                    let (binders, result_ty) = self.split_minor_premise(&minor_ty);
+                    self.elaborate_case(bindings, body, &binders, &result_ty)?
                 }
                 None => {
                     // Missing case - this is an error in a proper implementation
@@ -425,107 +719,120 @@ impl<'a> Elaborator<'a> {
                     let meta_id = self.meta_counter;
                     self.meta_counter += 1;
                     let meta = Rc::new(Term::Meta(meta_id));
-                    self.meta_contexts.insert(meta_id, self.locals.clone());
-                    result = Rc::new(Term::App(result, meta));
+                    self.meta_contexts.insert(meta_id, MetaContext { binders: self.locals.clone() });
+                    meta
                 }
-            }
+            };
+
+            result = Rc::new(Term::App(result, case_elab.clone()));
+            rec_ty = self.apply_pi_type(rec_ty, &case_elab, span)?;
         }
 
-        // Apply the scrutinee
-        result = Rc::new(Term::App(result, scrut_elab));
+        // Apply indices (if any), then scrutinee
+        for arg in &index_args {
+            result = Rc::new(Term::App(result, arg.clone()));
+        }
+        result = Rc::new(Term::App(result, scrut_elab.clone()));
 
-        // The result type is the motive applied to the scrutinee
-        // But since we've applied everything, we can just use ret_type_elab
-        Ok((result, ret_type_elab))
+        // The result type is motive applied to indices and scrutinee
+        let mut result_ty = motive.clone();
+        for arg in &index_args {
+            result_ty = Rc::new(Term::App(result_ty, arg.clone()));
+        }
+        result_ty = Rc::new(Term::App(result_ty, scrut_elab.clone()));
+
+        Ok((result, result_ty))
     }
 
-    /// Extract the inductive type name from a type
-    fn extract_inductive_name(&self, ty: &Rc<Term>) -> Option<String> {
+    /// Extract the inductive type name and arguments from a type
+    fn extract_inductive_info(&self, ty: &Rc<Term>) -> Option<(String, Vec<Rc<Term>>)> {
         match &**ty {
-            Term::Ind(name, _) => Some(name.clone()),
-            Term::App(f, _) => self.extract_inductive_name(f),
+            Term::Ind(name, _) => Some((name.clone(), Vec::new())),
+            Term::App(f, a) => {
+                let (name, mut args) = self.extract_inductive_info(f)?;
+                args.push(a.clone());
+                Some((name, args))
+            }
             _ => None,
         }
     }
 
-    /// Elaborate a single case branch
+    /// Instantiate parameters in a constructor type
+    fn instantiate_params(&self, mut ty: Rc<Term>, params: &[Rc<Term>]) -> Rc<Term> {
+        for param in params {
+            if let Term::Pi(_, body, _) = &*ty {
+                ty = body.subst(0, param);
+            } else {
+                break;
+            }
+        }
+        ty
+    }
+
+    /// Elaborate a single case branch against an expected minor premise type.
     fn elaborate_case(
         &mut self,
-        ind_name: &str,
-        decl: &kernel::ast::InductiveDecl,
-        ctor_idx: usize,
         bindings: &[String],
         body: &SurfaceTerm,
-        ret_type: &Rc<Term>,
-        span: Span,
+        binders: &[(Rc<Term>, kernel::ast::BinderInfo)],
+        result_ty: &Rc<Term>,
     ) -> Result<Rc<Term>, ElabError> {
-        let ctor = &decl.ctors[ctor_idx];
+        let explicit_arg_count = binders.iter()
+            .filter(|(_, info)| *info == kernel::ast::BinderInfo::Default)
+            .count();
 
-        // Count the constructor arguments (excluding the result type)
-        let ctor_arg_count = self.count_pi_args(&ctor.ty);
-
-        // We need to bind the constructor arguments and possibly IH arguments
-        // For recursors, each recursive argument gets an IH
-        let recursive_arg_indices = self.find_recursive_args(&ctor.ty, ind_name);
-
-        // Total bindings needed = ctor args + IH args (one per recursive arg)
-        let total_bindings_needed = ctor_arg_count + recursive_arg_indices.len();
-
-        // Pad or truncate bindings as needed
-        let padded_bindings: Vec<String> = if bindings.len() < total_bindings_needed {
+        let padded_bindings: Vec<String> = if bindings.len() < explicit_arg_count {
             let mut b = bindings.to_vec();
-            for i in bindings.len()..total_bindings_needed {
+            for i in bindings.len()..explicit_arg_count {
                 b.push(format!("_arg{}", i));
             }
             b
         } else {
-            bindings[..total_bindings_needed].to_vec()
+            bindings[..explicit_arg_count.min(bindings.len())].to_vec()
         };
 
-        // Push constructor argument bindings
-        let mut arg_types = self.extract_pi_arg_types(&ctor.ty);
         let mut locals_added = 0;
-
-        for (i, name) in padded_bindings.iter().take(ctor_arg_count).enumerate() {
-            let ty = arg_types.get(i).cloned().unwrap_or_else(|| Rc::new(Term::Sort(Level::Zero)));
-            self.locals.push((name.clone(), ty));
+        let mut binding_idx = 0;
+        for (i, (arg_ty, info)) in binders.iter().enumerate() {
+            let name = if *info == kernel::ast::BinderInfo::Default {
+                let n = padded_bindings.get(binding_idx)
+                    .cloned()
+                    .unwrap_or_else(|| format!("_explicit{}", i));
+                binding_idx += 1;
+                n
+            } else {
+                format!("_implicit{}", i)
+            };
+            self.locals.push((name, arg_ty.clone()));
             locals_added += 1;
         }
 
-        // Push IH bindings for recursive arguments
-        // When the return type is constant (like Nat), the IH type is just the return type
-        // For dependent matches, this would need the motive applied to the recursive arg
-        for (ih_idx, _rec_arg_idx) in recursive_arg_indices.iter().enumerate() {
-            let ih_name = padded_bindings.get(ctor_arg_count + ih_idx)
-                .cloned()
-                .unwrap_or_else(|| format!("_ih{}", ih_idx));
-            // For simple (non-dependent) matches, IH type is just the return type
-            let ih_ty = ret_type.clone();
-            self.locals.push((ih_name, ih_ty));
-            locals_added += 1;
-        }
+        let result_ty = self.whnf(result_ty.clone())?;
+        let body_elab = self.check(body.clone(), &result_ty)?;
 
-        // Elaborate the body
-        let (body_elab, _) = self.infer(body.clone())?;
-
-        // Pop the locals we added
         for _ in 0..locals_added {
             self.locals.pop();
         }
 
-        // Wrap body in lambdas for each binding
         let mut result = body_elab;
-        for i in (0..locals_added).rev() {
-            let ty = if i < ctor_arg_count {
-                arg_types.get(i).cloned().unwrap_or_else(|| Rc::new(Term::Sort(Level::Zero)))
-            } else {
-                // IH type is the return type (for non-dependent matches)
-                ret_type.clone()
-            };
-            result = Rc::new(Term::Lam(ty, result, kernel::ast::BinderInfo::Default));
+        for (arg_ty, info) in binders.iter().rev() {
+            result = Rc::new(Term::Lam(arg_ty.clone(), result, *info));
         }
 
         Ok(result)
+    }
+
+    fn split_minor_premise(
+        &self,
+        minor_ty: &Rc<Term>,
+    ) -> (Vec<(Rc<Term>, kernel::ast::BinderInfo)>, Rc<Term>) {
+        let mut binders: Vec<(Rc<Term>, kernel::ast::BinderInfo)> = Vec::new();
+        let mut current = minor_ty.clone();
+        while let Term::Pi(arg_ty, body_ty, info) = &*current {
+            binders.push((arg_ty.clone(), *info));
+            current = body_ty.clone();
+        }
+        (binders, current)
     }
 
     /// Count the number of Pi arguments in a type
@@ -575,6 +882,43 @@ impl<'a> Elaborator<'a> {
         result
     }
 
+    /// Extract EXPLICIT argument types from a Pi type (skipping implicits)
+    /// Also returns the count of implicit args that were skipped
+    fn extract_explicit_pi_arg_types(&self, ty: &Rc<Term>) -> (Vec<Rc<Term>>, usize) {
+        let mut result = Vec::new();
+        let mut current = ty;
+        let mut implicit_count = 0;
+
+        while let Term::Pi(arg_ty, body, info) = &**current {
+            match info {
+                kernel::ast::BinderInfo::Implicit | kernel::ast::BinderInfo::StrictImplicit => {
+                    implicit_count += 1;
+                }
+                kernel::ast::BinderInfo::Default => {
+                    result.push(arg_ty.clone());
+                }
+            }
+            current = body;
+        }
+
+        (result, implicit_count)
+    }
+
+    /// Count only explicit Pi arguments
+    fn count_explicit_pi_args(&self, ty: &Rc<Term>) -> usize {
+        let mut count = 0;
+        let mut current = ty;
+
+        while let Term::Pi(_, body, info) = &**current {
+            if *info == kernel::ast::BinderInfo::Default {
+                count += 1;
+            }
+            current = body;
+        }
+
+        count
+    }
+
     /// Attempt to unify two terms, with proper span tracking for error messages.
     /// If unification is stuck on metavariables, the constraint is postponed.
     fn unify_with_span(&mut self, t1: &Rc<Term>, t2: &Rc<Term>, span: Span) -> Result<(), ElabError> {
@@ -609,13 +953,17 @@ impl<'a> Elaborator<'a> {
     /// - Stuck: unification blocked on unsolved metavariables
     /// - Failed: terms are definitively incompatible
     fn unify_core(&mut self, t1: &Rc<Term>, t2: &Rc<Term>) -> UnifyResult {
-        // First check definitional equality
-        if is_def_eq(self.env, t1.clone(), t2.clone(), kernel::Transparency::All) {
-            return UnifyResult::Success;
-        }
+        // First resolve metas, then check definitional equality
+        let ctx_len = self.locals.len();
+        let t1 = self.resolve_metas_in_ctx(t1, ctx_len);
+        let t2 = self.resolve_metas_in_ctx(t2, ctx_len);
 
-        let t1 = self.resolve_metas(t1);
-        let t2 = self.resolve_metas(t2);
+        // Check definitional equality on resolved terms
+        match self.is_def_eq_in_ctx(&t1, &t2) {
+            Ok(true) => return UnifyResult::Success,
+            Ok(false) => {}
+            Err(_) => return UnifyResult::Failed(t1.clone(), t2.clone()),
+        }
 
         match (&*t1, &*t2) {
             // Same metavariable
@@ -623,11 +971,11 @@ impl<'a> Elaborator<'a> {
 
             // Metavariable on one side - try to solve it
             (Term::Meta(id), term) | (term, Term::Meta(id)) => {
-                let meta_ctx = match self.meta_contexts.get(id) {
-                    Some(ctx) => ctx.clone(),
+                let meta_ctx_len = match self.meta_contexts.get(id) {
+                    Some(ctx) => ctx.len(),
                     None => return UnifyResult::Failed(t1.clone(), t2.clone()),
                 };
-                match self.solve_meta(*id, Rc::new(term.clone()), &meta_ctx) {
+                match self.solve_meta(*id, Rc::new(term.clone()), ctx_len, meta_ctx_len) {
                     Ok(()) => UnifyResult::Success,
                     Err(_) => {
                         // Occurs check or scope error - this is stuck, not failed
@@ -685,7 +1033,11 @@ impl<'a> Elaborator<'a> {
             for constraint in constraints {
                 match constraint {
                     Constraint::Unification { t1, t2, span, context } => {
-                        match self.unify_core(&t1, &t2) {
+                        let saved_locals = std::mem::replace(&mut self.locals, context.clone());
+                        let unify_result = self.unify_core(&t1, &t2);
+                        self.locals = saved_locals;
+
+                        match unify_result {
                             UnifyResult::Success => {
                                 // Constraint solved! We made progress.
                                 progress = true;
@@ -751,25 +1103,64 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    fn solve_meta(&mut self, id: usize, term: Rc<Term>, ctx: &Vec<(String, Rc<Term>)>) -> Result<(), ElabError> {
+    fn solve_meta(&mut self, id: usize, term: Rc<Term>, current_ctx_len: usize, meta_ctx_len: usize) -> Result<(), ElabError> {
         if self.contains_meta(&term, id) {
             return Err(ElabError::OccursCheck(id, term));
         }
-        if self.has_free_variables(&term, ctx.len()) {
-            return Err(ElabError::SolutionContainsFreeVariables(term));
-        }
-        self.meta_solutions.insert(id, term);
+        let adapted = self.adapt_term_to_ctx(term.clone(), current_ctx_len, meta_ctx_len)?;
+        self.meta_solutions.insert(id, adapted);
         Ok(())
     }
 
-    fn has_free_variables(&self, term: &Rc<Term>, cutoff: usize) -> bool {
+    fn adapt_term_to_ctx(&self, term: Rc<Term>, current_len: usize, target_len: usize) -> Result<Rc<Term>, ElabError> {
+        if current_len == target_len {
+            return Ok(term);
+        }
+        if current_len > target_len {
+            let drop = current_len - target_len;
+            self.prune_term(&term, drop, 0)
+        } else {
+            Ok(term.shift(0, target_len - current_len))
+        }
+    }
+
+    fn prune_term(&self, term: &Rc<Term>, drop: usize, depth: usize) -> Result<Rc<Term>, ElabError> {
         match &**term {
-            Term::Var(idx) => *idx >= cutoff,
-            Term::App(f, a) => self.has_free_variables(f, cutoff) || self.has_free_variables(a, cutoff),
-            Term::Lam(ty, body, _) => self.has_free_variables(ty, cutoff) || self.has_free_variables(body, cutoff + 1),
-            Term::Pi(ty, body, _) => self.has_free_variables(ty, cutoff) || self.has_free_variables(body, cutoff + 1),
-            Term::LetE(ty, val, body) => self.has_free_variables(ty, cutoff) || self.has_free_variables(val, cutoff) || self.has_free_variables(body, cutoff + 1),
-            _ => false,
+            Term::Var(idx) => {
+                if *idx < depth {
+                    Ok(Rc::new(Term::Var(*idx)))
+                } else if *idx < depth + drop {
+                    Err(ElabError::SolutionContainsFreeVariables(term.clone()))
+                } else {
+                    Ok(Rc::new(Term::Var(idx - drop)))
+                }
+            }
+            Term::Sort(l) => Ok(Rc::new(Term::Sort(l.clone()))),
+            Term::Const(n, ls) => Ok(Rc::new(Term::Const(n.clone(), ls.clone()))),
+            Term::App(f, a) => Ok(Rc::new(Term::App(self.prune_term(f, drop, depth)?, self.prune_term(a, drop, depth)?))),
+            Term::Lam(ty, body, info) => Ok(Rc::new(Term::Lam(
+                self.prune_term(ty, drop, depth)?,
+                self.prune_term(body, drop, depth + 1)?,
+                *info,
+            ))),
+            Term::Pi(ty, body, info) => Ok(Rc::new(Term::Pi(
+                self.prune_term(ty, drop, depth)?,
+                self.prune_term(body, drop, depth + 1)?,
+                *info,
+            ))),
+            Term::LetE(ty, val, body) => Ok(Rc::new(Term::LetE(
+                self.prune_term(ty, drop, depth)?,
+                self.prune_term(val, drop, depth)?,
+                self.prune_term(body, drop, depth + 1)?,
+            ))),
+            Term::Ind(n, ls) => Ok(Rc::new(Term::Ind(n.clone(), ls.clone()))),
+            Term::Ctor(n, idx, ls) => Ok(Rc::new(Term::Ctor(n.clone(), *idx, ls.clone()))),
+            Term::Rec(n, ls) => Ok(Rc::new(Term::Rec(n.clone(), ls.clone()))),
+            Term::Fix(ty, body) => Ok(Rc::new(Term::Fix(
+                self.prune_term(ty, drop, depth)?,
+                self.prune_term(body, drop, depth + 1)?,
+            ))),
+            Term::Meta(id) => Ok(Rc::new(Term::Meta(*id))),
         }
     }
 
@@ -777,7 +1168,7 @@ impl<'a> Elaborator<'a> {
         match &**term {
             Term::Meta(id) => *id == meta_id,
             Term::App(f, a) => self.contains_meta(f, meta_id) || self.contains_meta(a, meta_id),
-            Term::Lam(ty, body, _) | Term::Pi(ty, body, _) => self.contains_meta(ty, meta_id) || self.contains_meta(body, meta_id),
+            Term::Lam(ty, body, _) | Term::Pi(ty, body, _) | Term::Fix(ty, body) => self.contains_meta(ty, meta_id) || self.contains_meta(body, meta_id),
             Term::LetE(ty, val, body) => self.contains_meta(ty, meta_id) || self.contains_meta(val, meta_id) || self.contains_meta(body, meta_id),
             _ => false,
         }
@@ -787,17 +1178,19 @@ impl<'a> Elaborator<'a> {
         match &**term {
             Term::Meta(_) => true,
             Term::App(f, a) => self.contains_any_meta(f) || self.contains_any_meta(a),
-            Term::Lam(ty, body, _) | Term::Pi(ty, body, _) => self.contains_any_meta(ty) || self.contains_any_meta(body),
+            Term::Lam(ty, body, _) | Term::Pi(ty, body, _) | Term::Fix(ty, body) => self.contains_any_meta(ty) || self.contains_any_meta(body),
             Term::LetE(ty, val, body) => self.contains_any_meta(ty) || self.contains_any_meta(val) || self.contains_any_meta(body),
             _ => false,
         }
     }
 
-    fn resolve_metas(&self, term: &Rc<Term>) -> Rc<Term> {
+    fn resolve_metas_in_ctx(&self, term: &Rc<Term>, ctx_len: usize) -> Rc<Term> {
         match &**term {
             Term::Meta(id) => {
                 if let Some(solution) = self.meta_solutions.get(id) {
-                    self.resolve_metas(solution)
+                    let meta_ctx_len = self.meta_contexts.get(id).map(|c| c.len()).unwrap_or(0);
+                    self.adapt_term_to_ctx(solution.clone(), meta_ctx_len, ctx_len)
+                        .unwrap_or_else(|_| term.clone())
                 } else {
                     term.clone()
                 }
@@ -805,9 +1198,74 @@ impl<'a> Elaborator<'a> {
             _ => term.clone(),
         }
     }
+
+    pub fn instantiate_metas(&self, term: &Rc<Term>) -> Rc<Term> {
+        self.zonk_with_ctx(term, self.locals.len())
+    }
+
+    fn zonk_with_ctx(&self, term: &Rc<Term>, ctx_len: usize) -> Rc<Term> {
+        match &**term {
+            Term::Meta(id) => {
+                if let Some(solution) = self.meta_solutions.get(id) {
+                    let meta_ctx_len = self.meta_contexts.get(id).map(|c| c.len()).unwrap_or(0);
+                    if let Ok(adapted) = self.adapt_term_to_ctx(solution.clone(), meta_ctx_len, ctx_len) {
+                        return self.zonk_with_ctx(&adapted, ctx_len);
+                    }
+                }
+                term.clone()
+            }
+            Term::App(f, a) => Rc::new(Term::App(self.zonk_with_ctx(f, ctx_len), self.zonk_with_ctx(a, ctx_len))),
+            Term::Lam(ty, body, i) => Rc::new(Term::Lam(
+                self.zonk_with_ctx(ty, ctx_len),
+                self.zonk_with_ctx(body, ctx_len + 1),
+                *i,
+            )),
+            Term::Pi(ty, body, i) => Rc::new(Term::Pi(
+                self.zonk_with_ctx(ty, ctx_len),
+                self.zonk_with_ctx(body, ctx_len + 1),
+                *i,
+            )),
+            Term::LetE(ty, val, body) => Rc::new(Term::LetE(
+                self.zonk_with_ctx(ty, ctx_len),
+                self.zonk_with_ctx(val, ctx_len),
+                self.zonk_with_ctx(body, ctx_len + 1),
+            )),
+            Term::Ind(n, args) => Rc::new(Term::Ind(n.clone(), args.clone())),
+            Term::Ctor(n, i, args) => Rc::new(Term::Ctor(n.clone(), *i, args.clone())),
+            Term::Const(n, args) => Rc::new(Term::Const(n.clone(), args.clone())),
+            Term::Fix(ty, body) => Rc::new(Term::Fix(
+                self.zonk_with_ctx(ty, ctx_len),
+                self.zonk_with_ctx(body, ctx_len + 1),
+            )),
+            Term::Sort(l) => Rc::new(Term::Sort(l.clone())),
+            Term::Var(idx) => Rc::new(Term::Var(*idx)),
+            Term::Rec(n, ls) => Rc::new(Term::Rec(n.clone(), ls.clone())),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    // Tests need to be rewritten
+    use super::*;
+
+    #[test]
+    fn meta_solution_prunes_extra_context() {
+        let env = Env::new();
+        let mut elab = Elaborator::new(&env);
+        let ty = Rc::new(Term::Sort(Level::Zero));
+
+        elab.locals.push(("a".to_string(), ty.clone()));
+        let meta_id = elab.meta_counter;
+        elab.meta_counter += 1;
+        elab.meta_contexts.insert(meta_id, MetaContext { binders: elab.locals.clone() });
+
+        elab.locals.push(("x".to_string(), ty.clone()));
+
+        let meta_ctx_len = elab.meta_contexts.get(&meta_id).unwrap().len();
+        let res = elab.solve_meta(meta_id, Rc::new(Term::Var(1)), elab.locals.len(), meta_ctx_len);
+        assert!(res.is_ok(), "Expected meta solving to succeed with pruning");
+
+        let solved = elab.meta_solutions.get(&meta_id).expect("Missing meta solution");
+        assert!(matches!(&**solved, Term::Var(0)));
+    }
 }

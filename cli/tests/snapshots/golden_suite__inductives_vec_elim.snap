@@ -1,0 +1,13 @@
+---
+source: cli/tests/golden_suite.rs
+expression: output
+---
+ElaboratedDef vlen
+  ty: Pi(Ind("Nat", []), Pi(App(Ind("Vec", []), Var(0)), Ind("Nat", []), Default), Default)
+  val: Lam(Ind("Nat", []), Lam(App(Ind("Vec", []), Var(0)), App(App(App(App(App(Rec("Vec", [Succ(Zero)]), Lam(Ind("Nat", []), Lam(App(Ind("Vec", []), Var(0)), Ind("Nat", []), Default), Default)), Const("zero", [])), Lam(Ind("Nat", []), Lam(Ind("Nat", []), Lam(App(Ind("Vec", []), Var(1)), Lam(Ind("Nat", []), Const("zero", []), Default), Default), Default), Default)), Var(1)), Var(0)), Default), Default)
+
+MirBody vlen
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(7, []), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([Nat], Fn([Adt(AdtId("Vec"), [])], Nat)), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0 }
+
+BorrowCheck vlen
+  ok

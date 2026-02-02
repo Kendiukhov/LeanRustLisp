@@ -2,12 +2,12 @@
 
 (defmacro id (x) x)
 
-(inductive Nat (sort 1)
+(inductive copy Nat (sort 1)
   (ctor zero Nat)
   (ctor succ (pi n Nat Nat))
 )
 
-(inductive Bool (sort 1)
+(inductive copy Bool (sort 1)
   (ctor true Bool)
   (ctor false Bool)
 )
@@ -69,8 +69,21 @@
 )
 
 (inductive List (pi T (sort 1) (sort 1))
-  (ctor nil (pi T (sort 1) (List T)))
-  (ctor cons (pi T (sort 1) (pi h T (pi t (List T) (List T)))))
+  (ctor nil (pi {T (sort 1)} (List T)))
+  (ctor cons (pi {T (sort 1)} (pi h T (pi t (List T) (List T)))))
+)
+
+(def append (pi {T (sort 1)} (pi l1 (List T) (pi l2 (List T) (List T))))
+  (lam {T} (sort 1)
+    (lam l1 (List T)
+      (lam l2 (List T)
+        (match l1 (List T)
+          (case (nil) l2)
+          (case (cons h t ih) (cons h ih))
+        )
+      )
+    )
+  )
 )
 
 ;; The Computation type for partiality and effects
@@ -83,4 +96,3 @@
 (inductive Eq (pi A (sort 1) (pi a A (pi b A (sort 0))))
   (ctor refl (pi A (sort 1) (pi a A (Eq A a a))))
 )
-

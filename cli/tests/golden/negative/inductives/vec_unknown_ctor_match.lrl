@@ -1,0 +1,18 @@
+(inductive copy Nat (sort 1)
+  (ctor zero Nat)
+  (ctor succ (pi n Nat Nat))
+)
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor nil (pi A (sort 1) (Vec A zero)))
+  (ctor cons (pi A (sort 1) (pi n Nat (pi h A (pi t (Vec A n) (Vec A (succ n)))))))
+)
+
+(def bad (pi A (sort 1) (pi n Nat (pi v (Vec A n) Nat)))
+  (lam A (sort 1)
+    (lam n Nat
+      (lam v (Vec A n)
+        (match v Nat
+          (case (bogus) zero)
+          (case (cons n h t ih) (succ ih))
+        )))))

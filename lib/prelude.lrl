@@ -1,14 +1,14 @@
 ;; Core Prelude for LeanRustLisp
 
-(inductive Nat
+(inductive copy Nat Type
   (zero Nat)
   (succ (pi n Nat Nat)))
 
-(inductive Bool
+(inductive copy Bool Type
   (true Bool)
   (false Bool))
 
-(inductive Unit
+(inductive Unit Type
   (unit Unit))
 
 (inductive List (pi A Type Type)

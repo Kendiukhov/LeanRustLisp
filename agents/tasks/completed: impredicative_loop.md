@@ -1,4 +1,4 @@
-AGENT TASK: Implement Impredicative `Prop` (Lean-style) in the Kernel
+AGENT TASK: Implement Impredicative `Prop` (Lean-style) in the Kernel - Completed
 
 Primary area: kernel/src/checker.rs, kernel/src/ast.rs, kernel/src/parser.rs (core syntax), plus tests.
 

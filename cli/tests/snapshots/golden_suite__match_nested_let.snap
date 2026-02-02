@@ -1,0 +1,14 @@
+---
+source: cli/tests/golden_suite.rs
+assertion_line: 154
+expression: output
+---
+ElaboratedDef nested_match
+  ty: Pi(Ind("Bool", []), Pi(Ind("Nat", []), Ind("Nat", []), Default), Default)
+  val: Lam(Ind("Bool", []), Lam(Ind("Nat", []), App(App(App(App(Rec("Bool", [Succ(Zero)]), Lam(Ind("Bool", []), Ind("Nat", []), Default)), LetE(Ind("Nat", []), Var(0), App(Const("succ", []), Var(0)))), LetE(Ind("Nat", []), Const("zero", []), Var(0))), Var(1)), Default), Default)
+
+MirBody nested_match
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(2, []), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([Bool], Fn([Nat], Nat)), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0 }
+
+BorrowCheck nested_match
+  ok

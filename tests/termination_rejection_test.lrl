@@ -9,12 +9,12 @@
 ;; - Total definitions without structural decrease should FAIL
 
 ;; Define Nat (self-contained test)
-(inductive Nat (sort 0)
+(inductive copy Nat (sort 0)
   (ctor zero Nat)
   (ctor succ (pi n Nat Nat))
 )
 
-(inductive Bool (sort 0)
+(inductive copy Bool (sort 0)
   (ctor true Bool)
   (ctor false Bool)
 )

@@ -1,0 +1,13 @@
+(inductive Eq (pi A (sort 1) (pi a A (pi b A (sort 0))))
+  (ctor refl (pi A (sort 1) (pi a A (Eq A a a))))
+)
+
+(def bad (pi A (sort 1) (pi x A (pi y A (pi p (Eq A x y) (Eq A x x)))))
+  (lam A (sort 1)
+    (lam x A
+      (lam y A
+        (lam p (Eq A x y)
+          (match p (Eq A x x)
+            (case (refl) (refl A x))
+            (case (refl) (refl A x))
+          ))))))

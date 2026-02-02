@@ -98,6 +98,9 @@ D) Tests (non-negotiable)
 4) Expansion order tests
 - Nested macros expand consistently and predictably
 
+Also, ensure expansion is deterministic and spans preserved—this supports reproducible builds and stable codegen.
+
+
 Rules
 - Keep the trusted kernel untouched: macros are untrusted and must ultimately produce kernel-checkable results.
 - Avoid ad-hoc special casing for builtins beyond a minimal bootstrap set; prefer expressing syntax forms as macros where possible.

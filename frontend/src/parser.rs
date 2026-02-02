@@ -147,6 +147,59 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+            Some('\'') => {
+                self.lexer.next(); // eat '
+                let inner = self.parse_expr()?;
+                let end_span = inner.span;
+                Ok(Syntax {
+                    kind: SyntaxKind::List(vec![
+                        Syntax { kind: SyntaxKind::Symbol("quote".to_string()), span: start_span, scopes: vec![] },
+                        inner
+                    ]),
+                    span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                    scopes: Vec::new(),
+                })
+            }
+            Some('`') => {
+                self.lexer.next(); // eat `
+                let inner = self.parse_expr()?;
+                let end_span = inner.span;
+                Ok(Syntax {
+                    kind: SyntaxKind::List(vec![
+                        Syntax { kind: SyntaxKind::Symbol("quasiquote".to_string()), span: start_span, scopes: vec![] },
+                        inner
+                    ]),
+                    span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                    scopes: Vec::new(),
+                })
+            }
+            Some(',') => {
+                self.lexer.next();
+                if self.lexer.peek() == Some('@') {
+                    self.lexer.next(); // eat @
+                    let inner = self.parse_expr()?;
+                    let end_span = inner.span;
+                    Ok(Syntax {
+                        kind: SyntaxKind::List(vec![
+                            Syntax { kind: SyntaxKind::Symbol("unquote-splicing".to_string()), span: start_span, scopes: vec![] },
+                            inner
+                        ]),
+                        span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                        scopes: Vec::new(),
+                    })
+                } else {
+                    let inner = self.parse_expr()?;
+                    let end_span = inner.span;
+                    Ok(Syntax {
+                        kind: SyntaxKind::List(vec![
+                            Syntax { kind: SyntaxKind::Symbol("unquote".to_string()), span: start_span, scopes: vec![] },
+                            inner
+                        ]),
+                        span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                        scopes: Vec::new(),
+                    })
+                }
+            }
             Some(c) if c.is_digit(10) => {
                 let mut s = String::new();
                 while let Some(c) = self.lexer.peek() {

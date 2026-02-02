@@ -1,0 +1,26 @@
+
+;; Test simple quote
+(def q1 (List Nat) (quote (1 2 3)))
+q1
+
+;; Test unquote
+(def x Nat 10)
+;; (1 (unquote x)) -> (cons 1 (cons x nil)) -> List Nat
+(def q2 (List Nat) (quasiquote (1 (unquote x))))
+q2
+
+;; Test defmacro with quasiquote.
+;; Macro returns CODE. Code is a value of type ... ?
+;; Macros in LRL return Syntax.
+;; But `my-const` invocation `(my-const 42)` is expanded at compile time.
+;; It expands to `(quote 42)`.
+;; `(quote 42)` evaluates to `42` (Nat).
+;; So `(my-const 42)` should be a Nat.
+;; (defmacro my-const (val) (quasiquote (quote (unquote val))))
+;; The macro expands "val" into the quote.
+;; (my-const 42) -> (quote 42).
+
+(defmacro my-const (val) 
+  (quasiquote (quote (unquote val))))
+
+(my-const 42)
