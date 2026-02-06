@@ -670,10 +670,9 @@ impl<'a> TypingChecker<'a> {
                 Box::new(self.substitute_type_params(inner, map)),
                 *mutability,
             ),
-            MirType::InteriorMutable(inner, kind) => MirType::InteriorMutable(
-                Box::new(self.substitute_type_params(inner, map)),
-                *kind,
-            ),
+            MirType::InteriorMutable(inner, kind) => {
+                MirType::InteriorMutable(Box::new(self.substitute_type_params(inner, map)), *kind)
+            }
             MirType::IndexTerm(term) => MirType::IndexTerm(term.clone()),
             MirType::Opaque { reason } => MirType::Opaque {
                 reason: reason.clone(),
