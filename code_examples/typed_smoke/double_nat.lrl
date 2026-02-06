@@ -1,0 +1,7 @@
+(def double (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) zero)
+      (case (succ m ih) (succ (succ ih))))))
+
+(double (succ (succ zero)))

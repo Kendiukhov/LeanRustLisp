@@ -2,42 +2,75 @@
 source: cli/tests/pipeline_golden.rs
 expression: output
 ---
+DefEqConfig
+  fuel: 100000
+  source: default
+  transparency: Reducible
+
+ElaboratedDef add_one
+  ty: Pi(Ind("Nat", []), Ind("Nat", []), Default, Fn)
+  val: Lam(Ind("Nat", []), App(Const("succ", []), Var(0)), Default, Fn)
+
 ElaboratedDef id
-  ty: Pi(Sort(Succ(Zero)), Pi(Var(0), Var(1), Default), Default)
-  val: Lam(Sort(Succ(Zero)), Lam(Var(0), Var(0), Default), Default)
+  ty: Pi(Sort(Succ(Zero)), Pi(Var(0), Var(1), Default, Fn), Default, Fn)
+  val: Lam(Sort(Succ(Zero)), Lam(Var(0), Var(0), Default, Fn), Default, Fn)
 
-MirBody id
-  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(1, []), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([Unit], Fn([Unit], Unit)), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0 }
-
-BorrowCheck id
-  ok
+ElaboratedDef match_nat
+  ty: Pi(Ind("Nat", []), Ind("Nat", []), Default, Fn)
+  val: Lam(Ind("Nat", []), App(App(App(App(Rec("Nat", [Succ(Zero)]), Lam(Ind("Nat", []), Ind("Nat", []), Default, Fn)), Const("zero", [])), Lam(Ind("Nat", []), Lam(Ind("Nat", []), App(Const("succ", []), Var(1)), Default, FnOnce), Default, FnOnce)), Var(0)), Default, Fn)
 
 ElaboratedDef one
   ty: Ind("Nat", [])
   val: App(Const("succ", []), Const("zero", []))
 
-MirBody one
-  Body { basic_blocks: [BasicBlockData { statements: [StorageLive(Local(1)), Assign(Place { local: Local(1), projection: [] }, Use(Constant(Constant { literal: Term(Const("succ", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(2) }) }, BasicBlockData { statements: [], terminator: Some(Return) }, BasicBlockData { statements: [StorageLive(Local(2)), Assign(Place { local: Local(2), projection: [] }, Use(Constant(Constant { literal: Term(Const("zero", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(3) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Move(Place { local: Local(1), projection: [] }), args: [Copy(Place { local: Local(2), projection: [] })], destination: Place { local: Local(0), projection: [] }, target: Some(BasicBlock(4)) }) }, BasicBlockData { statements: [StorageDead(Local(2)), StorageDead(Local(1))], terminator: Some(Goto { target: BasicBlock(1) }) }], local_decls: [LocalDecl { ty: Nat, name: Some("_0"), is_prop: false, is_copy: true }, LocalDecl { ty: Fn([Nat], Nat), name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Nat, name: None, is_prop: false, is_copy: true }], arg_count: 0 }
-
-BorrowCheck one
-  ok
-
-ElaboratedDef add_one
-  ty: Pi(Ind("Nat", []), Ind("Nat", []), Default)
-  val: Lam(Ind("Nat", []), App(Const("succ", []), Var(0)), Default)
-
 MirBody add_one
-  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(0, []), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([Nat], Nat), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0 }
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(0, []), ty: Closure(Region(1), [], [Nat], Nat) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([], [Nat], Nat), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }} } }
+
+MirBody id
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(1, []), ty: Closure(Region(1), [], [Unit], Fn([], [Param(0)], Param(0))) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([], [Unit], Fn([], [Param(0)], Param(0))), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }} } }
+
+MirBody match_nat
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(3, []), ty: Closure(Region(1), [], [Nat], Nat) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([], [Nat], Nat), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }} } }
+
+MirBody one
+  Body { basic_blocks: [BasicBlockData { statements: [StorageLive(Local(1)), Assign(Place { local: Local(1), projection: [] }, Use(Constant(Constant { literal: GlobalDef("succ"), ty: FnItem(DefId(13100098116540539280), [], [Nat], Nat) })))], terminator: Some(Goto { target: BasicBlock(2) }) }, BasicBlockData { statements: [StorageDead(Local(2)), StorageDead(Local(1))], terminator: Some(Return) }, BasicBlockData { statements: [StorageLive(Local(2)), Assign(Place { local: Local(2), projection: [] }, Use(Constant(Constant { literal: GlobalDef("zero"), ty: Nat })))], terminator: Some(Goto { target: BasicBlock(3) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Borrow(Shared, Place { local: Local(1), projection: [] }), args: [Copy(Place { local: Local(2), projection: [] })], destination: Place { local: Local(0), projection: [] }, target: Some(BasicBlock(4)) }) }, BasicBlockData { statements: [StorageDead(Local(2)), StorageDead(Local(1))], terminator: Some(Goto { target: BasicBlock(1) }) }], local_decls: [LocalDecl { ty: Nat, name: Some("_0"), is_prop: false, is_copy: true }, LocalDecl { ty: FnItem(DefId(13100098116540539280), [], [Nat], Nat), name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Nat, name: None, is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }} } }
 
 BorrowCheck add_one
   ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
 
-ElaboratedDef match_nat
-  ty: Pi(Ind("Nat", []), Ind("Nat", []), Default)
-  val: Lam(Ind("Nat", []), App(App(App(App(Rec("Nat", [Succ(Zero)]), Lam(Ind("Nat", []), Ind("Nat", []), Default)), Const("zero", [])), Lam(Ind("Nat", []), Lam(Ind("Nat", []), App(Const("succ", []), Var(1)), Default), Default)), Var(0)), Default)
-
-MirBody match_nat
-  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(3, []), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([Nat], Nat), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0 }
+BorrowCheck id
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
 
 BorrowCheck match_nat
   ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+BorrowCheck one
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)

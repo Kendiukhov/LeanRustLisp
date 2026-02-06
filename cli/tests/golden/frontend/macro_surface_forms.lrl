@@ -1,0 +1,18 @@
+(defmacro mk_opaque (name ty val) (noncomputable opaque name ty val))
+(defmacro mk_transparent (name ty val) (noncomputable transparent name ty val))
+(defmacro mk_eval (code cap) (eval code cap))
+(defmacro mk_import_classical () (import classical))
+(defmacro mk_axiom_classical (name ty) (axiom classical name ty))
+
+(mk_import_classical)
+
+(axiom Dyn (sort 0))
+(axiom EvalCap (sort 0))
+(axiom unsafe eval (pi code Dyn (pi cap EvalCap Dyn)))
+(axiom dyn_code Dyn)
+(axiom dyn_cap EvalCap)
+
+(mk_opaque secret Dyn dyn_code)
+(mk_transparent open Dyn dyn_code)
+(unsafe uses_eval Dyn (mk_eval dyn_code dyn_cap))
+(mk_axiom_classical classical_em (sort 0))

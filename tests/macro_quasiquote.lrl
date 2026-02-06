@@ -2,27 +2,23 @@
 ;; append is provided by the prelude
 
 (defmacro list1 (x) 
-  (quasiquote (x)))
+  (quasiquote (cons (unquote x) nil)))
 
 (defmacro list2 (x y)
-  (quasiquote (x y)))
+  (quasiquote (cons (unquote x) (cons (unquote y) nil))))
 
 (defmacro splice (l)
-  (quasiquote (1 (unquote-splicing l) 4)))
+  (quasiquote (cons 1 (append (unquote-splicing l) (cons 4 nil)))))
 
 (def q1 (List Nat) (list1 42))
 (def q2 (List Nat) (list2 1 2))
 
-;; q3: Splice (2 3) into (1 ... 4).
-;; l should be a term that evaluates to a List Nat.
-;; (cons 2 (cons 3 nil))
+;; q3: Splice (2 3) into (1 ... 4) via a syntax list.
 (def l_inner (List Nat) (cons 2 (cons 3 nil)))
 
-;; We pass the syntax of l_inner's value?
-;; If we pass `l_inner` (the symbol), `unquote-splicing` puts `l_inner` in `append`.
-;; (append l_inner (4)).
-;; This should work.
-(def q3 (List Nat) (splice l_inner))
+;; Pass a syntax list containing the symbol l_inner.
+;; This expands to (cons 1 (append l_inner (cons 4 nil))).
+(def q3 (List Nat) (splice (quasiquote (l_inner))))
 
 (def manual_q3 (List Nat) (cons 1 (append l_inner (cons 4 nil))))
 

@@ -1,19 +1,24 @@
-use crate::{Body, Local, BasicBlock, Statement, Terminator, Operand, Rvalue, Place, BorrowKind, PlaceElem};
+use crate::errors::{BorrowError, BorrowErrorContext, MirSpan};
 use crate::types::{MirType, Mutability};
-use crate::errors::{BorrowError, MirSpan};
+use crate::{
+    BasicBlock, Body, BorrowKind, CallOperand, Local, Operand, Place, PlaceElem, Rvalue, Statement,
+    Terminator,
+};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
+
+const CALL_BORROW_HOLDER: Local = Local(u32::MAX);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Loan {
     pub place: Place,
     pub kind: BorrowKind,
-    pub holder: Local, 
+    pub holder: Local,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BorrowState {
-    pub holders: HashMap<Local, HashSet<Loan>>, 
+    pub holders: HashMap<Local, HashSet<Loan>>,
 }
 
 impl BorrowState {
@@ -47,15 +52,15 @@ impl BorrowState {
         }
         changed
     }
-    
+
     pub fn add_loan(&mut self, holder: Local, loan: Loan) {
         self.holders.entry(holder).or_default().insert(loan);
     }
-    
+
     pub fn kill_loans_held_by(&mut self, holder: Local) {
         self.holders.remove(&holder);
     }
-    
+
     pub fn check_access(&self, place: &Place, is_mut: bool) -> Result<(), String> {
         let active = self.active_loans();
         let access_places = expand_place(place, &self.holders);
@@ -71,10 +76,16 @@ impl BorrowState {
             }
 
             if is_mut {
-                return Err(format!("Cannot mutate {:?} because it is borrowed as {:?}", place, loan.kind));
+                return Err(format!(
+                    "Cannot mutate {:?} because it is borrowed as {:?}",
+                    place, loan.kind
+                ));
             }
             if loan.kind == BorrowKind::Mut {
-                return Err(format!("Cannot read {:?} because it is mutably borrowed", place));
+                return Err(format!(
+                    "Cannot read {:?} because it is mutably borrowed",
+                    place
+                ));
             }
         }
         Ok(())
@@ -87,10 +98,7 @@ struct ResolvedPlace {
     origin_chain: Vec<Local>,
 }
 
-fn expand_place(
-    place: &Place,
-    holders: &HashMap<Local, HashSet<Loan>>,
-) -> Vec<ResolvedPlace> {
+fn expand_place(place: &Place, holders: &HashMap<Local, HashSet<Loan>>) -> Vec<ResolvedPlace> {
     let mut results = Vec::new();
     let mut stack = vec![(place.clone(), Vec::new())];
     let mut seen: HashSet<(Place, Vec<Local>)> = HashSet::new();
@@ -106,7 +114,10 @@ fn expand_place(
                 for loan in loans {
                     let mut new_proj = loan.place.projection.clone();
                     new_proj.extend_from_slice(tail);
-                    let new_place = Place { local: loan.place.local, projection: new_proj };
+                    let new_place = Place {
+                        local: loan.place.local,
+                        projection: new_proj,
+                    };
                     let mut new_chain = origin_chain.clone();
                     if !new_chain.contains(&current.local) {
                         new_chain.push(current.local);
@@ -120,7 +131,10 @@ fn expand_place(
             }
         }
 
-        results.push(ResolvedPlace { place: current, origin_chain });
+        results.push(ResolvedPlace {
+            place: current,
+            origin_chain,
+        });
     }
 
     results
@@ -137,8 +151,8 @@ fn places_conflict_with_expansions(
                 continue;
             }
             if loan.kind == BorrowKind::Mut && access.origin_chain.contains(&loan.holder) {
-                    // Allow access through the holder's own mutable reference (reborrow or direct use).
-                    continue;
+                // Allow access through the holder's own mutable reference (reborrow or direct use).
+                continue;
             }
             return true;
         }
@@ -153,10 +167,14 @@ fn places_conflict_base(p1: &Place, p2: &Place) -> bool {
     for (e1, e2) in p1.projection.iter().zip(p2.projection.iter()) {
         if e1 != e2 {
             if let (PlaceElem::Field(i), PlaceElem::Field(j)) = (e1, e2) {
-                 if i != j { return false; }
+                if i != j {
+                    return false;
+                }
             }
             if let (PlaceElem::Downcast(i), PlaceElem::Downcast(j)) = (e1, e2) {
-                 if i != j { return false; }
+                if i != j {
+                    return false;
+                }
             }
             return true;
         }
@@ -191,7 +209,10 @@ impl<'a> BorrowChecker<'a> {
 
             if let Some(data) = self.body.basic_blocks.get(bb.0 as usize) {
                 for (stmt_idx, stmt) in data.statements.iter().enumerate() {
-                    let location = Some(MirSpan { block: bb, statement_index: stmt_idx });
+                    let location = Some(MirSpan {
+                        block: bb,
+                        statement_index: stmt_idx,
+                    });
                     if let Err(e) = self.process_statement(stmt, &mut state) {
                         self.errors.push(e);
                     }
@@ -199,7 +220,10 @@ impl<'a> BorrowChecker<'a> {
                 }
 
                 if let Some(terminator) = &data.terminator {
-                    let location = Some(MirSpan { block: bb, statement_index: data.statements.len() });
+                    let location = Some(MirSpan {
+                        block: bb,
+                        statement_index: data.statements.len(),
+                    });
                     if let Err(e) = self.process_terminator(terminator, &mut state) {
                         self.errors.push(e);
                     }
@@ -207,13 +231,15 @@ impl<'a> BorrowChecker<'a> {
 
                     let successors = self.successors(terminator);
                     for target in successors {
-                        if !self.block_entry_states.contains_key(&target) {
-                            self.block_entry_states.insert(target, state.clone());
-                            worklist.push(target);
-                        } else {
-                            let entry = self.block_entry_states.get_mut(&target).unwrap();
-                            if entry.join(&state) {
+                        match self.block_entry_states.entry(target) {
+                            Entry::Vacant(entry) => {
+                                entry.insert(state.clone());
                                 worklist.push(target);
+                            }
+                            Entry::Occupied(mut entry) => {
+                                if entry.get_mut().join(&state) {
+                                    worklist.push(target);
+                                }
                             }
                         }
                     }
@@ -221,7 +247,7 @@ impl<'a> BorrowChecker<'a> {
             }
         }
     }
-    
+
     fn process_statement(&self, stmt: &Statement, state: &mut BorrowState) -> Result<(), String> {
         match stmt {
             Statement::Assign(dest, rvalue) => {
@@ -231,20 +257,20 @@ impl<'a> BorrowChecker<'a> {
                 }
                 self.check_mutability(dest)?;
                 state.check_access(dest, true)?;
-                
+
                 if let Rvalue::Ref(kind, src_place) = rvalue {
-                     if dest.projection.is_empty() {
-                         let loan = Loan {
-                             place: src_place.clone(),
-                             kind: *kind,
-                             holder: dest.local
-                         };
-                         state.check_access(src_place, *kind == BorrowKind::Mut)?;
-                         if *kind == BorrowKind::Mut {
-                             self.check_mutability(src_place)?;
-                         }
-                         state.add_loan(dest.local, loan);
-                     }
+                    if dest.projection.is_empty() {
+                        let loan = Loan {
+                            place: src_place.clone(),
+                            kind: *kind,
+                            holder: dest.local,
+                        };
+                        state.check_access(src_place, *kind == BorrowKind::Mut)?;
+                        if *kind == BorrowKind::Mut {
+                            self.check_mutability(src_place)?;
+                        }
+                        state.add_loan(dest.local, loan);
+                    }
                 } else if let Rvalue::Use(op) = rvalue {
                     if dest.projection.is_empty() {
                         if let Operand::Copy(src) | Operand::Move(src) = op {
@@ -258,43 +284,63 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
                 }
-            },
-            Statement::RuntimeCheck(_) => {},
+            }
+            Statement::RuntimeCheck(_) => {}
             Statement::StorageDead(local) => {
                 let active = state.active_loans();
                 for loan in &active {
                     if loan.place.local == *local {
-                        return Err(format!("Dangling reference: {:?} is dropped while still borrowed (Loan: {:?})", local, loan));
+                        return Err(format!(
+                            "Dangling reference: {:?} is dropped while still borrowed (Loan: {:?})",
+                            local, loan
+                        ));
                     }
                 }
                 state.kill_loans_held_by(*local);
-            },
+            }
             _ => {}
         }
         Ok(())
     }
-    
+
     fn process_terminator(&self, term: &Terminator, state: &mut BorrowState) -> Result<(), String> {
         match term {
-            Terminator::Call { func, args, destination, .. } => {
-                self.check_operand(func, state)?;
+            Terminator::Call {
+                func,
+                args,
+                destination,
+                ..
+            } => {
+                self.check_call_operand(func, state)?;
+                if let CallOperand::Borrow(kind, place) = func {
+                    let loan = Loan {
+                        place: place.clone(),
+                        kind: *kind,
+                        holder: CALL_BORROW_HOLDER,
+                    };
+                    state.add_loan(CALL_BORROW_HOLDER, loan);
+                }
                 for arg in args {
                     self.check_operand(arg, state)?;
                 }
+                state.kill_loans_held_by(CALL_BORROW_HOLDER);
                 if destination.projection.is_empty() {
-                     state.kill_loans_held_by(destination.local);
+                    state.kill_loans_held_by(destination.local);
                 }
-            },
+            }
             Terminator::Return => {
                 if let Some(held) = state.holders.get(&Local(0)) {
                     for loan in held {
-                        return Err(format!("Escaping reference: Returning a reference to local variable {:?}", loan.place));
+                        return Err(format!(
+                            "Escaping reference: Returning a reference to local variable {:?}",
+                            loan.place
+                        ));
                     }
                 }
-            },
+            }
             Terminator::SwitchInt { discr, .. } => {
                 self.check_operand(discr, state)?;
-            },
+            }
             _ => {}
         }
         Ok(())
@@ -304,24 +350,35 @@ impl<'a> BorrowChecker<'a> {
         match rvalue {
             Rvalue::Use(op) => self.check_operand(op, state),
             Rvalue::Ref(_, _) => Ok(()),
-            _ => Ok(())
+            _ => Ok(()),
         }
     }
-    
+
     fn check_operand(&self, op: &Operand, state: &BorrowState) -> Result<(), String> {
         match op {
             Operand::Move(place) => {
                 for elem in &place.projection {
                     if let PlaceElem::Deref = elem {
-                         return Err(format!("Cannot move out of reference: {:?}", place));
+                        return Err(format!("Cannot move out of reference: {:?}", place));
                     }
                 }
                 state.check_access(place, true)
-            },
-            Operand::Copy(place) => {
-                state.check_access(place, false)
-            },
-             _ => Ok(())
+            }
+            Operand::Copy(place) => state.check_access(place, false),
+            _ => Ok(()),
+        }
+    }
+
+    fn check_call_operand(&self, op: &CallOperand, state: &BorrowState) -> Result<(), String> {
+        match op {
+            CallOperand::Borrow(kind, place) => {
+                state.check_access(place, *kind == BorrowKind::Mut)?;
+                if *kind == BorrowKind::Mut {
+                    self.check_mutability(place)?;
+                }
+                Ok(())
+            }
+            CallOperand::Operand(op) => self.check_operand(op, state),
         }
     }
 
@@ -329,8 +386,12 @@ impl<'a> BorrowChecker<'a> {
         match term {
             Terminator::Goto { target } => vec![*target],
             Terminator::Call { target, .. } => {
-                if let Some(t) = target { vec![*t] } else { vec![] }
-            },
+                if let Some(t) = target {
+                    vec![*t]
+                } else {
+                    vec![]
+                }
+            }
             Terminator::SwitchInt { targets, .. } => targets.targets.clone(),
             _ => vec![],
         }
@@ -338,29 +399,61 @@ impl<'a> BorrowChecker<'a> {
 
     fn check_mutability(&self, place: &Place) -> Result<(), String> {
         let mut current_ty = self.body.local_decls[place.local.index()].ty.clone();
-        
+        let mut active_variant: Option<usize> = None;
+
         for elem in &place.projection {
             match elem {
+                PlaceElem::Downcast(idx) => {
+                    active_variant = Some(*idx);
+                }
                 PlaceElem::Deref => {
-                    if let MirType::Ref(_, inner, mutability) = current_ty {
-                        if mutability == Mutability::Not {
-                            return Err(format!("Cannot mutate immutable reference content in {:?}", place));
+                    match &current_ty {
+                        MirType::Ref(_, inner, mutability) => {
+                            if *mutability == Mutability::Not {
+                                return Err(format!(
+                                    "Cannot mutate immutable reference content in {:?}",
+                                    place
+                                ));
+                            }
+                            current_ty = (**inner).clone();
+                            active_variant = None;
+                            continue;
                         }
-                        current_ty = *inner;
-                    } else {
-                         // Deref of non-ref?
-                         // Maybe RawPtr?
+                        MirType::RawPtr(inner, _) => {
+                            current_ty = (**inner).clone();
+                            active_variant = None;
+                        }
+                        MirType::Opaque { .. } => {
+                            return Err(format!(
+                                "Cannot prove mutability for opaque deref in {:?}",
+                                place
+                            ));
+                        }
+                        _ => {
+                            // Deref of non-ref?
+                        }
                     }
-                },
-                PlaceElem::Field(_) => {
-                    // For now assume field preserves mutability
-                    // If we had ADT defs, we could look up field type.
-                    // But we erase field types in ADT for now?
-                    // MirType::Adt(id, args).
-                    // We can't know the field type easily without context.
-                    // Assume Any.
-                },
-                _ => {}
+                }
+                PlaceElem::Field(idx) => {
+                    if let MirType::Adt(adt_id, args) = &current_ty {
+                        if let Some(field_ty) =
+                            self.body
+                                .adt_layouts
+                                .field_type(adt_id, active_variant, *idx, args)
+                        {
+                            current_ty = field_ty;
+                        }
+                    }
+                    active_variant = None;
+                }
+                PlaceElem::Index(_) => {
+                    if let MirType::Adt(_, args) = &current_ty {
+                        if let Some(elem_ty) = args.get(0).cloned() {
+                            current_ty = elem_ty;
+                        }
+                    }
+                    active_variant = None;
+                }
             }
         }
         Ok(())
@@ -380,6 +473,7 @@ impl<'a> BorrowChecker<'a> {
                             self.structured_errors.push(BorrowError::MoveOutOfRef {
                                 place: place.clone(),
                                 location,
+                                context: BorrowErrorContext::default(),
                             });
                             return;
                         }
@@ -388,10 +482,12 @@ impl<'a> BorrowChecker<'a> {
 
                 if dest.projection.is_empty() {
                     if let Err(_) = state.check_access(dest, true) {
-                        self.structured_errors.push(BorrowError::AssignWhileBorrowed {
-                            place: dest.clone(),
-                            location,
-                        });
+                        self.structured_errors
+                            .push(BorrowError::AssignWhileBorrowed {
+                                place: dest.clone(),
+                                location,
+                                context: BorrowErrorContext::default(),
+                            });
                     }
                 }
 
@@ -401,6 +497,7 @@ impl<'a> BorrowChecker<'a> {
                             self.structured_errors.push(BorrowError::MutateSharedRef {
                                 place: src_place.clone(),
                                 location,
+                                context: BorrowErrorContext::default(),
                             });
                         }
                     }
@@ -414,6 +511,7 @@ impl<'a> BorrowChecker<'a> {
                         self.structured_errors.push(BorrowError::DanglingReference {
                             borrowed_local: *local,
                             location,
+                            context: BorrowErrorContext::default(),
                         });
                         break;
                     }
@@ -431,12 +529,13 @@ impl<'a> BorrowChecker<'a> {
     ) {
         match term {
             Terminator::Call { func, args, .. } => {
-                if let Operand::Move(place) = func {
+                if let CallOperand::Operand(Operand::Move(place)) = func {
                     for elem in &place.projection {
                         if let PlaceElem::Deref = elem {
                             self.structured_errors.push(BorrowError::MoveOutOfRef {
                                 place: place.clone(),
                                 location,
+                                context: BorrowErrorContext::default(),
                             });
                         }
                     }
@@ -448,6 +547,7 @@ impl<'a> BorrowChecker<'a> {
                                 self.structured_errors.push(BorrowError::MoveOutOfRef {
                                     place: place.clone(),
                                     location,
+                                    context: BorrowErrorContext::default(),
                                 });
                             }
                         }
@@ -460,6 +560,7 @@ impl<'a> BorrowChecker<'a> {
                         self.structured_errors.push(BorrowError::EscapingReference {
                             place: loan.place.clone(),
                             location,
+                            context: BorrowErrorContext::default(),
                         });
                     }
                 }
@@ -472,13 +573,13 @@ impl<'a> BorrowChecker<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::*; 
     use crate::types::*;
+    use crate::*;
 
     fn create_dummy_body(locals: usize) -> Body {
         let mut body = Body::new(0);
         for _ in 0..=locals {
-             body.local_decls.push(LocalDecl::new(MirType::Unit, None));
+            body.local_decls.push(LocalDecl::new(MirType::Unit, None));
         }
         body
     }
@@ -486,30 +587,28 @@ mod tests {
     #[test]
     fn test_loan_creation_and_kill() {
         let mut body = create_dummy_body(2);
-        
+
         body.basic_blocks.push(BasicBlockData {
-            statements: vec![
-                Statement::Assign(
-                    Place::from(Local(2)),
-                    Rvalue::Ref(BorrowKind::Shared, Place::from(Local(1)))
-                )
-            ],
-            terminator: Some(Terminator::Goto { target: BasicBlock(1) })
+            statements: vec![Statement::Assign(
+                Place::from(Local(2)),
+                Rvalue::Ref(BorrowKind::Shared, Place::from(Local(1))),
+            )],
+            terminator: Some(Terminator::Goto {
+                target: BasicBlock(1),
+            }),
         });
-        
+
         body.basic_blocks.push(BasicBlockData {
-            statements: vec![
-                Statement::Assign(
-                    Place::from(Local(2)),
-                    Rvalue::Use(Operand::Constant(Box::new(Constant {
-                        literal: Literal::Nat(0),
-                        ty: MirType::Nat
-                    })))
-                )
-            ],
-            terminator: Some(Terminator::Return)
+            statements: vec![Statement::Assign(
+                Place::from(Local(2)),
+                Rvalue::Use(Operand::Constant(Box::new(Constant {
+                    literal: Literal::Nat(0),
+                    ty: MirType::Nat,
+                }))),
+            )],
+            terminator: Some(Terminator::Return),
         });
-        
+
         let mut checker = BorrowChecker::new(&body);
         checker.check();
         assert!(checker.errors.is_empty());
@@ -518,31 +617,35 @@ mod tests {
     // ... other tests need updating with MirType ...
     // I'll update them later if needed, they are mostly structural so create_dummy_body update covers them.
     // Except tests that manually construct Ref types.
-    
+
     #[test]
     fn test_mutate_shared_ref() {
         let mut body = create_dummy_body(2);
-        
+
         // Ref Shared Nat
         let ref_shared_nat = MirType::Ref(Region::STATIC, Box::new(MirType::Nat), Mutability::Not);
-        
+
         body.local_decls[1].ty = ref_shared_nat;
-        
-        let p_deref = Place { local: Local(1), projection: vec![PlaceElem::Deref] };
-        
+
+        let p_deref = Place {
+            local: Local(1),
+            projection: vec![PlaceElem::Deref],
+        };
+
         body.basic_blocks.push(BasicBlockData {
-            statements: vec![
-                Statement::Assign(
-                    p_deref, 
-                    Rvalue::Use(Operand::Constant(Box::new(Constant{literal: Literal::Nat(5), ty: MirType::Nat })))
-                )
-            ],
-            terminator: Some(Terminator::Return)
+            statements: vec![Statement::Assign(
+                p_deref,
+                Rvalue::Use(Operand::Constant(Box::new(Constant {
+                    literal: Literal::Nat(5),
+                    ty: MirType::Nat,
+                }))),
+            )],
+            terminator: Some(Terminator::Return),
         });
-        
+
         let mut checker = BorrowChecker::new(&body);
         checker.check();
-        
+
         assert!(!checker.errors.is_empty());
         assert!(checker.errors[0].contains("Cannot mutate immutable reference"));
     }
@@ -554,9 +657,13 @@ mod tests {
         // x: Nat
         body.local_decls[1].ty = MirType::Nat;
         // r: &mut Nat (type chosen to avoid mutability error; borrow kind is Shared)
-        body.local_decls[2].ty = MirType::Ref(Region::STATIC, Box::new(MirType::Nat), Mutability::Mut);
+        body.local_decls[2].ty =
+            MirType::Ref(Region::STATIC, Box::new(MirType::Nat), Mutability::Mut);
 
-        let r_deref = Place { local: Local(2), projection: vec![PlaceElem::Deref] };
+        let r_deref = Place {
+            local: Local(2),
+            projection: vec![PlaceElem::Deref],
+        };
 
         body.basic_blocks.push(BasicBlockData {
             statements: vec![
@@ -578,7 +685,10 @@ mod tests {
         let mut checker = BorrowChecker::new(&body);
         checker.check();
 
-        assert!(!checker.errors.is_empty(), "Shared loan should block deref write");
+        assert!(
+            !checker.errors.is_empty(),
+            "Shared loan should block deref write"
+        );
         assert!(checker.errors[0].contains("borrowed as Shared"));
     }
 
@@ -586,9 +696,10 @@ mod tests {
     fn test_disjoint_field_borrow_allowed() {
         let mut body = create_dummy_body(2);
 
-        let pair_ty = MirType::Adt(crate::types::AdtId("Pair".to_string()), vec![]);
+        let pair_ty = MirType::Adt(AdtId::new("Pair"), vec![]);
         body.local_decls[1].ty = pair_ty.clone();
-        body.local_decls[2].ty = MirType::Ref(Region::STATIC, Box::new(pair_ty.clone()), Mutability::Not);
+        body.local_decls[2].ty =
+            MirType::Ref(Region::STATIC, Box::new(pair_ty.clone()), Mutability::Not);
 
         body.basic_blocks.push(BasicBlockData {
             statements: vec![
@@ -596,11 +707,17 @@ mod tests {
                     Place::from(Local(2)),
                     Rvalue::Ref(
                         BorrowKind::Shared,
-                        Place { local: Local(1), projection: vec![PlaceElem::Field(0)] },
+                        Place {
+                            local: Local(1),
+                            projection: vec![PlaceElem::Field(0)],
+                        },
                     ),
                 ),
                 Statement::Assign(
-                    Place { local: Local(1), projection: vec![PlaceElem::Field(1)] },
+                    Place {
+                        local: Local(1),
+                        projection: vec![PlaceElem::Field(1)],
+                    },
                     Rvalue::Use(Operand::Constant(Box::new(Constant {
                         literal: Literal::Nat(0),
                         ty: MirType::Nat,
@@ -613,16 +730,20 @@ mod tests {
         let mut checker = BorrowChecker::new(&body);
         checker.check();
 
-        assert!(checker.errors.is_empty(), "Disjoint field write should be allowed");
+        assert!(
+            checker.errors.is_empty(),
+            "Disjoint field write should be allowed"
+        );
     }
 
     #[test]
     fn test_disjoint_downcast_borrow_allowed() {
         let mut body = create_dummy_body(2);
 
-        let enum_ty = MirType::Adt(crate::types::AdtId("Enum".to_string()), vec![]);
+        let enum_ty = MirType::Adt(AdtId::new("Enum"), vec![]);
         body.local_decls[1].ty = enum_ty.clone();
-        body.local_decls[2].ty = MirType::Ref(Region::STATIC, Box::new(MirType::Nat), Mutability::Not);
+        body.local_decls[2].ty =
+            MirType::Ref(Region::STATIC, Box::new(MirType::Nat), Mutability::Not);
 
         body.basic_blocks.push(BasicBlockData {
             statements: vec![
@@ -653,6 +774,9 @@ mod tests {
         let mut checker = BorrowChecker::new(&body);
         checker.check();
 
-        assert!(checker.errors.is_empty(), "Disjoint downcast field write should be allowed");
+        assert!(
+            checker.errors.is_empty(),
+            "Disjoint downcast field write should be allowed"
+        );
     }
 }

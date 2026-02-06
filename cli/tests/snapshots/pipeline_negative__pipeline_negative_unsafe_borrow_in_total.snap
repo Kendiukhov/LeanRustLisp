@@ -1,0 +1,9 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Warning: Axiom 'Nat' declared
+- Warning: Axiom 'unsafe_borrow' declared (unsafe: unsafe_borrow)
+- Error: [K0022] Environment error defining 'bad': EffectError("Total", "Unsafe", "unsafe_borrow")

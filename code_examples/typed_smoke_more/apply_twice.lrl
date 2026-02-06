@@ -1,0 +1,6 @@
+(def succ1
+  (pi n Nat Nat)
+  (lam n Nat
+    (succ n)))
+
+(succ1 (succ zero))

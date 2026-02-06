@@ -1,0 +1,7 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Error: Axiom 'my_axiom' must declare at least one tag (classical/unsafe) when --require-axiom-tags is enabled

@@ -1,0 +1,47 @@
+;; Minimal prelude for typed backend Stage 1
+
+(defmacro id (x) x)
+
+;; Marker attributes (resolved during elaboration).
+;; These are unsafe axioms defined explicitly in the prelude.
+(axiom unsafe interior_mutable Type)
+(axiom unsafe may_panic_on_borrow_violation Type)
+(axiom unsafe concurrency_primitive Type)
+(axiom unsafe atomic_primitive Type)
+(axiom unsafe indexable Type)
+
+(inductive copy Nat (sort 1)
+  (ctor zero Nat)
+  (ctor succ (pi n Nat Nat))
+)
+
+(inductive copy Bool (sort 1)
+  (ctor true Bool)
+  (ctor false Bool)
+)
+
+;; Print helpers (typed backend special-cases these names).
+(def print_nat (pi #[fn] n Nat Nat)
+  (lam #[fn] n Nat n)
+)
+
+(def print_bool (pi #[fn] b Bool Bool)
+  (lam #[fn] b Bool b)
+)
+
+;; Persistent list for typed backend (monomorphic Nat list for Stage 1).
+(inductive copy ListRc (sort 1)
+  (ctor nil ListRc)
+  (ctor cons (pi h Nat (pi t ListRc ListRc)))
+)
+
+(def append (pi #[fn] l1 ListRc (pi #[fn] l2 ListRc ListRc))
+  (lam #[fn] l1 ListRc
+    (lam #[fn] l2 ListRc
+      (match l1 ListRc
+        (case (nil) l2)
+        (case (cons h t ih) (cons h ih))
+      )
+    )
+  )
+)

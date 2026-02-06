@@ -1,0 +1,11 @@
+(inductive MaybeNat (sort 1)
+  (ctor none MaybeNat)
+  (ctor some (pi v Nat MaybeNat)))
+
+(def unwrap_or_zero (pi m MaybeNat Nat)
+  (lam m MaybeNat
+    (match m Nat
+      (case (none) zero)
+      (case (some v) v))))
+
+(unwrap_or_zero (some (succ zero)))

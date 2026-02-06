@@ -1,0 +1,7 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Error: [K0021] Environment error defining 'dup_fnonce': OwnershipError(UseAfterMove(1))

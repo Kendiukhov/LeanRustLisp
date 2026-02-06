@@ -1,0 +1,11 @@
+(def xor (pi a Bool (pi b Bool Bool))
+  (lam a Bool
+    (lam b Bool
+      (match a Bool
+        (case (true)
+          (match b Bool
+            (case (true) false)
+            (case (false) true)))
+        (case (false) b)))))
+
+(xor true false)

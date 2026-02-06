@@ -2,10 +2,62 @@
 //!
 //! These tests verify core language semantics that must remain stable.
 
-use kernel::ast::{Term, Level, Transparency, BinderInfo, Definition, InductiveDecl, Constructor};
-use kernel::checker::{Env, Context, infer, is_def_eq, whnf, TypeError, classical_axiom_dependencies};
+use kernel::ast::{
+    BinderInfo, Constructor, Definition, FunctionKind, InductiveDecl, Level, Term, Transparency,
+};
+use kernel::checker::{
+    classical_axiom_dependencies, infer, is_copy_type_in_env, is_def_eq, whnf, Context, Env,
+    TypeError,
+};
 use kernel::nbe::is_def_eq_with_fuel;
 use std::rc::Rc;
+
+fn add_comp(env: &mut Env) {
+    let allow_reserved = env.allows_reserved_primitives();
+    env.set_allow_reserved_primitives(true);
+    let type1 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
+    let comp_ind = Rc::new(Term::Ind("Comp".to_string(), vec![]));
+    let comp_body = Term::app(comp_ind.clone(), Term::var(1));
+    let ret_ty = Term::pi(
+        type1.clone(),
+        Term::pi(Term::var(0), comp_body, BinderInfo::Default),
+        BinderInfo::Default,
+    );
+    let comp_decl = InductiveDecl::new(
+        "Comp".to_string(),
+        Term::pi(
+            type1,
+            Term::sort(Level::Succ(Box::new(Level::Zero))),
+            BinderInfo::Default,
+        ),
+        vec![Constructor {
+            name: "ret".to_string(),
+            ty: ret_ty,
+        }],
+    );
+    env.add_inductive(comp_decl)
+        .expect("Comp inductive should be accepted");
+    env.set_allow_reserved_primitives(allow_reserved);
+}
+
+fn add_nat(env: &mut Env) -> Rc<Term> {
+    let allow_reserved = env.allows_reserved_primitives();
+    env.set_allow_reserved_primitives(true);
+    let type0 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
+    let nat_ref = Rc::new(Term::Ind("Nat".to_string(), vec![]));
+    let nat_decl = InductiveDecl::new_copy(
+        "Nat".to_string(),
+        type0,
+        vec![Constructor {
+            name: "zero".to_string(),
+            ty: nat_ref.clone(),
+        }],
+    );
+    env.add_inductive(nat_decl)
+        .expect("Nat inductive should be accepted");
+    env.set_allow_reserved_primitives(allow_reserved);
+    nat_ref
+}
 
 // =============================================================================
 // IMPREDICATIVE PROP TESTS
@@ -20,13 +72,21 @@ fn test_impredicative_prop_basic() {
     // (Pi P : Prop. P) : Prop
     // In de Bruijn: (Pi (Sort Prop) (Var 0))
     let prop = Rc::new(Term::Sort(Level::Zero)); // Prop = Sort 0
-    let forall_p_p = Rc::new(Term::Pi(prop.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
+    let forall_p_p = Rc::new(Term::Pi(
+        prop.clone(),
+        Rc::new(Term::Var(0)),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
 
     let result = infer(&env, &ctx, forall_p_p).expect("Should infer type");
 
     // Result should be Prop (Sort 0)
     if let Term::Sort(level) = &*result {
-        assert!(matches!(level, Level::Zero), "forall P:Prop, P should be in Prop");
+        assert!(
+            matches!(level, Level::Zero),
+            "forall P:Prop, P should be in Prop"
+        );
     } else {
         panic!("Expected Sort, got {:?}", result);
     }
@@ -41,13 +101,16 @@ fn test_prop_to_type_lifts() {
     // (Pi _ : Prop. Type) should be Type
     let prop = Rc::new(Term::Sort(Level::Zero));
     let type1 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
-    let pi = Rc::new(Term::Pi(prop, type1, BinderInfo::Default));
+    let pi = Rc::new(Term::Pi(prop, type1, BinderInfo::Default, FunctionKind::Fn));
 
     let result = infer(&env, &ctx, pi).expect("Should infer type");
 
     if let Term::Sort(level) = &*result {
         // Should be at least Type 1
-        assert!(!matches!(level, Level::Zero), "Prop -> Type should not be in Prop");
+        assert!(
+            !matches!(level, Level::Zero),
+            "Prop -> Type should not be in Prop"
+        );
     } else {
         panic!("Expected Sort, got {:?}", result);
     }
@@ -62,16 +125,47 @@ fn test_nested_impredicative_prop() {
     // (Pi P : Prop. (Pi Q : Prop. P)) : Prop
     let prop = Rc::new(Term::Sort(Level::Zero));
     let var_p = Rc::new(Term::Var(1)); // P is now at index 1 after Q binding
-    let inner = Rc::new(Term::Pi(prop.clone(), var_p, BinderInfo::Default)); // Pi Q : Prop. P
-    let outer = Rc::new(Term::Pi(prop.clone(), inner, BinderInfo::Default)); // Pi P : Prop. (...)
+    let inner = Rc::new(Term::Pi(
+        prop.clone(),
+        var_p,
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    )); // Pi Q : Prop. P
+    let outer = Rc::new(Term::Pi(
+        prop.clone(),
+        inner,
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    )); // Pi P : Prop. (...)
 
     let result = infer(&env, &ctx, outer).expect("Should infer type");
 
     if let Term::Sort(level) = &*result {
-        assert!(matches!(level, Level::Zero), "Nested forall in Prop should stay in Prop");
+        assert!(
+            matches!(level, Level::Zero),
+            "Nested forall in Prop should stay in Prop"
+        );
     } else {
         panic!("Expected Sort, got {:?}", result);
     }
+}
+
+/// Test: Partial definitions must return Comp A and should register.
+#[test]
+fn test_partial_def_returns_comp() {
+    let mut env = Env::new();
+    add_comp(&mut env);
+    let nat_ref = add_nat(&mut env);
+
+    let comp_nat = Term::app(Term::ind("Comp".to_string()), nat_ref.clone());
+    let ret_nat = Term::app(
+        Term::app(Term::ctor("Comp".to_string(), 0), nat_ref.clone()),
+        Term::ctor("Nat".to_string(), 0),
+    );
+
+    let partial_def = Definition::partial("safe_partial".to_string(), comp_nat, ret_nat);
+    env.add_definition(partial_def)
+        .expect("Partial definition should register");
 }
 
 // =============================================================================
@@ -85,12 +179,26 @@ fn test_transparent_unfolds_in_defeq() {
 
     // Define: id := lam x. x (transparent by default)
     let prop = Rc::new(Term::Sort(Level::Zero));
-    let id_body = Rc::new(Term::Lam(prop.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
-    let id_type = Rc::new(Term::Pi(prop.clone(), prop.clone(), BinderInfo::Default));
+    let id_body = Rc::new(Term::Lam(
+        prop.clone(),
+        Rc::new(Term::Var(0)),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
+    let id_type = Rc::new(Term::Pi(
+        prop.clone(),
+        prop.clone(),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
 
     // Add a total transparent definition
-    env.add_definition(Definition::total("id".to_string(), id_type, id_body.clone()))
-        .expect("Failed to add id");
+    env.add_definition(Definition::total(
+        "id".to_string(),
+        id_type,
+        id_body.clone(),
+    ))
+    .expect("Failed to add id");
 
     // id should be defeq to (lam x. x) when transparent
     let id_const = Rc::new(Term::Const("id".to_string(), vec![]));
@@ -108,8 +216,18 @@ fn test_opaque_does_not_unfold() {
 
     // Define: secret := lam x. x (OPAQUE)
     let prop = Rc::new(Term::Sort(Level::Zero));
-    let secret_body = Rc::new(Term::Lam(prop.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
-    let secret_type = Rc::new(Term::Pi(prop.clone(), prop.clone(), BinderInfo::Default));
+    let secret_body = Rc::new(Term::Lam(
+        prop.clone(),
+        Rc::new(Term::Var(0)),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
+    let secret_type = Rc::new(Term::Pi(
+        prop.clone(),
+        prop.clone(),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
 
     // Create definition and set it as opaque (Transparency::None = opaque/irreducible)
     let mut def = Definition::total("secret".to_string(), secret_type, secret_body.clone());
@@ -121,8 +239,17 @@ fn test_opaque_does_not_unfold() {
     // secret should NOT be defeq to (lam x. x) when opaque
     // Use Reducible transparency which respects opacity
     assert!(
-        !is_def_eq(&env, secret_const, secret_body, Transparency::Reducible),
+        !is_def_eq(
+            &env,
+            secret_const.clone(),
+            secret_body.clone(),
+            Transparency::Reducible
+        ),
         "Opaque definition should NOT unfold in defeq"
+    );
+    assert!(
+        is_def_eq(&env, secret_const, secret_body, Transparency::All),
+        "Transparency::All should unfold opaque definitions"
     );
 }
 
@@ -134,12 +261,22 @@ fn test_opaque_does_not_unfold() {
 fn test_whnf_preserves_lambda_domain() {
     let env = Env::new();
     let prop = Rc::new(Term::Sort(Level::Zero));
-    let dom = Rc::new(Term::Pi(prop.clone(), prop.clone(), BinderInfo::Default));
-    let lam = Rc::new(Term::Lam(dom.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
+    let dom = Rc::new(Term::Pi(
+        prop.clone(),
+        prop.clone(),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
+    let lam = Rc::new(Term::Lam(
+        dom.clone(),
+        Rc::new(Term::Var(0)),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
 
     let reduced = whnf(&env, lam, Transparency::All).expect("whnf failed");
     match &*reduced {
-        Term::Lam(dom_whnf, _, _) => {
+        Term::Lam(dom_whnf, _, _, FunctionKind::Fn) => {
             assert!(
                 is_def_eq(&env, dom_whnf.clone(), dom, Transparency::Reducible),
                 "whnf should preserve lambda binder types"
@@ -158,32 +295,37 @@ fn test_defeq_fuel_limits_unfolding() {
     env.add_definition(Definition::axiom("base".to_string(), ty.clone()))
         .expect("Failed to add base axiom");
 
-    env.add_definition(Definition::total("d0".to_string(), ty.clone(), base.clone()))
-        .expect("Failed to add d0");
-    env.add_definition(Definition::total(
+    let mut d0 = Definition::total("d0".to_string(), ty.clone(), base.clone());
+    d0.noncomputable = true;
+    env.add_definition(d0).expect("Failed to add d0");
+    let mut d1 = Definition::total(
         "d1".to_string(),
         ty.clone(),
         Rc::new(Term::Const("d0".to_string(), vec![])),
-    ))
-        .expect("Failed to add d1");
-    env.add_definition(Definition::total(
+    );
+    d1.noncomputable = true;
+    env.add_definition(d1).expect("Failed to add d1");
+    let mut d2 = Definition::total(
         "d2".to_string(),
         ty.clone(),
         Rc::new(Term::Const("d1".to_string(), vec![])),
-    ))
-        .expect("Failed to add d2");
-    env.add_definition(Definition::total(
+    );
+    d2.noncomputable = true;
+    env.add_definition(d2).expect("Failed to add d2");
+    let mut d3 = Definition::total(
         "d3".to_string(),
         ty.clone(),
         Rc::new(Term::Const("d2".to_string(), vec![])),
-    ))
-        .expect("Failed to add d3");
-    env.add_definition(Definition::total(
+    );
+    d3.noncomputable = true;
+    env.add_definition(d3).expect("Failed to add d3");
+    let mut d4 = Definition::total(
         "d4".to_string(),
         ty.clone(),
         Rc::new(Term::Const("d3".to_string(), vec![])),
-    ))
-        .expect("Failed to add d4");
+    );
+    d4.noncomputable = true;
+    env.add_definition(d4).expect("Failed to add d4");
 
     let deep = Rc::new(Term::Const("d4".to_string(), vec![]));
     assert!(
@@ -205,8 +347,14 @@ fn test_boom_eq_exponential_unfolding_is_bounded() {
 
     let pair_ty = Rc::new(Term::Pi(
         ty.clone(),
-        Rc::new(Term::Pi(ty.clone(), ty.clone(), BinderInfo::Default)),
+        Rc::new(Term::Pi(
+            ty.clone(),
+            ty.clone(),
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        )),
         BinderInfo::Default,
+        FunctionKind::Fn,
     ));
     env.add_definition(Definition::axiom("pair".to_string(), pair_ty))
         .expect("Failed to add pair axiom");
@@ -225,20 +373,28 @@ fn test_boom_eq_exponential_unfolding_is_bounded() {
     };
 
     let n = 7;
-    env.add_definition(Definition::total("boom0".to_string(), ty.clone(), base.clone()))
-        .expect("Failed to add boom0");
+    let mut boom0 = Definition::total("boom0".to_string(), ty.clone(), base.clone());
+    boom0.noncomputable = true;
+    env.add_definition(boom0).expect("Failed to add boom0");
     for i in 1..=n {
         let prev = Rc::new(Term::Const(format!("boom{}", i - 1), vec![]));
         let body = Term::app(Term::app(pair.clone(), prev.clone()), prev);
-        env.add_definition(Definition::total(format!("boom{}", i), ty.clone(), body))
-            .expect("Failed to add boom def");
+        let mut boom = Definition::total(format!("boom{}", i), ty.clone(), body);
+        boom.noncomputable = true;
+        env.add_definition(boom).expect("Failed to add boom def");
     }
 
     let boom_n = Rc::new(Term::Const(format!("boom{}", n), vec![]));
     let expected = boom_term(n);
 
     assert!(
-        !is_def_eq_with_fuel(boom_n.clone(), expected.clone(), &env, Transparency::All, 10),
+        !is_def_eq_with_fuel(
+            boom_n.clone(),
+            expected.clone(),
+            &env,
+            Transparency::All,
+            10
+        ),
         "boom should exceed low defeq fuel on exponential unfolding"
     );
     assert!(
@@ -250,6 +406,7 @@ fn test_boom_eq_exponential_unfolding_is_bounded() {
 #[test]
 fn test_indexed_recursor_uses_field_indices() {
     let mut env = Env::new();
+    env.set_allow_reserved_primitives(true);
 
     // Nat : Type
     let nat_decl = InductiveDecl {
@@ -258,10 +415,23 @@ fn test_indexed_recursor_uses_field_indices() {
         num_params: 0,
         ty: Term::sort(Level::Zero),
         ctors: vec![
-            Constructor { name: "zero".to_string(), ty: Rc::new(Term::Ind("Nat".to_string(), vec![])) },
-            Constructor { name: "succ".to_string(), ty: Term::pi(Rc::new(Term::Ind("Nat".to_string(), vec![])), Rc::new(Term::Ind("Nat".to_string(), vec![])), BinderInfo::Default) },
+            Constructor {
+                name: "zero".to_string(),
+                ty: Rc::new(Term::Ind("Nat".to_string(), vec![])),
+            },
+            Constructor {
+                name: "succ".to_string(),
+                ty: Term::pi(
+                    Rc::new(Term::Ind("Nat".to_string(), vec![])),
+                    Rc::new(Term::Ind("Nat".to_string(), vec![])),
+                    BinderInfo::Default,
+                ),
+            },
         ],
         is_copy: false,
+        markers: vec![],
+        axioms: vec![],
+        primitive_deps: vec![],
     };
     env.add_inductive(nat_decl).unwrap();
 
@@ -271,7 +441,11 @@ fn test_indexed_recursor_uses_field_indices() {
     // Vec : (A : Type) -> (n : Nat) -> Type
     let vec_ty = Term::pi(
         Term::sort(Level::Zero),
-        Term::pi(nat_ref.clone(), Term::sort(Level::Zero), BinderInfo::Default),
+        Term::pi(
+            nat_ref.clone(),
+            Term::sort(Level::Zero),
+            BinderInfo::Default,
+        ),
         BinderInfo::Default,
     );
 
@@ -295,11 +469,14 @@ fn test_indexed_recursor_uses_field_indices() {
                 Term::pi(
                     Term::app(
                         Term::app(vec_ref.clone(), Term::var(2)), // Vec A
-                        Term::var(1), // n
+                        Term::var(1),                             // n
                     ),
                     Term::app(
                         Term::app(vec_ref.clone(), Term::var(3)), // Vec A
-                        Term::app(Rc::new(Term::Ctor("Nat".to_string(), 1, vec![])), Term::var(2)), // succ n
+                        Term::app(
+                            Rc::new(Term::Ctor("Nat".to_string(), 1, vec![])),
+                            Term::var(2),
+                        ), // succ n
                     ),
                     BinderInfo::Default,
                 ),
@@ -316,12 +493,35 @@ fn test_indexed_recursor_uses_field_indices() {
         num_params: 1,
         ty: vec_ty,
         ctors: vec![
-            Constructor { name: "nil".to_string(), ty: nil_ty },
-            Constructor { name: "cons".to_string(), ty: cons_ty },
+            Constructor {
+                name: "nil".to_string(),
+                ty: nil_ty,
+            },
+            Constructor {
+                name: "cons".to_string(),
+                ty: cons_ty,
+            },
         ],
         is_copy: false,
+        markers: vec![],
+        axioms: vec![],
+        primitive_deps: vec![],
     };
     env.add_inductive(vec_decl).unwrap();
+
+    let info = env.inductive_info("Vec").expect("Vec inductive info");
+    assert_eq!(info.recursor.num_params, 1);
+    assert_eq!(info.recursor.num_indices, 1);
+    assert_eq!(info.recursor.num_ctors, 2);
+    assert_eq!(info.recursor.expected_args, 1 + 1 + 2 + 1 + 1);
+    let cons_info = &info.recursor.ctor_infos[1];
+    assert_eq!(cons_info.arity, 4);
+    assert_eq!(cons_info.rec_indices.len(), 4);
+    let cons_rec_indices_ok = match cons_info.rec_indices.get(3) {
+        Some(Some(indices)) => indices.len() == 1,
+        _ => false,
+    };
+    assert!(cons_rec_indices_ok);
 
     // Free variables in outer context: [A, n, x, xs] (xs is Var 0)
     let a = Term::var(3);
@@ -363,10 +563,7 @@ fn test_indexed_recursor_uses_field_indices() {
         Term::app(
             Term::app(
                 Term::app(
-                    Term::app(
-                        Term::app(recursor.clone(), a.clone()),
-                        motive.clone(),
-                    ),
+                    Term::app(Term::app(recursor.clone(), a.clone()), motive.clone()),
                     minor_nil.clone(),
                 ),
                 minor_cons.clone(),
@@ -380,13 +577,7 @@ fn test_indexed_recursor_uses_field_indices() {
     let ih_expected = Term::app(
         Term::app(
             Term::app(
-                Term::app(
-                    Term::app(
-                        Term::app(recursor, a.clone()),
-                        motive,
-                    ),
-                    minor_nil,
-                ),
+                Term::app(Term::app(Term::app(recursor, a.clone()), motive), minor_nil),
                 minor_cons,
             ),
             n.clone(),
@@ -410,6 +601,7 @@ fn test_defeq_deterministic() {
         Rc::new(Term::Sort(Level::Zero)),
         Rc::new(Term::Var(0)),
         BinderInfo::Default,
+        FunctionKind::Fn,
     ));
 
     // Run multiple times to check determinism
@@ -432,8 +624,13 @@ fn test_beta_reduction() {
 
     // (lam x:Prop. x) applied to Prop
     let prop = Rc::new(Term::Sort(Level::Zero));
-    let identity = Rc::new(Term::Lam(prop.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
-    let app = Rc::new(Term::App(identity, prop.clone()));
+    let identity = Rc::new(Term::Lam(
+        prop.clone(),
+        Rc::new(Term::Var(0)),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
+    let app = Term::app(identity, prop.clone());
 
     // Should reduce to Prop
     let reduced = whnf(&env, app, Transparency::Reducible).expect("whnf failed");
@@ -453,25 +650,32 @@ fn test_nested_beta() {
     let prop = Rc::new(Term::Sort(Level::Zero));
 
     // lam y. y
-    let id = Rc::new(Term::Lam(prop.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
+    let id = Rc::new(Term::Lam(
+        prop.clone(),
+        Rc::new(Term::Var(0)),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
 
     // lam f. lam x. f x
     let apply = Rc::new(Term::Lam(
         prop.clone(), // type of f (simplified)
         Rc::new(Term::Lam(
             prop.clone(), // type of x
-            Rc::new(Term::App(Rc::new(Term::Var(1)), Rc::new(Term::Var(0)))),
+            Term::app(Rc::new(Term::Var(1)), Rc::new(Term::Var(0))),
             BinderInfo::Default,
+            FunctionKind::Fn,
         )),
         BinderInfo::Default,
+        FunctionKind::Fn,
     ));
 
     // (apply id)
-    let apply_id = Rc::new(Term::App(apply, id));
+    let apply_id = Term::app(apply, id);
 
     // (apply id) z where z is just Prop
     let z = Rc::new(Term::Sort(Level::Zero)); // using Prop as "z"
-    let result = Rc::new(Term::App(apply_id, z.clone()));
+    let result = Term::app(apply_id, z.clone());
 
     let reduced = whnf(&env, result, Transparency::Reducible).expect("whnf failed");
 
@@ -535,12 +739,20 @@ fn test_level_max() {
 
     // Pi (A : Type 0) (B : Type 1). B should have type Type 1
     let type0 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
-    let type1 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Succ(Box::new(Level::Zero))))));
+    let type1 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Succ(Box::new(
+        Level::Zero,
+    ))))));
 
     let pi = Rc::new(Term::Pi(
         type0,
-        Rc::new(Term::Pi(type1, Rc::new(Term::Var(0)), BinderInfo::Default)),
+        Rc::new(Term::Pi(
+            type1,
+            Rc::new(Term::Var(0)),
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        )),
         BinderInfo::Default,
+        FunctionKind::Fn,
     ));
 
     let result = infer(&env, &ctx, pi).expect("Should infer universe");
@@ -569,13 +781,23 @@ fn test_substitution_preserves_typing() {
 
     // (lam P : Prop. P) - takes a Prop and returns it
     // This has type (P : Prop) -> Prop = Prop -> Prop
-    let id_prop = Rc::new(Term::Lam(prop.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
+    let id_prop = Rc::new(Term::Lam(
+        prop.clone(),
+        Rc::new(Term::Var(0)),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
 
     // Verify the identity on Prop type checks
     let id_type = infer(&env, &ctx, id_prop.clone()).expect("id on Prop should type check");
 
     // id_type should be Prop -> Prop = (Pi Prop Prop)
-    let expected_type = Rc::new(Term::Pi(prop.clone(), prop.clone(), BinderInfo::Default));
+    let expected_type = Rc::new(Term::Pi(
+        prop.clone(),
+        prop.clone(),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
     assert!(
         is_def_eq(&env, id_type, expected_type, Transparency::Reducible),
         "Identity function should have type Prop -> Prop"
@@ -590,6 +812,7 @@ fn test_substitution_preserves_typing() {
 #[test]
 fn test_inductive_type_declaration() {
     let mut env = Env::new();
+    env.set_allow_reserved_primitives(true);
 
     // Set up Nat inductive with zero and succ
     let nat_ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
@@ -606,12 +829,17 @@ fn test_inductive_type_declaration() {
                 nat_ind.clone(),
                 nat_ind.clone(),
                 BinderInfo::Default,
+                FunctionKind::Fn,
             )),
         },
     ];
 
-    env.add_inductive(InductiveDecl::new_copy("Nat".to_string(), nat_ty.clone(), ctors))
-        .expect("Failed to add Nat");
+    env.add_inductive(InductiveDecl::new_copy(
+        "Nat".to_string(),
+        nat_ty.clone(),
+        ctors,
+    ))
+    .expect("Failed to add Nat");
 
     let ctx = Context::new();
 
@@ -633,6 +861,7 @@ fn test_inductive_type_declaration() {
 #[test]
 fn test_iota_reduction_succ_case() {
     let mut env = Env::new();
+    env.set_allow_reserved_primitives(true);
 
     // Nat : Type 0
     let nat_ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
@@ -645,7 +874,12 @@ fn test_iota_reduction_succ_case() {
         },
         Constructor {
             name: "succ".to_string(),
-            ty: Rc::new(Term::Pi(nat_ind.clone(), nat_ind.clone(), BinderInfo::Default)),
+            ty: Rc::new(Term::Pi(
+                nat_ind.clone(),
+                nat_ind.clone(),
+                BinderInfo::Default,
+                FunctionKind::Fn,
+            )),
         },
     ];
 
@@ -654,35 +888,41 @@ fn test_iota_reduction_succ_case() {
 
     // Build: Nat.rec motive base step (succ zero)
     // motive = λ_. Nat, base = zero, step = λn. λih. succ ih
-    let rec = Rc::new(Term::Rec("Nat".to_string(), vec![Level::Succ(Box::new(Level::Zero))]));
+    let rec = Rc::new(Term::Rec(
+        "Nat".to_string(),
+        vec![Level::Succ(Box::new(Level::Zero))],
+    ));
     let motive = Rc::new(Term::Lam(
         nat_ind.clone(),
         nat_ind.clone(),
         BinderInfo::Default,
+        FunctionKind::Fn,
     ));
     let base = Rc::new(Term::Ctor("Nat".to_string(), 0, vec![]));
     let step = Rc::new(Term::Lam(
         nat_ind.clone(),
         Rc::new(Term::Lam(
             nat_ind.clone(),
-            Rc::new(Term::App(
+            Term::app(
                 Rc::new(Term::Ctor("Nat".to_string(), 1, vec![])),
                 Rc::new(Term::Var(0)),
-            )),
+            ),
             BinderInfo::Default,
+            FunctionKind::Fn,
         )),
         BinderInfo::Default,
+        FunctionKind::Fn,
     ));
 
-    let succ_zero = Rc::new(Term::App(
+    let succ_zero = Term::app(
         Rc::new(Term::Ctor("Nat".to_string(), 1, vec![])),
         base.clone(),
-    ));
+    );
 
-    let app1 = Rc::new(Term::App(rec, motive));
-    let app2 = Rc::new(Term::App(app1, base.clone()));
-    let app3 = Rc::new(Term::App(app2, step));
-    let app4 = Rc::new(Term::App(app3, succ_zero.clone()));
+    let app1 = Term::app(rec, motive);
+    let app2 = Term::app(app1, base.clone());
+    let app3 = Term::app(app2, step);
+    let app4 = Term::app(app3, succ_zero.clone());
 
     let reduced = whnf(&env, app4, Transparency::Reducible).expect("whnf failed");
 
@@ -696,6 +936,7 @@ fn test_iota_reduction_succ_case() {
 #[test]
 fn test_iota_reduction_zero_case() {
     let mut env = Env::new();
+    env.set_allow_reserved_primitives(true);
 
     // Nat : Type 0
     let nat_ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
@@ -708,7 +949,12 @@ fn test_iota_reduction_zero_case() {
         },
         Constructor {
             name: "succ".to_string(),
-            ty: Rc::new(Term::Pi(nat_ind.clone(), nat_ind.clone(), BinderInfo::Default)),
+            ty: Rc::new(Term::Pi(
+                nat_ind.clone(),
+                nat_ind.clone(),
+                BinderInfo::Default,
+                FunctionKind::Fn,
+            )),
         },
     ];
 
@@ -716,32 +962,38 @@ fn test_iota_reduction_zero_case() {
         .expect("Failed to add Nat");
 
     // Build: Nat.rec motive base step zero
-    let rec = Rc::new(Term::Rec("Nat".to_string(), vec![Level::Succ(Box::new(Level::Zero))]));
+    let rec = Rc::new(Term::Rec(
+        "Nat".to_string(),
+        vec![Level::Succ(Box::new(Level::Zero))],
+    ));
     let motive = Rc::new(Term::Lam(
         nat_ind.clone(),
         nat_ind.clone(),
         BinderInfo::Default,
+        FunctionKind::Fn,
     ));
     let base = Rc::new(Term::Ctor("Nat".to_string(), 0, vec![]));
     let step = Rc::new(Term::Lam(
         nat_ind.clone(),
         Rc::new(Term::Lam(
             nat_ind.clone(),
-            Rc::new(Term::App(
+            Term::app(
                 Rc::new(Term::Ctor("Nat".to_string(), 1, vec![])),
                 Rc::new(Term::Var(0)),
-            )),
+            ),
             BinderInfo::Default,
+            FunctionKind::Fn,
         )),
         BinderInfo::Default,
+        FunctionKind::Fn,
     ));
 
     let zero = base.clone();
 
-    let app1 = Rc::new(Term::App(rec, motive));
-    let app2 = Rc::new(Term::App(app1, base.clone()));
-    let app3 = Rc::new(Term::App(app2, step));
-    let app4 = Rc::new(Term::App(app3, zero.clone()));
+    let app1 = Term::app(rec, motive);
+    let app2 = Term::app(app1, base.clone());
+    let app3 = Term::app(app2, step);
+    let app4 = Term::app(app3, zero.clone());
 
     let reduced = whnf(&env, app4, Transparency::Reducible).expect("whnf failed");
 
@@ -769,7 +1021,12 @@ fn test_prop_elimination_restricted() {
 
     let ctor = Constructor {
         name: "mk".to_string(),
-        ty: Rc::new(Term::Pi(type0, pwrap.clone(), BinderInfo::Default)),
+        ty: Rc::new(Term::Pi(
+            type0,
+            pwrap.clone(),
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        )),
     };
 
     let decl = InductiveDecl {
@@ -779,6 +1036,9 @@ fn test_prop_elimination_restricted() {
         ty: prop,
         ctors: vec![ctor],
         is_copy: true,
+        markers: vec![],
+        axioms: vec![],
+        primitive_deps: vec![],
     };
 
     env.add_inductive(decl).expect("Failed to add PWrap");
@@ -798,6 +1058,7 @@ fn test_prop_elimination_restricted() {
 #[test]
 fn test_eq_allows_large_elimination() {
     let mut env = Env::new();
+    env.set_allow_reserved_primitives(true);
     let ctx = Context::new();
 
     let prop = Rc::new(Term::Sort(Level::Zero));
@@ -808,25 +1069,38 @@ fn test_eq_allows_large_elimination() {
         type0.clone(),
         Rc::new(Term::Pi(
             Rc::new(Term::Var(0)),
-            Rc::new(Term::Pi(Rc::new(Term::Var(1)), prop.clone(), BinderInfo::Default)),
+            Rc::new(Term::Pi(
+                Rc::new(Term::Var(1)),
+                prop.clone(),
+                BinderInfo::Default,
+                FunctionKind::Fn,
+            )),
             BinderInfo::Default,
+            FunctionKind::Fn,
         )),
         BinderInfo::Default,
+        FunctionKind::Fn,
     ));
 
     // refl : (A : Type 0) -> (a : A) -> Eq A a a
     let eq_ind = Rc::new(Term::Ind("Eq".to_string(), vec![]));
-    let refl_body = Rc::new(Term::App(
-        Rc::new(Term::App(
-            Rc::new(Term::App(eq_ind, Rc::new(Term::Var(1)))),
+    let refl_body = Term::app(
+        Term::app(
+            Term::app(eq_ind.clone(), Rc::new(Term::Var(1))),
             Rc::new(Term::Var(0)),
-        )),
+        ),
         Rc::new(Term::Var(0)),
-    ));
+    );
     let refl_ty = Rc::new(Term::Pi(
         type0.clone(),
-        Rc::new(Term::Pi(Rc::new(Term::Var(0)), refl_body, BinderInfo::Default)),
+        Rc::new(Term::Pi(
+            Rc::new(Term::Var(0)),
+            refl_body,
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        )),
         BinderInfo::Default,
+        FunctionKind::Fn,
     ));
 
     let decl = InductiveDecl {
@@ -839,6 +1113,9 @@ fn test_eq_allows_large_elimination() {
             ty: refl_ty,
         }],
         is_copy: false,
+        markers: vec![],
+        axioms: vec![],
+        primitive_deps: vec![],
     };
 
     env.add_inductive(decl).expect("Failed to add Eq");
@@ -864,8 +1141,18 @@ fn test_prop_proofs_irrelevant() {
     let prop = Rc::new(Term::Sort(Level::Zero));
 
     // Two identity proofs (same structure)
-    let proof1 = Rc::new(Term::Lam(prop.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
-    let proof2 = Rc::new(Term::Lam(prop.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
+    let proof1 = Rc::new(Term::Lam(
+        prop.clone(),
+        Rc::new(Term::Var(0)),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
+    let proof2 = Rc::new(Term::Lam(
+        prop.clone(),
+        Rc::new(Term::Var(0)),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
 
     // Same structure should be defeq
     assert!(
@@ -895,6 +1182,9 @@ fn test_large_elim_allowed_for_prop_singleton() {
         ty: prop,
         ctors: vec![ctor],
         is_copy: true,
+        markers: vec![],
+        axioms: vec![],
+        primitive_deps: vec![],
     };
 
     env.add_inductive(decl).expect("Failed to add UnitProp");
@@ -913,6 +1203,48 @@ fn test_large_elim_allowed_for_prop_singleton() {
     );
 }
 
+/// Test: Elimination into Prop is always allowed, even for multi-constructor Prop
+#[test]
+fn test_prop_elim_into_prop_allowed_multi_ctor() {
+    let mut env = Env::new();
+    let ctx = Context::new();
+
+    let prop = Rc::new(Term::Sort(Level::Zero));
+    let bool_prop = Rc::new(Term::Ind("BoolProp".to_string(), vec![]));
+    let ctors = vec![
+        Constructor {
+            name: "ptrue".to_string(),
+            ty: bool_prop.clone(),
+        },
+        Constructor {
+            name: "pfalse".to_string(),
+            ty: bool_prop.clone(),
+        },
+    ];
+
+    let decl = InductiveDecl {
+        name: "BoolProp".to_string(),
+        univ_params: vec![],
+        num_params: 0,
+        ty: prop,
+        ctors,
+        is_copy: true,
+        markers: vec![],
+        axioms: vec![],
+        primitive_deps: vec![],
+    };
+
+    env.add_inductive(decl).expect("Failed to add BoolProp");
+
+    let rec = Rc::new(Term::Rec("BoolProp".to_string(), vec![Level::Zero]));
+    let result = infer(&env, &ctx, rec);
+    assert!(
+        result.is_ok(),
+        "Prop elimination into Prop should be allowed for multi-ctor Prop: {:?}",
+        result
+    );
+}
+
 // =============================================================================
 // CLASSICAL LOGIC TRACKING (Scaffold)
 // =============================================================================
@@ -925,25 +1257,31 @@ fn test_classical_axiom_tracking() {
 
     // Declare a classical axiom and a non-classical axiom (name should not imply classical)
     let classical_def = Definition::axiom_classical("classical_choice".to_string(), prop.clone());
-    env.add_definition(classical_def).expect("Add classical axiom");
+    env.add_definition(classical_def)
+        .expect("Add classical axiom");
     let non_classical_def = Definition::axiom("classical_postulate".to_string(), prop.clone());
-    env.add_definition(non_classical_def).expect("Add non-classical axiom");
+    env.add_definition(non_classical_def)
+        .expect("Add non-classical axiom");
 
     // Use the classical axiom
-    let use_classical_def = Definition::total(
+    let mut use_classical_def = Definition::total(
         "use_classical".to_string(),
         prop.clone(),
         Rc::new(Term::Const("classical_choice".to_string(), vec![])),
     );
-    env.add_definition(use_classical_def).expect("Add use_classical");
+    use_classical_def.noncomputable = true;
+    env.add_definition(use_classical_def)
+        .expect("Add use_classical");
 
     // Use the non-classical axiom
-    let use_postulate_def = Definition::total(
+    let mut use_postulate_def = Definition::total(
         "use_postulate".to_string(),
         prop.clone(),
         Rc::new(Term::Const("classical_postulate".to_string(), vec![])),
     );
-    env.add_definition(use_postulate_def).expect("Add use_postulate");
+    use_postulate_def.noncomputable = true;
+    env.add_definition(use_postulate_def)
+        .expect("Add use_postulate");
 
     let classical_axiom = env.get_definition("classical_choice").unwrap();
     assert_eq!(
@@ -961,6 +1299,51 @@ fn test_classical_axiom_tracking() {
     assert!(classical_axiom_dependencies(&env, use_postulate).is_empty());
 }
 
+#[test]
+fn test_classical_axiom_dependencies_multiple() {
+    let mut env = Env::new();
+    let prop = Rc::new(Term::Sort(Level::Zero));
+
+    env.add_definition(Definition::axiom_classical(
+        "Choice".to_string(),
+        prop.clone(),
+    ))
+    .expect("Add Choice");
+    env.add_definition(Definition::axiom_classical("EM".to_string(), prop.clone()))
+        .expect("Add EM");
+
+    let mut use_choice = Definition::total(
+        "use_choice".to_string(),
+        prop.clone(),
+        Rc::new(Term::Const("Choice".to_string(), vec![])),
+    );
+    use_choice.noncomputable = true;
+    env.add_definition(use_choice).expect("Add use_choice");
+
+    let mut use_em = Definition::total(
+        "use_em".to_string(),
+        prop.clone(),
+        Rc::new(Term::Const("EM".to_string(), vec![])),
+    );
+    use_em.noncomputable = true;
+    env.add_definition(use_em).expect("Add use_em");
+
+    let mut use_both = Definition::total(
+        "use_both".to_string(),
+        prop.clone(),
+        Rc::new(Term::LetE(
+            prop.clone(),
+            Rc::new(Term::Const("use_choice".to_string(), vec![])),
+            Rc::new(Term::Const("use_em".to_string(), vec![])),
+        )),
+    );
+    use_both.noncomputable = true;
+    env.add_definition(use_both).expect("Add use_both");
+
+    let deps = classical_axiom_dependencies(&env, env.get_definition("use_both").unwrap());
+    assert_eq!(deps, vec!["Choice".to_string(), "EM".to_string()]);
+}
+
 /// Test: Constructive proofs should not be marked classical
 #[test]
 fn test_constructive_unmarked() {
@@ -968,10 +1351,283 @@ fn test_constructive_unmarked() {
     let ctx = Context::new();
 
     let prop = Rc::new(Term::Sort(Level::Zero));
-    let id = Rc::new(Term::Lam(prop.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
+    let id = Rc::new(Term::Lam(
+        prop.clone(),
+        Rc::new(Term::Var(0)),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
 
     // This should type check without any classical dependency
     let _ = infer(&env, &ctx, id).expect("Constructive term should type check");
+}
+
+// =============================================================================
+// COPY INSTANCE RESOLUTION TESTS
+// =============================================================================
+
+#[test]
+fn test_conditional_copy_instance_resolution() {
+    let mut env = Env::new();
+    env.set_allow_reserved_primitives(true);
+
+    let type0 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
+
+    // Nat : Type 0 (Copy)
+    let nat_ref = Term::ind("Nat".to_string());
+    let nat_decl = InductiveDecl {
+        name: "Nat".to_string(),
+        univ_params: vec![],
+        num_params: 0,
+        ty: type0.clone(),
+        ctors: vec![
+            Constructor {
+                name: "zero".to_string(),
+                ty: nat_ref.clone(),
+            },
+            Constructor {
+                name: "succ".to_string(),
+                ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default),
+            },
+        ],
+        is_copy: true,
+        markers: vec![],
+        axioms: vec![],
+        primitive_deps: vec![],
+    };
+    env.add_inductive(nat_decl).expect("Failed to add Nat");
+
+    // Option A : Type -> Type (Copy if A is Copy)
+    let option_ref = Term::ind("Option".to_string());
+    let option_ty = Term::pi(type0.clone(), type0.clone(), BinderInfo::Default);
+    let none_ty = Term::pi(
+        type0.clone(),
+        Term::app(option_ref.clone(), Term::var(0)),
+        BinderInfo::Default,
+    );
+    let some_ty = Term::pi(
+        type0.clone(),
+        Term::pi(
+            Term::var(0),
+            Term::app(option_ref.clone(), Term::var(1)),
+            BinderInfo::Default,
+        ),
+        BinderInfo::Default,
+    );
+    let option_decl = InductiveDecl {
+        name: "Option".to_string(),
+        univ_params: vec![],
+        num_params: 1,
+        ty: option_ty,
+        ctors: vec![
+            Constructor {
+                name: "none".to_string(),
+                ty: none_ty,
+            },
+            Constructor {
+                name: "some".to_string(),
+                ty: some_ty,
+            },
+        ],
+        is_copy: true,
+        markers: vec![],
+        axioms: vec![],
+        primitive_deps: vec![],
+    };
+    env.add_inductive(option_decl)
+        .expect("Failed to add Option");
+
+    // List A : Type -> Type (recursive, not Copy)
+    let list_ref = Term::ind("List".to_string());
+    let list_ty = Term::pi(type0.clone(), type0.clone(), BinderInfo::Default);
+    let nil_ty = Term::pi(
+        type0.clone(),
+        Term::app(list_ref.clone(), Term::var(0)),
+        BinderInfo::Default,
+    );
+    let cons_ty = Term::pi(
+        type0.clone(),
+        Term::pi(
+            Term::var(0),
+            Term::pi(
+                Term::app(list_ref.clone(), Term::var(1)),
+                Term::app(list_ref.clone(), Term::var(2)),
+                BinderInfo::Default,
+            ),
+            BinderInfo::Default,
+        ),
+        BinderInfo::Default,
+    );
+    let list_decl = InductiveDecl {
+        name: "List".to_string(),
+        univ_params: vec![],
+        num_params: 1,
+        ty: list_ty,
+        ctors: vec![
+            Constructor {
+                name: "nil".to_string(),
+                ty: nil_ty,
+            },
+            Constructor {
+                name: "cons".to_string(),
+                ty: cons_ty,
+            },
+        ],
+        is_copy: false,
+        markers: vec![],
+        axioms: vec![],
+        primitive_deps: vec![],
+    };
+    env.add_inductive(list_decl).expect("Failed to add List");
+
+    let option_nat = Term::app(option_ref.clone(), nat_ref.clone());
+    assert!(
+        is_copy_type_in_env(&env, &option_nat),
+        "Option Nat should be Copy"
+    );
+
+    let list_nat = Term::app(list_ref.clone(), nat_ref);
+    assert!(
+        !is_copy_type_in_env(&env, &list_nat),
+        "List Nat should not be Copy"
+    );
+
+    let option_list_nat = Term::app(option_ref, list_nat);
+    assert!(
+        !is_copy_type_in_env(&env, &option_list_nat),
+        "Option (List Nat) should not be Copy"
+    );
+}
+
+#[test]
+fn test_ref_shared_copy_semantics() {
+    let mut env = Env::new();
+    env.set_allow_reserved_primitives(true);
+
+    let sort1 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
+    env.add_definition(Definition::axiom("Shared".to_string(), sort1.clone()))
+        .expect("Failed to add Shared");
+    env.add_definition(Definition::axiom("Mut".to_string(), sort1.clone()))
+        .expect("Failed to add Mut");
+
+    let ref_ty = Rc::new(Term::Pi(
+        sort1.clone(),
+        Rc::new(Term::Pi(
+            sort1.clone(),
+            sort1.clone(),
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        )),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
+    env.add_definition(Definition::axiom("Ref".to_string(), ref_ty))
+        .expect("Failed to add Ref");
+    env.add_definition(Definition::axiom("A".to_string(), sort1.clone()))
+        .expect("Failed to add A");
+
+    let const_term = |name: &str| Rc::new(Term::Const(name.to_string(), vec![]));
+    let ref_shared = Term::app(
+        Term::app(const_term("Ref"), const_term("Shared")),
+        const_term("A"),
+    );
+    let ref_mut = Term::app(
+        Term::app(const_term("Ref"), const_term("Mut")),
+        const_term("A"),
+    );
+
+    assert!(
+        is_copy_type_in_env(&env, &ref_shared),
+        "Ref Shared A should be Copy"
+    );
+    assert!(
+        !is_copy_type_in_env(&env, &ref_mut),
+        "Ref Mut A should not be Copy"
+    );
+}
+
+#[test]
+fn test_ref_label_defeq_distinguishes_labels() {
+    let mut env = Env::new();
+    env.set_allow_reserved_primitives(true);
+
+    let sort1 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
+    env.add_definition(Definition::axiom("Shared".to_string(), sort1.clone()))
+        .expect("Failed to add Shared");
+    env.add_definition(Definition::axiom("Mut".to_string(), sort1.clone()))
+        .expect("Failed to add Mut");
+
+    let ref_ty = Rc::new(Term::Pi(
+        sort1.clone(),
+        Rc::new(Term::Pi(
+            sort1.clone(),
+            sort1.clone(),
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        )),
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ));
+    env.add_definition(Definition::axiom("Ref".to_string(), ref_ty))
+        .expect("Failed to add Ref");
+    env.add_definition(Definition::axiom("A".to_string(), sort1.clone()))
+        .expect("Failed to add A");
+
+    let const_term = |name: &str| Rc::new(Term::Const(name.to_string(), vec![]));
+    let ref_shared = Term::app(const_term("Ref"), const_term("Shared"));
+    let ref_a = Term::app_with_label(ref_shared.clone(), const_term("A"), Some("a".to_string()));
+    let ref_b = Term::app_with_label(ref_shared, const_term("A"), Some("b".to_string()));
+
+    assert!(
+        !is_def_eq(&env, ref_a, ref_b, Transparency::Reducible),
+        "Ref #[a] Shared A should not be defeq to Ref #[b] Shared A"
+    );
+}
+
+fn double_apply_term(kind: FunctionKind) -> Rc<Term> {
+    let ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
+    let f_ty = Rc::new(Term::Pi(ty.clone(), ty.clone(), BinderInfo::Default, kind));
+    let inner = Term::app(Rc::new(Term::Var(1)), Rc::new(Term::Var(0)));
+    let body = Term::app(Rc::new(Term::Var(1)), inner);
+    let lam_x = Rc::new(Term::Lam(ty.clone(), body, BinderInfo::Default, kind));
+    Rc::new(Term::Lam(
+        f_ty,
+        lam_x,
+        BinderInfo::Default,
+        FunctionKind::Fn,
+    ))
+}
+
+#[test]
+fn test_fn_twice_typechecks() {
+    let env = Env::new();
+    let ctx = Context::new();
+    let term = double_apply_term(FunctionKind::Fn);
+    let ty = infer(&env, &ctx, term).expect("Fn repeated call should typecheck");
+
+    match &*ty {
+        Term::Pi(dom, _, _, FunctionKind::Fn) => match &**dom {
+            Term::Pi(_, _, _, FunctionKind::Fn) => {}
+            other => panic!("Expected Fn function type, got {:?}", other),
+        },
+        other => panic!("Expected Pi type, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_fnmut_twice_typechecks() {
+    let env = Env::new();
+    let ctx = Context::new();
+    let term = double_apply_term(FunctionKind::FnMut);
+    let ty = infer(&env, &ctx, term).expect("FnMut repeated call should typecheck");
+
+    match &*ty {
+        Term::Pi(dom, _, _, FunctionKind::Fn) => match &**dom {
+            Term::Pi(_, _, _, FunctionKind::FnMut) => {}
+            other => panic!("Expected FnMut function type, got {:?}", other),
+        },
+        other => panic!("Expected Pi type, got {:?}", other),
+    }
 }
 
 #[cfg(test)]
@@ -989,11 +1645,15 @@ mod property_tests {
                 Rc::new(Term::Sort(Level::Zero)),
                 Rc::new(Term::Var(0)),
                 BinderInfo::Default,
+                FunctionKind::Fn,
             )),
         ];
 
         for term in terms {
-            assert!(is_def_eq(&env, term.clone(), term.clone(), Transparency::Reducible), "Defeq must be reflexive");
+            assert!(
+                is_def_eq(&env, term.clone(), term.clone(), Transparency::Reducible),
+                "Defeq must be reflexive"
+            );
         }
     }
 
@@ -1006,7 +1666,10 @@ mod property_tests {
         let b = Rc::new(Term::Sort(Level::Zero));
 
         if is_def_eq(&env, a.clone(), b.clone(), Transparency::Reducible) {
-            assert!(is_def_eq(&env, b, a, Transparency::Reducible), "Defeq must be symmetric");
+            assert!(
+                is_def_eq(&env, b, a, Transparency::Reducible),
+                "Defeq must be symmetric"
+            );
         }
     }
 
@@ -1016,12 +1679,31 @@ mod property_tests {
         let env = Env::new();
 
         let prop = Rc::new(Term::Sort(Level::Zero));
-        let id = Rc::new(Term::Lam(prop.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
-        let app = Rc::new(Term::App(id, prop.clone()));
-        let let_term = Rc::new(Term::LetE(prop.clone(), prop.clone(), Rc::new(Term::Var(0))));
+        let id = Rc::new(Term::Lam(
+            prop.clone(),
+            Rc::new(Term::Var(0)),
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        ));
+        let app = Term::app(id, prop.clone());
+        let let_term = Rc::new(Term::LetE(
+            prop.clone(),
+            prop.clone(),
+            Rc::new(Term::Var(0)),
+        ));
 
-        assert!(is_def_eq(&env, app.clone(), prop.clone(), Transparency::Reducible));
-        assert!(is_def_eq(&env, prop.clone(), let_term.clone(), Transparency::Reducible));
+        assert!(is_def_eq(
+            &env,
+            app.clone(),
+            prop.clone(),
+            Transparency::Reducible
+        ));
+        assert!(is_def_eq(
+            &env,
+            prop.clone(),
+            let_term.clone(),
+            Transparency::Reducible
+        ));
         assert!(
             is_def_eq(&env, app, let_term, Transparency::Reducible),
             "Defeq must be transitive"
@@ -1034,13 +1716,28 @@ mod property_tests {
         let env = Env::new();
 
         let prop = Rc::new(Term::Sort(Level::Zero));
-        let id1 = Rc::new(Term::Lam(prop.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
-        let id2 = Rc::new(Term::Lam(prop.clone(), Rc::new(Term::Var(0)), BinderInfo::Default));
+        let id1 = Rc::new(Term::Lam(
+            prop.clone(),
+            Rc::new(Term::Var(0)),
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        ));
+        let id2 = Rc::new(Term::Lam(
+            prop.clone(),
+            Rc::new(Term::Var(0)),
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        ));
 
-        assert!(is_def_eq(&env, id1.clone(), id2.clone(), Transparency::Reducible));
+        assert!(is_def_eq(
+            &env,
+            id1.clone(),
+            id2.clone(),
+            Transparency::Reducible
+        ));
 
-        let app1 = Rc::new(Term::App(id1, prop.clone()));
-        let app2 = Rc::new(Term::App(id2, prop));
+        let app1 = Term::app(id1, prop.clone());
+        let app2 = Term::app(id2, prop);
 
         assert!(
             is_def_eq(&env, app1, app2, Transparency::Reducible),
@@ -1068,12 +1765,22 @@ mod property_tests {
     #[test]
     fn prop_subst_under_lambda() {
         let prop = Rc::new(Term::Sort(Level::Zero));
-        let body = Rc::new(Term::App(Rc::new(Term::Var(1)), Rc::new(Term::Var(0))));
-        let lam = Rc::new(Term::Lam(prop.clone(), body, BinderInfo::Default));
+        let body = Term::app(Rc::new(Term::Var(1)), Rc::new(Term::Var(0)));
+        let lam = Rc::new(Term::Lam(
+            prop.clone(),
+            body,
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        ));
 
         let result = lam.subst(0, &prop);
-        let expected_body = Rc::new(Term::App(prop.clone(), Rc::new(Term::Var(0))));
-        let expected = Rc::new(Term::Lam(prop.clone(), expected_body, BinderInfo::Default));
+        let expected_body = Term::app(prop.clone(), Rc::new(Term::Var(0)));
+        let expected = Rc::new(Term::Lam(
+            prop.clone(),
+            expected_body,
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        ));
 
         assert_eq!(result, expected);
     }

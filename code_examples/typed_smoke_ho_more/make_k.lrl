@@ -1,0 +1,6 @@
+(def make_k
+  (pi #[fn] n Nat (pi #[fn] x Nat Nat))
+  (lam #[fn] n Nat
+    (lam #[fn] x Nat n)))
+
+((make_k (succ zero)) zero)

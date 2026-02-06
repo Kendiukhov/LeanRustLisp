@@ -1,0 +1,8 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Warning: Axiom 'BadType' declared (unsafe: BadType)
+- Error: [K0020] Elaboration error (Type) in 'bad': Type inference failed during elaboration: Partial definition BadType used in type context

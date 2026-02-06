@@ -1,0 +1,9 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Warning: Axiom 'Nat' declared
+- Warning: Axiom 'unsafe_index' declared (unsafe: unsafe_index)
+- Error: [F0206] Elaboration error (Value) in 'bad': Function kind mismatch: expected Fn, got FnOnce

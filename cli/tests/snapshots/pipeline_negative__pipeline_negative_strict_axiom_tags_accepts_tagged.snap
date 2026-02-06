@@ -1,0 +1,8 @@
+---
+source: cli/tests/pipeline_negative.rs
+assertion_line: 264
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Warning: Axiom 'my_axiom' declared (classical: my_axiom)

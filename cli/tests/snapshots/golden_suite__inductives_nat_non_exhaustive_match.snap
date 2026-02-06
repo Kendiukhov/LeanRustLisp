@@ -3,4 +3,4 @@ source: cli/tests/golden_suite.rs
 expression: output
 ---
 Diagnostics:
-- Error: Elaboration error (Value) in 'bad': Non-exhaustive match on Nat: missing cases ["succ"]
+- Error: [F0211] Elaboration error (Value) in 'bad': Non-exhaustive match on Nat: missing cases ["succ"]

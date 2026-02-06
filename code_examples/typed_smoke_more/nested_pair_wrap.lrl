@@ -1,0 +1,19 @@
+(inductive Pair (sort 1)
+  (ctor pair (pi a Nat (pi b Nat Pair)))
+)
+
+(inductive Wrap (sort 1)
+  (ctor wrap (pi p Pair Wrap))
+  (ctor empty Wrap)
+)
+
+(def second
+  (pi w Wrap Nat)
+  (lam w Wrap
+    (match w Nat
+      (case (empty) zero)
+      (case (wrap p)
+        (match p Nat
+          (case (pair a b) b))))))
+
+(second (wrap (pair zero (succ zero))))

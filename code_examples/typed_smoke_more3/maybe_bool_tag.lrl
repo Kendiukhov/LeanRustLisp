@@ -1,0 +1,12 @@
+(inductive copy MaybeBool (sort 1)
+  (ctor none MaybeBool)
+  (ctor some (pi b Bool MaybeBool))
+)
+
+(def is_some (pi m MaybeBool Bool)
+  (lam m MaybeBool
+    (match m Bool
+      (case (none) false)
+      (case (some b) true))))
+
+(is_some (some false))

@@ -1,0 +1,7 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Error: Explicit Copy instances must be declared unsafe: (unsafe instance copy ...)

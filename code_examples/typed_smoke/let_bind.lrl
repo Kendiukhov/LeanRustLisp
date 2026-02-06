@@ -1,0 +1,5 @@
+(def let_test (pi n Nat Nat)
+  (lam n Nat
+    (let m Nat n m)))
+
+(let_test (succ zero))

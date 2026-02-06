@@ -1,0 +1,42 @@
+---
+source: cli/tests/golden_suite.rs
+expression: output
+---
+DefEqConfig
+  fuel: 100000
+  source: default
+  transparency: Reducible
+
+ElaboratedDef choose_nat
+  ty: Pi(Ind("Bool", []), Pi(Ind("Nat", []), Ind("Nat", []), Default, FnOnce), Default, FnOnce)
+  val: Lam(Ind("Bool", []), Lam(Ind("Nat", []), App(App(App(Const("if_once", []), Var(1)), Var(0)), Const("zero", [])), Default, FnOnce), Default, FnOnce)
+
+ElaboratedDef if_once
+  ty: Pi(Ind("Bool", []), Pi(Ind("Nat", []), Pi(Ind("Nat", []), Ind("Nat", []), Default, FnOnce), Default, FnOnce), Default, FnOnce)
+  val: Lam(Ind("Bool", []), App(App(App(App(Rec("Bool", [Succ(Zero)]), Lam(Ind("Bool", []), Pi(Ind("Nat", []), Pi(Ind("Nat", []), Ind("Nat", []), Default, FnOnce), Default, FnOnce), Default, Fn)), Lam(Ind("Nat", []), Lam(Ind("Nat", []), Var(1), Default, FnOnce), Default, FnOnce)), Lam(Ind("Nat", []), Lam(Ind("Nat", []), Var(0), Default, FnOnce), Default, FnOnce)), Var(0)), Default, FnOnce)
+
+MirBody choose_nat
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(1, []), ty: ClosureOnce(Region(1), [], [Bool], FnOnce([], [Nat], Nat)) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: FnOnce([], [Bool], FnOnce([], [Nat], Nat)), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Bool, 1212688576893102294): AdtLayout { adt: AdtId(Bool, 1212688576893102294), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Bool, 1212688576893102294), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Bool, 1212688576893102294), index: 1 }, fields: [] }] }, AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }} } }
+
+MirBody if_once
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(5, []), ty: ClosureOnce(Region(1), [], [Bool], FnOnce([], [Nat], FnOnce([], [Nat], Nat))) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: FnOnce([], [Bool], FnOnce([], [Nat], FnOnce([], [Nat], Nat))), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Bool, 1212688576893102294): AdtLayout { adt: AdtId(Bool, 1212688576893102294), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Bool, 1212688576893102294), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Bool, 1212688576893102294), index: 1 }, fields: [] }] }, AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }} } }
+
+BorrowCheck choose_nat
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+BorrowCheck if_once
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)

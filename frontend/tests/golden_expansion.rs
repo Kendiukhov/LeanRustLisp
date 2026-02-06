@@ -1,5 +1,6 @@
-use frontend::parser::Parser;
+use frontend::desugar::Desugarer;
 use frontend::macro_expander::Expander;
+use frontend::parser::Parser;
 use insta::assert_snapshot;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,13 +51,15 @@ fn expand_source(source: &str) -> String {
     let mut parser = Parser::new(source);
     let syntax_list = parser.parse().expect("Failed to parse");
     let mut expander = Expander::new();
+    let mut desugarer = Desugarer::new();
 
     let mut results = String::new();
     for syntax in syntax_list {
         match expander.expand(syntax) {
-            Ok(Some(term)) => {
-                results.push_str(&format!("{:?}\n", term));
-            }
+            Ok(Some(expanded)) => match desugarer.desugar(expanded) {
+                Ok(term) => results.push_str(&format!("{:?}\n", term)),
+                Err(e) => results.push_str(&format!("Error: {}\n", e)),
+            },
             Ok(None) => {
                 results.push_str("Macro defined\n");
             }
@@ -81,11 +84,14 @@ fn golden_macro_expansion_suite() {
     assert!(!files.is_empty(), "No .lrl files found in {:?}", root);
 
     for path in files {
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("Failed to read {:?}", path));
+        let source =
+            fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read {:?}", path));
         let output = expand_source(&source);
         let output_second = expand_source(&source);
-        assert_eq!(output, output_second, "Macro expansion should be deterministic");
+        assert_eq!(
+            output, output_second,
+            "Macro expansion should be deterministic"
+        );
 
         let snap_name = snapshot_name(&root, &path);
         assert_snapshot!(snap_name, output);

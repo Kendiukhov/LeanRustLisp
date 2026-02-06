@@ -3,4 +3,4 @@ source: cli/tests/golden_suite.rs
 expression: output
 ---
 Diagnostics:
-- Error: Elaboration error (Value) in 'bad': Unknown constructor bogus in match on Vec
+- Error: [F0213] Elaboration error (Value) in 'bad': Unknown constructor bogus in match on Vec

@@ -1,15 +1,17 @@
-pub mod parser;
-pub mod elaborator;
-pub mod surface;
-pub mod macro_expander;
 pub mod declaration_parser;
+pub mod desugar;
 pub mod diagnostics;
+pub mod elaborator;
+pub mod macro_expander;
+pub mod parser;
+pub mod surface;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
+    use crate::desugar::Desugarer;
     use crate::macro_expander::Expander;
+    use crate::parser::Parser;
     use crate::surface::ScopeId;
 
     #[test]
@@ -23,20 +25,29 @@ mod tests {
 
     #[test]
     fn test_expand_lam() {
-         let input = "(lam x (sort 0) x)";
-         let mut parser = Parser::new(input);
-         let syntax = parser.parse().expect("Failed to parse");
+        let input = "(lam x (sort 0) x)";
+        let mut parser = Parser::new(input);
+        let syntax = parser.parse().expect("Failed to parse");
 
-         let mut expander = Expander::new();
-         let term = expander.expand(syntax[0].clone()).expect("Failed to expand").unwrap();
-         println!("Expanded: {:?}", term);
+        let mut expander = Expander::new();
+        let mut desugarer = Desugarer::new();
+        let expanded = expander
+            .expand(syntax[0].clone())
+            .expect("Failed to expand")
+            .unwrap();
+        let term = desugarer.desugar(expanded).expect("Failed to desugar");
+        println!("Expanded: {:?}", term);
 
-         match &term.kind {
-             surface::SurfaceTermKind::Lam(n, _, _, _) => {
-                 assert!(n.starts_with("x_g"), "Expected name starting with x_g, got {}", n);
-             }
-             _ => panic!("Expected Lam"),
-         }
+        match &term.kind {
+            surface::SurfaceTermKind::Lam(n, _, _, _, _) => {
+                assert!(
+                    n.starts_with("x_g"),
+                    "Expected name starting with x_g, got {}",
+                    n
+                );
+            }
+            _ => panic!("Expected Lam"),
+        }
     }
 
     #[test]
@@ -55,23 +66,33 @@ mod tests {
 
     #[test]
     fn test_hygiene_scopes_compatible() {
-        // Reference with more scopes can see definitions with fewer scopes
-        let ref_scopes = vec![ScopeId(0), ScopeId(1), ScopeId(2)];
+        // Exact match is compatible
+        let ref_scopes = vec![ScopeId(0), ScopeId(1)];
         let def_scopes = vec![ScopeId(0), ScopeId(1)];
         assert!(Expander::scopes_compatible(&ref_scopes, &def_scopes));
 
-        // Reference with fewer scopes cannot see definitions with more scopes
-        let ref_scopes2 = vec![ScopeId(0)];
+        // Superset reference is compatible with definition subset
+        let ref_scopes2 = vec![ScopeId(0), ScopeId(1), ScopeId(2)];
         let def_scopes2 = vec![ScopeId(0), ScopeId(1)];
-        assert!(!Expander::scopes_compatible(&ref_scopes2, &def_scopes2));
+        assert!(Expander::scopes_compatible(&ref_scopes2, &def_scopes2));
+
+        // Subset reference is not compatible with definition superset
+        let ref_scopes3 = vec![ScopeId(0)];
+        let def_scopes3 = vec![ScopeId(0), ScopeId(1)];
+        assert!(!Expander::scopes_compatible(&ref_scopes3, &def_scopes3));
 
         // Empty scopes are compatible with empty scopes
         let empty: Vec<ScopeId> = vec![];
         assert!(Expander::scopes_compatible(&empty, &empty));
 
-        // Any scopes are compatible with empty definition scopes
+        // Non-empty scopes do not match empty definition scopes
         let some_scopes = vec![ScopeId(0), ScopeId(1)];
-        assert!(Expander::scopes_compatible(&some_scopes, &empty));
+        assert!(!Expander::scopes_compatible(&some_scopes, &empty));
+
+        // Order should not matter for scope-set compatibility
+        let ref_scopes4 = vec![ScopeId(1), ScopeId(0)];
+        let def_scopes4 = vec![ScopeId(0), ScopeId(1)];
+        assert!(Expander::scopes_compatible(&ref_scopes4, &def_scopes4));
     }
 
     #[test]
@@ -83,14 +104,17 @@ mod tests {
 
         let mut expander = Expander::new();
         // This registers the macro but returns None
-        let _ = expander.expand_all_macros(syntax[0].clone()).expect("Failed to expand");
+        let _ = expander
+            .expand_all_macros(syntax[0].clone())
+            .expect("Failed to expand");
 
         // Now use the macro: (id y)
         let use_input = "(id y)";
         let mut parser2 = Parser::new(use_input);
         let use_syntax = parser2.parse().expect("Failed to parse");
 
-        let expanded = expander.expand_all_macros(use_syntax[0].clone())
+        let expanded = expander
+            .expand_all_macros(use_syntax[0].clone())
             .expect("Failed to expand")
             .expect("Expected expanded syntax");
 
@@ -112,14 +136,17 @@ mod tests {
         let syntax = parser.parse().expect("Failed to parse");
 
         let mut expander = Expander::new();
-        let _ = expander.expand_all_macros(syntax[0].clone()).expect("Failed to expand");
+        let _ = expander
+            .expand_all_macros(syntax[0].clone())
+            .expect("Failed to expand");
 
         // Use the macro: (const-zero)
         let use_input = "(const-zero)";
         let mut parser2 = Parser::new(use_input);
         let use_syntax = parser2.parse().expect("Failed to parse");
 
-        let expanded = expander.expand_all_macros(use_syntax[0].clone())
+        let expanded = expander
+            .expand_all_macros(use_syntax[0].clone())
             .expect("Failed to expand")
             .expect("Expected expanded syntax");
 
@@ -127,18 +154,25 @@ mod tests {
         if let surface::SyntaxKind::Symbol(s) = &expanded.kind {
             assert_eq!(s, "zero");
             // Macro-introduced 'zero' SHOULD have a macro scope
-            assert!(!expanded.scopes.is_empty(), "Macro-introduced symbol should have a scope");
+            assert!(
+                !expanded.scopes.is_empty(),
+                "Macro-introduced symbol should have a scope"
+            );
         } else {
             panic!("Expected symbol, got {:?}", expanded.kind);
         }
     }
 
     #[test]
-    #[test]
     fn test_add_remove_scope() {
         let syntax = surface::Syntax {
             kind: surface::SyntaxKind::Symbol("test".to_string()),
-            span: surface::Span { start: 0, end: 4, line: 1, col: 1 },
+            span: surface::Span {
+                start: 0,
+                end: 4,
+                line: 1,
+                col: 1,
+            },
             scopes: vec![ScopeId(0)],
         };
 

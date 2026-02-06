@@ -3,9 +3,9 @@
 //! These tests verify that the same input always produces identical output.
 //! This is critical for reproducible builds and stable error messages.
 
-use frontend::parser::Parser;
-use frontend::macro_expander::Expander;
 use frontend::declaration_parser::DeclarationParser;
+use frontend::macro_expander::{Expander, ExpansionError};
+use frontend::parser::Parser;
 use frontend::surface::Declaration;
 use kernel::ast::{Totality, Transparency};
 use std::collections::hash_map::DefaultHasher;
@@ -70,11 +70,7 @@ fn test_parser_error_determinism() {
     // All error messages should be identical
     let first = &errors[0];
     for (i, err) in errors.iter().enumerate() {
-        assert_eq!(
-            err, first,
-            "Parse error {} was different",
-            i
-        );
+        assert_eq!(err, first, "Parse error {} was different", i);
     }
 }
 
@@ -104,11 +100,7 @@ fn test_macro_expansion_determinism() {
     // All expansions should be identical
     let first = results[0];
     for (i, hash) in results.iter().enumerate() {
-        assert_eq!(
-            *hash, first,
-            "Expansion {} produced different result",
-            i
-        );
+        assert_eq!(*hash, first, "Expansion {} produced different result", i);
     }
 }
 
@@ -117,7 +109,7 @@ fn test_macro_expansion_determinism() {
 fn test_gensym_stability() {
     // Define a macro that uses quasiquote (which may trigger gensym for hygiene)
     let program = r#"
-        (defmacro with-temp (body) `(let ((temp 0)) ,body))
+        (defmacro with-temp (body) `(let temp Nat 0 ,body))
         (with-temp (+ temp 1))
     "#;
 
@@ -137,11 +129,44 @@ fn test_gensym_stability() {
     // All expansions should produce the same gensym names
     let first = &results[0];
     for (i, result) in results.iter().enumerate() {
-        assert_eq!(
-            result, first,
-            "Gensym in expansion {} was different",
-            i
-        );
+        assert_eq!(result, first, "Gensym in expansion {} was different", i);
+    }
+}
+
+fn macro_expansion_limit_diagnostic_debug() -> String {
+    let input = "(defmacro loop (x) (loop (quote x)))\n(loop x)";
+    let mut parser = Parser::new(input);
+    let syntax_nodes = parser.parse().expect("Parse should succeed");
+    let mut expander = Expander::new();
+    expander.set_macro_expansion_limits(3, 64);
+
+    let mut expansion_error = None;
+    for syntax in syntax_nodes {
+        if let Err(err) = expander.expand(syntax) {
+            expansion_error = Some(err);
+            break;
+        }
+    }
+
+    let expansion_error = expansion_error.expect("Expected expansion limit error");
+    match &expansion_error {
+        ExpansionError::ExpansionStepLimitExceeded { .. } => {}
+        _ => panic!("Expected step limit error, got {:?}", expansion_error),
+    }
+
+    let diagnostics = expander.take_pending_diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    format!("{:?}", diagnostics[0])
+}
+
+/// Test: Macro expansion limit diagnostics are deterministic
+#[test]
+fn test_macro_expansion_limit_diagnostic_determinism() {
+    let first = macro_expansion_limit_diagnostic_debug();
+    assert!(first.contains("macro expansion: loop"));
+    for i in 0..5 {
+        let next = macro_expansion_limit_diagnostic_debug();
+        assert_eq!(next, first, "Diagnostic run {} was different", i);
     }
 }
 
@@ -170,11 +195,7 @@ fn test_definition_parsing_determinism() {
     // All results should be identical
     let first = results[0];
     for (i, hash) in results.iter().enumerate() {
-        assert_eq!(
-            *hash, first,
-            "Definition parsing {} was different",
-            i
-        );
+        assert_eq!(*hash, first, "Definition parsing {} was different", i);
     }
 }
 
@@ -203,11 +224,7 @@ fn test_inductive_parsing_determinism() {
     // All results should be identical
     let first = results[0];
     for (i, hash) in results.iter().enumerate() {
-        assert_eq!(
-            *hash, first,
-            "Inductive parsing {} was different",
-            i
-        );
+        assert_eq!(*hash, first, "Inductive parsing {} was different", i);
     }
 }
 
@@ -257,11 +274,7 @@ fn test_full_pipeline_determinism() {
             i
         );
         for (j, (h1, h2)) in first.iter().zip(result.iter()).enumerate() {
-            assert_eq!(
-                h1, h2,
-                "Run {} declaration {} was different",
-                i, j
-            );
+            assert_eq!(h1, h2, "Run {} declaration {} was different", i, j);
         }
     }
 }
@@ -283,9 +296,14 @@ fn test_span_preservation() {
 
     // Check that spans exist and are reasonable
     for syntax in &syntax_nodes {
-        assert!(syntax.span.start < syntax.span.end || syntax.span.start == syntax.span.end,
-                "Span should have non-negative length");
-        assert!(syntax.span.end <= input.len(), "Span should not exceed input");
+        assert!(
+            syntax.span.start < syntax.span.end || syntax.span.start == syntax.span.end,
+            "Span should have non-negative length"
+        );
+        assert!(
+            syntax.span.end <= input.len(),
+            "Span should not exceed input"
+        );
     }
 }
 
@@ -344,19 +362,13 @@ fn test_pretty_print_determinism() {
         let syntax_nodes = parser.parse().expect("Parse");
 
         // Pretty print all nodes
-        let pretty: Vec<String> = syntax_nodes.iter()
-            .map(|s| s.pretty_print())
-            .collect();
+        let pretty: Vec<String> = syntax_nodes.iter().map(|s| s.pretty_print()).collect();
         prints.push(pretty);
     }
 
     let first = &prints[0];
     for (i, print) in prints.iter().enumerate() {
-        assert_eq!(
-            print, first,
-            "Pretty print {} was different",
-            i
-        );
+        assert_eq!(print, first, "Pretty print {} was different", i);
     }
 }
 
@@ -379,10 +391,18 @@ fn test_declaration_variant_consistency() {
     assert_eq!(decls.len(), 1, "Should have one declaration");
 
     match &decls[0] {
-        Declaration::Def { name, ty, val, totality, transparency } => {
+        Declaration::Def {
+            name,
+            ty,
+            val,
+            totality,
+            transparency,
+            noncomputable,
+        } => {
             assert_eq!(name, "id");
             assert_eq!(*totality, Totality::Total);
             assert_eq!(*transparency, Transparency::Reducible);
+            assert!(!*noncomputable);
             // Type and val should be SurfaceTerms
             let _ = format!("{:?}", ty);
             let _ = format!("{:?}", val);
@@ -453,7 +473,12 @@ fn test_unsafe_declaration() {
 
     assert_eq!(decls.len(), 1);
     match &decls[0] {
-        Declaration::Def { name, totality, transparency, .. } => {
+        Declaration::Def {
+            name,
+            totality,
+            transparency,
+            ..
+        } => {
             assert_eq!(name, "danger");
             assert_eq!(*totality, Totality::Unsafe);
             assert_eq!(*transparency, Transparency::Reducible);
@@ -476,11 +501,52 @@ fn test_opaque_attribute_declaration() {
 
     assert_eq!(decls.len(), 1);
     match &decls[0] {
-        Declaration::Def { name, totality, transparency, .. } => {
+        Declaration::Def {
+            name,
+            totality,
+            transparency,
+            ..
+        } => {
             assert_eq!(name, "secret");
             assert_eq!(*totality, Totality::Total);
             assert_eq!(*transparency, Transparency::None);
         }
         other => panic!("Expected Def, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_import_classical_declaration() {
+    let input = "(import classical)";
+
+    let mut expander = Expander::new();
+    let mut parser = Parser::new(input);
+    let syntax_nodes = parser.parse().expect("Parse");
+
+    let mut decl_parser = DeclarationParser::new(&mut expander);
+    let decls = decl_parser.parse(syntax_nodes).expect("Parse decls");
+
+    assert_eq!(decls.len(), 1);
+    match &decls[0] {
+        Declaration::ImportClassical => {}
+        other => panic!("Expected ImportClassical, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_import_module_declaration() {
+    let input = "(import Alpha)";
+
+    let mut expander = Expander::new();
+    let mut parser = Parser::new(input);
+    let syntax_nodes = parser.parse().expect("Parse");
+
+    let mut decl_parser = DeclarationParser::new(&mut expander);
+    let decls = decl_parser.parse(syntax_nodes).expect("Parse decls");
+
+    assert_eq!(decls.len(), 1);
+    match &decls[0] {
+        Declaration::ImportModule { module } => assert_eq!(module, "Alpha"),
+        other => panic!("Expected ImportModule, got {:?}", other),
     }
 }

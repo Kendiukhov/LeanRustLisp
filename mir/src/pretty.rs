@@ -3,9 +3,11 @@
 //! This module produces deterministic, human-readable output that can be
 //! compared against expected snapshots.
 
-use crate::{Body, Statement, Terminator, Place, PlaceElem, RuntimeCheckKind,
-            Rvalue, Operand, Constant, Literal, BorrowKind, Local};
-use crate::types::{MirType, Mutability, IMKind, AdtId};
+use crate::types::{AdtId, IMKind, MirType, Mutability};
+use crate::{
+    Body, BorrowKind, CallOperand, Constant, Literal, Local, Operand, Place, PlaceElem,
+    RuntimeCheckKind, Rvalue, Statement, Terminator,
+};
 use std::fmt::Write;
 
 /// Pretty-print a MIR body to a stable string representation.
@@ -21,8 +23,16 @@ pub fn pretty_print_body(body: &Body) -> String {
         let name = decl.name.as_deref().unwrap_or("_");
         let copy_marker = if decl.is_copy { " [copy]" } else { "" };
         let prop_marker = if decl.is_prop { " [prop]" } else { "" };
-        writeln!(out, "    //   _{}: {} ({}){}{}",
-            i, pretty_type(&decl.ty), name, copy_marker, prop_marker).unwrap();
+        writeln!(
+            out,
+            "    //   _{}: {} ({}){}{}",
+            i,
+            pretty_type(&decl.ty),
+            name,
+            copy_marker,
+            prop_marker
+        )
+        .unwrap();
     }
     writeln!(out).unwrap();
 
@@ -53,12 +63,32 @@ fn pretty_type(ty: &MirType) -> String {
         MirType::Unit => "()".to_string(),
         MirType::Bool => "Bool".to_string(),
         MirType::Nat => "Nat".to_string(),
-        MirType::Adt(AdtId(name), args) => {
+        MirType::Opaque { .. } => "Opaque".to_string(),
+        MirType::IndexTerm(term) => format!("index({:?})", term),
+        MirType::Adt(adt_id, args) => {
+            let name = pretty_adt(adt_id);
             if args.is_empty() {
-                name.clone()
+                name
             } else {
-                let args_str: Vec<_> = args.iter().map(pretty_type).collect();
-                format!("{}<{}>", name, args_str.join(", "))
+                let mut param_parts = Vec::new();
+                let mut index_parts = Vec::new();
+                for arg in args {
+                    match arg {
+                        MirType::IndexTerm(term) => index_parts.push(format!("{:?}", term)),
+                        _ => param_parts.push(pretty_type(arg)),
+                    }
+                }
+                let param_str = if param_parts.is_empty() {
+                    String::new()
+                } else {
+                    format!("<{}>", param_parts.join(", "))
+                };
+                let index_str = if index_parts.is_empty() {
+                    String::new()
+                } else {
+                    format!("[{}]", index_parts.join(", "))
+                };
+                format!("{}{}{}", name, param_str, index_str)
             }
         }
         MirType::Ref(region, inner, mutability) => {
@@ -68,9 +98,78 @@ fn pretty_type(ty: &MirType) -> String {
             };
             format!("&'{} {}{}", region.0, mut_str, pretty_type(inner))
         }
-        MirType::Fn(args, ret) => {
+        MirType::Fn(kind, region_params, args, ret) => {
             let args_str: Vec<_> = args.iter().map(pretty_type).collect();
-            format!("fn({}) -> {}", args_str.join(", "), pretty_type(ret))
+            let kind_str = match kind {
+                kernel::ast::FunctionKind::Fn => "fn",
+                kernel::ast::FunctionKind::FnMut => "fn_mut",
+                kernel::ast::FunctionKind::FnOnce => "fn_once",
+            };
+            let params_str = if region_params.is_empty() {
+                String::new()
+            } else {
+                let params: Vec<_> = region_params
+                    .iter()
+                    .map(|region| format!("'{}", region.0))
+                    .collect();
+                format!("<{}>", params.join(", "))
+            };
+            format!(
+                "{}{}({}) -> {}",
+                kind_str,
+                params_str,
+                args_str.join(", "),
+                pretty_type(ret)
+            )
+        }
+        MirType::FnItem(def_id, kind, region_params, args, ret) => {
+            let args_str: Vec<_> = args.iter().map(pretty_type).collect();
+            let kind_str = match kind {
+                kernel::ast::FunctionKind::Fn => "fn_item",
+                kernel::ast::FunctionKind::FnMut => "fn_item_mut",
+                kernel::ast::FunctionKind::FnOnce => "fn_item_once",
+            };
+            let params_str = if region_params.is_empty() {
+                String::new()
+            } else {
+                let params: Vec<_> = region_params
+                    .iter()
+                    .map(|region| format!("'{}", region.0))
+                    .collect();
+                format!("<{}>", params.join(", "))
+            };
+            format!(
+                "{}#{}{}({}) -> {}",
+                kind_str,
+                def_id.0,
+                params_str,
+                args_str.join(", "),
+                pretty_type(ret)
+            )
+        }
+        MirType::Closure(kind, _self_region, region_params, args, ret) => {
+            let args_str: Vec<_> = args.iter().map(pretty_type).collect();
+            let kind_str = match kind {
+                kernel::ast::FunctionKind::Fn => "closure",
+                kernel::ast::FunctionKind::FnMut => "closure_mut",
+                kernel::ast::FunctionKind::FnOnce => "closure_once",
+            };
+            let params_str = if region_params.is_empty() {
+                String::new()
+            } else {
+                let params: Vec<_> = region_params
+                    .iter()
+                    .map(|region| format!("'{}", region.0))
+                    .collect();
+                format!("<{}>", params.join(", "))
+            };
+            format!(
+                "{}{}({}) -> {}",
+                kind_str,
+                params_str,
+                args_str.join(", "),
+                pretty_type(ret)
+            )
         }
         MirType::RawPtr(inner, mutability) => {
             let mut_str = match mutability {
@@ -87,6 +186,7 @@ fn pretty_type(ty: &MirType) -> String {
             };
             format!("{}<{}>", kind_str, pretty_type(inner))
         }
+        MirType::Param(idx) => format!("P{}", idx),
     }
 }
 
@@ -126,29 +226,48 @@ fn pretty_terminator(term: &Terminator) -> String {
         Terminator::Goto { target } => format!("goto -> bb{}", target.0),
         Terminator::SwitchInt { discr, targets } => {
             let mut s = format!("switchInt({}) -> [", pretty_operand(discr));
-            for (i, (val, target)) in targets.values.iter().zip(targets.targets.iter()).enumerate() {
-                if i > 0 { s.push_str(", "); }
+            for (i, (val, target)) in targets
+                .values
+                .iter()
+                .zip(targets.targets.iter())
+                .enumerate()
+            {
+                if i > 0 {
+                    s.push_str(", ");
+                }
                 s.push_str(&format!("{}: bb{}", val, target.0));
             }
             // The last target is the "otherwise" case
             if targets.targets.len() > targets.values.len() {
-                if !targets.values.is_empty() { s.push_str(", "); }
-                s.push_str(&format!("otherwise: bb{}", targets.targets.last().unwrap().0));
+                if !targets.values.is_empty() {
+                    s.push_str(", ");
+                }
+                s.push_str(&format!(
+                    "otherwise: bb{}",
+                    targets.targets.last().unwrap().0
+                ));
             }
             s.push(']');
             s
         }
-        Terminator::Call { func, args, destination, target } => {
+        Terminator::Call {
+            func,
+            args,
+            destination,
+            target,
+        } => {
             let args_str: Vec<_> = args.iter().map(pretty_operand).collect();
             let target_str = match target {
                 Some(t) => format!(" -> bb{}", t.0),
                 None => " -> !".to_string(),
             };
-            format!("{} = {}({}){}",
+            format!(
+                "{} = {}({}){}",
                 pretty_place(destination),
-                pretty_operand(func),
+                pretty_call_operand(func),
                 args_str.join(", "),
-                target_str)
+                target_str
+            )
         }
         Terminator::Unreachable => "unreachable".to_string(),
     }
@@ -161,6 +280,7 @@ fn pretty_place(place: &Place) -> String {
             PlaceElem::Deref => s = format!("(*{})", s),
             PlaceElem::Field(i) => s = format!("{}.{}", s, i),
             PlaceElem::Downcast(i) => s = format!("({} as variant#{})", s, i),
+            PlaceElem::Index(local) => s = format!("{}[{}]", s, pretty_local(local)),
         }
     }
     s
@@ -192,12 +312,27 @@ fn pretty_operand(op: &Operand) -> String {
     }
 }
 
+fn pretty_call_operand(op: &CallOperand) -> String {
+    match op {
+        CallOperand::Operand(op) => pretty_operand(op),
+        CallOperand::Borrow(kind, place) => {
+            let kind_str = match kind {
+                BorrowKind::Shared => "&",
+                BorrowKind::Mut => "&mut ",
+            };
+            format!("{}{}", kind_str, pretty_place(place))
+        }
+    }
+}
+
 fn pretty_constant(c: &Constant) -> String {
     match &c.literal {
         Literal::Unit => "()".to_string(),
         Literal::Nat(n) => format!("{}_nat", n),
         Literal::Bool(b) => format!("{}", b),
-        Literal::Term(_) => "<term>".to_string(),
+        Literal::GlobalDef(name) => format!("global {}", name),
+        Literal::Recursor(name) => format!("recursor {}", name),
+        Literal::OpaqueConst(reason) => format!("opaque_const({})", reason),
         Literal::Closure(idx, captures) => {
             let caps: Vec<_> = captures.iter().map(pretty_operand).collect();
             format!("closure#{}[{}]", idx, caps.join(", "))
@@ -206,31 +341,35 @@ fn pretty_constant(c: &Constant) -> String {
             let caps: Vec<_> = captures.iter().map(pretty_operand).collect();
             format!("fix#{}[{}]", idx, caps.join(", "))
         }
-        Literal::InductiveCtor(name, idx, arity) => {
-            format!("{}#{}(arity={})", name, idx, arity)
+        Literal::InductiveCtor(ctor, arity) => {
+            format!("{}#{}(arity={})", pretty_adt(&ctor.adt), ctor.index, arity)
         }
     }
+}
+
+fn pretty_adt(adt: &AdtId) -> String {
+    adt.name().to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{Mutability, Region};
     use crate::*;
-    use crate::types::{Region, Mutability};
 
     #[test]
     fn test_pretty_simple_body() {
         let mut body = Body::new(1);
-        body.local_decls.push(LocalDecl::new(MirType::Nat, Some("result".to_string())));
-        body.local_decls.push(LocalDecl::new(MirType::Nat, Some("x".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(MirType::Nat, Some("result".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(MirType::Nat, Some("x".to_string())));
 
         body.basic_blocks.push(BasicBlockData {
-            statements: vec![
-                Statement::Assign(
-                    Place::from(Local(0)),
-                    Rvalue::Use(Operand::Copy(Place::from(Local(1))))
-                )
-            ],
+            statements: vec![Statement::Assign(
+                Place::from(Local(0)),
+                Rvalue::Use(Operand::Copy(Place::from(Local(1)))),
+            )],
             terminator: Some(Terminator::Return),
         });
 
@@ -249,6 +388,26 @@ mod tests {
 
         let ty = MirType::Ref(Region(0), Box::new(MirType::Bool), Mutability::Not);
         assert_eq!(pretty_type(&ty), "&'0 Bool");
+    }
+
+    #[test]
+    fn test_pretty_fn_type_with_regions() {
+        let region = Region(1);
+        let ty = MirType::Fn(
+            kernel::ast::FunctionKind::Fn,
+            vec![region],
+            vec![MirType::Ref(
+                region,
+                Box::new(MirType::Nat),
+                Mutability::Not,
+            )],
+            Box::new(MirType::Ref(
+                region,
+                Box::new(MirType::Nat),
+                Mutability::Not,
+            )),
+        );
+        assert_eq!(pretty_type(&ty), "fn<'1>(&'1 Nat) -> &'1 Nat");
     }
 
     #[test]

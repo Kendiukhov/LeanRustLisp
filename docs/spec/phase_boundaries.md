@@ -16,6 +16,9 @@ This document records the contract between compiler phases. It is the source of 
   expansion (including quasiquote list constructors) use the span of the originating form. `unquote`
   and `unquote-splicing` preserve the spans of the inserted syntax.
 - Expansion does not introduce core terms; it only produces surface syntax.
+- Attributes (e.g. `opaque`, `transparent`) are preserved or explicitly re-attached by macro output.
+- Expansion is compile-time only; any runtime evaluation must be an explicit surface form (e.g. `eval`).
+- Classical logic imports/axioms must appear explicitly in expanded syntax (no silent injection).
 
 ## 2. Elaboration Boundary
 
@@ -27,11 +30,15 @@ This document records the contract between compiler phases. It is the source of 
 - No `Term::Meta` remains (all metas solved).
 - All implicit arguments are inserted; the term is fully explicit.
 - `match` is fully desugared to `Rec` with an explicit motive.
-- Every `Rec` term carries explicit universe levels (no empty level list).
+- Every `Rec` term carries explicit universe levels (no empty level list), with the level list
+  ordered as `[inductive universe params..., motive level]`.
 - `Fix` is only used at function types (enforced by the kernel).
+- Lambda/function kinds are inferred and attached to `Lam`/`Pi`. Explicit kind
+  annotations (if present) must be at least the inferred kind.
 - Core-term invariants are validated after elaboration (e.g. `kernel::checker::validate_core_term`).
 
-The elaborator is responsible for computing the recursor universe level from the motive type and attaching it to `Rec`.
+The elaborator is responsible for computing the recursor universe level from the motive type and
+attaching it to `Rec` together with the inductive's universe parameters.
 
 ## 3. Kernel Boundary
 
@@ -45,6 +52,13 @@ The elaborator is responsible for computing the recursor universe level from the
 - Large elimination restrictions for `Prop`.
 - Termination / totality boundaries.
 - Explicit recursor levels are required.
+- Function kind validation for `Lam`/`Pi` (e.g., `FnOnce` values are not treated
+  as `Fn` without an explicit coercion).
+- Effect boundaries are enforced via totality markers (total cannot call partial/unsafe;
+  partial cannot call unsafe). Effect typing (requiring `Comp` returns) is enforced.
+- Capture-mode annotations are checked for **structural validity only**
+  (closure id exists, indices reference actual free variables). The kernel does not
+  enforce capture-mode *strength*.
 
 ## 4. MIR Lowering Boundary
 
@@ -57,6 +71,10 @@ The elaborator is responsible for computing the recursor universe level from the
 - `Rec` is the canonical elimination form (pattern matching already desugared).
 - Inductive parameters and indices are explicit in `Rec` applications.
 - `Fix` is only used at function types (safe lowering).
+- MIR recomputes **required capture modes** from closure usage and rejects any
+  annotation that is weaker than required. Capture modes determine whether a
+  captured value is moved or borrowed (and with what mutability), and MIR
+  instantiates the corresponding regions/borrows during lowering.
 
 ## 5. Safety and Codegen Boundary
 
@@ -66,6 +84,8 @@ The elaborator is responsible for computing the recursor universe level from the
 
 **Invariants:**
 - Borrow and ownership checks are applied before codegen.
+- The production pipeline must run MIR typing + NLL for **all** definitions and
+  derived closure bodies (this is a release-bar invariant).
 - `Prop` terms are erased before codegen (no runtime dependence on proofs).
 
 ## 6. Failure Policy

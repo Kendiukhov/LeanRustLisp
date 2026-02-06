@@ -1,0 +1,13 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Warning: Axiom 'interior_mutable' declared (unsafe: interior_mutable)
+- Warning: Axiom 'may_panic_on_borrow_violation' declared (unsafe: may_panic_on_borrow_violation)
+- Warning: Axiom 'concurrency_primitive' declared (unsafe: concurrency_primitive)
+- Warning: Axiom 'atomic_primitive' declared (unsafe: atomic_primitive)
+- Warning: Axiom 'indexable' declared (unsafe: indexable)
+- Warning: Inductive 'Mutex' depends on axioms: concurrency_primitive (unsafe: concurrency_primitive)
+- Error: [K0023] Environment error defining 'uses_mutex': Definition 'uses_mutex' depends on unsafe axioms: concurrency_primitive. Mark it noncomputable or unsafe. RefCell/Mutex/Atomic are not yet available in safe code; runtime checks are unimplemented

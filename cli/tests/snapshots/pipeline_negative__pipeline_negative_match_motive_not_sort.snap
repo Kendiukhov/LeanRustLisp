@@ -1,0 +1,7 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Error: [F0205] Elaboration error (Value) in 'bad': Type mismatch: expected Sort, got Nat

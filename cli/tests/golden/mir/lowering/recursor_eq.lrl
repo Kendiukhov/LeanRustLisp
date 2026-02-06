@@ -1,0 +1,13 @@
+(inductive copy Unit (sort 1)
+  (ctor unit Unit)
+)
+
+(inductive Eq (pi A (sort 1) (pi a A (pi b A (sort 0))))
+  (ctor refl (pi A (sort 1) (pi a A (Eq A a a))))
+)
+
+(def eq_unit_elim (pi p (Eq Unit unit unit) (Eq Unit unit unit))
+  (lam p (Eq Unit unit unit)
+    (match p (Eq Unit unit unit)
+      (case (refl) (refl Unit unit))
+    )))

@@ -1,0 +1,37 @@
+---
+source: cli/tests/pipeline_golden.rs
+expression: output
+---
+Diagnostics:
+- Warning: Axiom 'UnsafeAx' declared (unsafe: UnsafeAx)
+- Warning: Definition 'uses_unsafe' depends on axioms: UnsafeAx (unsafe: UnsafeAx)
+
+DefEqConfig
+  fuel: 100000
+  source: default
+  transparency: Reducible
+
+ElaboratedDef uses_unsafe
+  ty: Pi(Sort(Zero), Sort(Zero), Default, Fn)
+  val: Const("UnsafeAx", [])
+
+MirBody uses_unsafe
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: GlobalDef("UnsafeAx"), ty: FnItem(DefId(14704791071218397125), [], [Unit], Unit) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([], [Unit], Unit), name: Some("_0"), is_prop: false, is_copy: false }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {} } }
+
+BorrowCheck uses_unsafe
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+AxiomDependencies UnsafeAx
+  axioms: ["UnsafeAx"]
+  classical: []
+
+AxiomDependencies uses_unsafe
+  axioms: ["UnsafeAx"]
+  classical: []

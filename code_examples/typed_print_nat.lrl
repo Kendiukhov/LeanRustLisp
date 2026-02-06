@@ -1,0 +1,4 @@
+;; Typed backend smoke: print_nat
+
+(def entry Nat
+  (print_nat (succ zero)))

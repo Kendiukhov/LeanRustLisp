@@ -1,0 +1,13 @@
+(def is_zero (pi n Nat Bool)
+  (lam n Nat
+    (match n Bool
+      (case (zero) true)
+      (case (succ m ih) false))))
+
+(def zero_score (pi n Nat Nat)
+  (lam n Nat
+    (match (is_zero n) Nat
+      (case (true) (succ zero))
+      (case (false) zero))))
+
+(zero_score (succ zero))

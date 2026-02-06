@@ -1,4 +1,4 @@
-use crate::ast::{Level, Term, BinderInfo};
+use crate::ast::{BinderInfo, Level, Term};
 use std::iter::Peekable;
 use std::rc::Rc;
 use std::str::Chars;
@@ -9,6 +9,7 @@ pub enum ParseError {
     #[error("Unexpected EOF")]
     UnexpectedEof,
     #[error("Unexpected character: {0}")]
+    #[allow(dead_code)]
     UnexpectedChar(char),
     #[error("Expected {0}")]
     Expected(String),
@@ -95,67 +96,67 @@ impl<'a> Parser<'a> {
         match self.lexer.next_token() {
             Some(Ok(Token::Int(n))) => Ok(Term::var(n)),
             Some(Ok(Token::Symbol(s))) => {
-                 if s == "Prop" {
-                     Ok(Term::sort(Level::Zero))
-                 } else if s == "Type" {
-                     Ok(Term::sort(Level::Succ(Box::new(Level::Zero)))) // Type 0
-                 } else {
-                     Ok(Rc::new(Term::Const(s, vec![])))
-                 }
+                if s == "Prop" {
+                    Ok(Term::sort(Level::Zero))
+                } else if s == "Type" {
+                    Ok(Term::sort(Level::Succ(Box::new(Level::Zero)))) // Type 0
+                } else {
+                    Ok(Rc::new(Term::Const(s, vec![])))
+                }
             }
             Some(Ok(Token::LParen)) => {
                 let head = self.expect_symbol()?;
                 match head.as_str() {
-                   "lam" => {
-                       let ty = self.parse_term()?;
-                       let body = self.parse_term()?;
-                       self.expect_rparen()?;
-                       Ok(Term::lam(ty, body, BinderInfo::Default))
-                   }
-                   "pi" => {
-                       let ty = self.parse_term()?;
-                       let body = self.parse_term()?;
-                       self.expect_rparen()?;
-                       Ok(Term::pi(ty, body, BinderInfo::Default))
-                   }
-                   "app" => {
-                       let f = self.parse_term()?;
-                       let a = self.parse_term()?;
-                       self.expect_rparen()?;
-                       Ok(Term::app(f, a))
-                   }
-                   "sort" => {
-                       // simplified: (sort 0) -> Prop, (sort 1) -> Type 0
-                       if let Some(Ok(Token::Int(0))) = self.lexer.next_token() {
-                           self.expect_rparen()?;
-                           Ok(Term::sort(Level::Zero))
-                       } else {
+                    "lam" => {
+                        let ty = self.parse_term()?;
+                        let body = self.parse_term()?;
+                        self.expect_rparen()?;
+                        Ok(Term::lam(ty, body, BinderInfo::Default))
+                    }
+                    "pi" => {
+                        let ty = self.parse_term()?;
+                        let body = self.parse_term()?;
+                        self.expect_rparen()?;
+                        Ok(Term::pi(ty, body, BinderInfo::Default))
+                    }
+                    "app" => {
+                        let f = self.parse_term()?;
+                        let a = self.parse_term()?;
+                        self.expect_rparen()?;
+                        Ok(Term::app(f, a))
+                    }
+                    "sort" => {
+                        // simplified: (sort 0) -> Prop, (sort 1) -> Type 0
+                        if let Some(Ok(Token::Int(0))) = self.lexer.next_token() {
+                            self.expect_rparen()?;
+                            Ok(Term::sort(Level::Zero))
+                        } else {
                             // Hack for now
-                           self.expect_rparen()?;
-                           Ok(Term::sort(Level::Succ(Box::new(Level::Zero))))
-                       }
-                   }
-                   "ind" => {
-                       // (ind Name) - reference to inductive type
-                       let name = self.expect_symbol()?;
-                       self.expect_rparen()?;
-                       Ok(Term::ind(name))
-                   }
-                   "ctor" => {
-                       // (ctor IndName idx) - constructor reference
-                       let ind_name = self.expect_symbol()?;
-                       let idx = self.expect_int()?;
-                       self.expect_rparen()?;
-                       Ok(Term::ctor(ind_name, idx))
-                   }
-                   "rec" => {
-                       // (rec IndName level) - recursor reference with explicit universe
-                       let name = self.expect_symbol()?;
-                       let level = self.expect_int()?;
-                       self.expect_rparen()?;
-                       Ok(Term::rec(name, vec![Self::level_from_int(level)]))
-                   }
-                   _ => Err(ParseError::UnknownToken(head)),
+                            self.expect_rparen()?;
+                            Ok(Term::sort(Level::Succ(Box::new(Level::Zero))))
+                        }
+                    }
+                    "ind" => {
+                        // (ind Name) - reference to inductive type
+                        let name = self.expect_symbol()?;
+                        self.expect_rparen()?;
+                        Ok(Term::ind(name))
+                    }
+                    "ctor" => {
+                        // (ctor IndName idx) - constructor reference
+                        let ind_name = self.expect_symbol()?;
+                        let idx = self.expect_int()?;
+                        self.expect_rparen()?;
+                        Ok(Term::ctor(ind_name, idx))
+                    }
+                    "rec" => {
+                        // (rec IndName level) - recursor reference with explicit universe
+                        let name = self.expect_symbol()?;
+                        let level = self.expect_int()?;
+                        self.expect_rparen()?;
+                        Ok(Term::rec(name, vec![Self::level_from_int(level)]))
+                    }
+                    _ => Err(ParseError::UnknownToken(head)),
                 }
             }
             Some(Err(e)) => Err(e),
@@ -167,7 +168,7 @@ impl<'a> Parser<'a> {
     fn expect_symbol(&mut self) -> Result<String, ParseError> {
         match self.lexer.next_token() {
             Some(Ok(Token::Symbol(s))) => Ok(s),
-             _ => Err(ParseError::Expected("symbol".to_string())),
+            _ => Err(ParseError::Expected("symbol".to_string())),
         }
     }
 

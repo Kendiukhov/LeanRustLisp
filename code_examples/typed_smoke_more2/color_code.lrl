@@ -1,0 +1,14 @@
+(inductive copy Color (sort 1)
+  (ctor red Color)
+  (ctor green Color)
+  (ctor blue Color)
+)
+
+(def color_code (pi c Color Nat)
+  (lam c Color
+    (match c Nat
+      (case (red) zero)
+      (case (green) (succ zero))
+      (case (blue) (succ (succ zero))))))
+
+(color_code green)

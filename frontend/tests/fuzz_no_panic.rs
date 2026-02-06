@@ -31,9 +31,38 @@ impl Lcg {
 
 fn random_program(rng: &mut Lcg) -> String {
     const TOKENS: &[&str] = &[
-        "(", ")", "def", "lam", "pi", "Type", "Prop", "Nat", "Bool", "match", "case",
-        "zero", "succ", "true", "false", "let", "in", "axiom", "inductive", "macro",
-        " ", "\n", "\t", "0", "1", "2", "3", "x", "y", "z", "A", "B",
+        "(",
+        ")",
+        "def",
+        "lam",
+        "pi",
+        "Type",
+        "Prop",
+        "Nat",
+        "Bool",
+        "match",
+        "case",
+        "zero",
+        "succ",
+        "true",
+        "false",
+        "let",
+        "in",
+        "axiom",
+        "inductive",
+        "macro",
+        " ",
+        "\n",
+        "\t",
+        "0",
+        "1",
+        "2",
+        "3",
+        "x",
+        "y",
+        "z",
+        "A",
+        "B",
     ];
 
     let token_count = 8 + rng.gen_range(48);
@@ -60,11 +89,7 @@ fn fuzz_parser_and_expander_no_panic() {
             parser.parse()
         }));
 
-        assert!(
-            parse_result.is_ok(),
-            "Parser panicked on input: {}",
-            input
-        );
+        assert!(parse_result.is_ok(), "Parser panicked on input: {}", input);
 
         if let Ok(Ok(syntax_nodes)) = parse_result {
             let expand_result = catch_unwind(AssertUnwindSafe(|| {
@@ -94,11 +119,7 @@ fn fuzz_parser_expander_elaborator_no_panic() {
             parser.parse()
         }));
 
-        assert!(
-            parse_result.is_ok(),
-            "Parser panicked on input: {}",
-            input
-        );
+        assert!(parse_result.is_ok(), "Parser panicked on input: {}", input);
 
         if let Ok(Ok(syntax_nodes)) = parse_result {
             let expand_result = catch_unwind(AssertUnwindSafe(|| {
@@ -136,11 +157,22 @@ fn fuzz_parser_expander_elaborator_no_panic() {
                                 }
                                 let _ = elab.solve_constraints();
                             }
+                            Declaration::Instance {
+                                head, requirements, ..
+                            } => {
+                                let _ = elab.infer(head);
+                                for req in requirements {
+                                    let _ = elab.infer(req);
+                                }
+                                let _ = elab.solve_constraints();
+                            }
                             Declaration::Expr(term) => {
                                 let _ = elab.infer(term);
                                 let _ = elab.solve_constraints();
                             }
                             Declaration::DefMacro { .. } => {}
+                            Declaration::ImportClassical => {}
+                            Declaration::ImportModule { .. } => {}
                         }
                     }));
 

@@ -4,3 +4,9 @@
 /output.rs
 **/*.dSYM
 .DS_Store
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/build/
+*.snap.new
+/output.txt

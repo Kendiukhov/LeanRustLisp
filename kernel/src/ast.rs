@@ -1,4 +1,6 @@
+use crate::ownership::DefCaptureModeMap;
 use std::collections::HashSet;
+use std::fmt;
 use std::rc::Rc;
 
 // =============================================================================
@@ -26,19 +28,157 @@ pub enum Totality {
     Unsafe,
 }
 
+/// Classification of definitions for axiom/primitive tracking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DefinitionKind {
+    /// Ordinary definition.
+    Def,
+    /// Logical axiom (noncomputable requirement for dependents).
+    AxiomLogical,
+    /// Trusted runtime primitive (does not force noncomputable).
+    Primitive,
+}
+
 /// Transparency levels for reduction
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Transparency {
-    None,       // Opaque / Irreducible
-    Instances,  // Type class instances
-    Reducible,  // Standard definitions (Transparent)
-    All,        // Unfold everything (including Opaque if forced)
+    None,      // Opaque / Irreducible
+    Instances, // Type class instances
+    Reducible, // Standard definitions (Transparent)
+    All,       // Unfold everything (including Opaque if forced)
 }
 
-/// Tags for axioms to track logical assumptions explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CopyInstanceSource {
+    Derived,
+    Explicit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyInstance {
+    pub ind_name: String,
+    pub param_count: usize,
+    pub requirements: Vec<Rc<Term>>,
+    pub source: CopyInstanceSource,
+    pub is_unsafe: bool,
+}
+
+/// Tags for axioms to track logical and safety assumptions explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AxiomTag {
     Classical,
+    Unsafe,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DefId(pub u64);
+
+impl DefId {
+    pub fn new(name: impl AsRef<str>) -> Self {
+        DefId(stable_hash64("def", name.as_ref()))
+    }
+}
+
+/// Marker attributes for types/inductives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TypeMarker {
+    /// Indicates a type uses interior mutability.
+    InteriorMutable,
+    /// RefCell-like: may panic on dynamic borrow violation.
+    MayPanicOnBorrowViolation,
+    /// Concurrency primitive family (Mutex/Atomic).
+    ConcurrencyPrimitive,
+    /// Atomic-specific marker.
+    AtomicPrimitive,
+    /// Marks container types that support indexing sugar.
+    Indexable,
+}
+
+/// Explicit opt-in for MIR borrow-shape classification on opaque aliases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BorrowWrapperMarker {
+    RefShared,
+    RefMut,
+    RefCell,
+    Mutex,
+    Atomic,
+}
+
+/// Marker identifier (points at a trusted marker definition).
+pub type MarkerId = DefId;
+
+/// Canonical marker name for a given marker kind.
+pub fn marker_name(marker: TypeMarker) -> &'static str {
+    match marker {
+        TypeMarker::InteriorMutable => "interior_mutable",
+        TypeMarker::MayPanicOnBorrowViolation => "may_panic_on_borrow_violation",
+        TypeMarker::ConcurrencyPrimitive => "concurrency_primitive",
+        TypeMarker::AtomicPrimitive => "atomic_primitive",
+        TypeMarker::Indexable => "indexable",
+    }
+}
+
+/// Compute the canonical marker DefId for a marker kind.
+pub fn marker_def_id(marker: TypeMarker) -> MarkerId {
+    DefId::new(marker_name(marker))
+}
+
+/// Names reserved for primitive operations that must not be shadowed.
+pub const RESERVED_PRIMITIVE_NAMES: [&str; 8] = [
+    "Ref",
+    "Shared",
+    "Mut",
+    "borrow_shared",
+    "borrow_mut",
+    "index_vec_dyn",
+    "index_slice",
+    "index_array",
+];
+
+pub fn is_reserved_primitive_name(name: &str) -> bool {
+    RESERVED_PRIMITIVE_NAMES
+        .iter()
+        .any(|reserved| *reserved == name)
+}
+
+/// Names reserved for type marker axioms (must not be shadowed).
+pub const RESERVED_MARKER_NAMES: [&str; 5] = [
+    "interior_mutable",
+    "may_panic_on_borrow_violation",
+    "concurrency_primitive",
+    "atomic_primitive",
+    "indexable",
+];
+
+pub fn is_reserved_marker_name(name: &str) -> bool {
+    RESERVED_MARKER_NAMES
+        .iter()
+        .any(|reserved| *reserved == name)
+}
+
+/// Core prelude names that are part of the TCB and must not be shadowed by user code.
+pub const RESERVED_CORE_NAMES: [&str; 6] = ["Comp", "Eq", "Nat", "Bool", "List", "False"];
+
+pub fn is_reserved_core_name(name: &str) -> bool {
+    RESERVED_CORE_NAMES.iter().any(|reserved| *reserved == name)
+}
+
+fn stable_hash64(tag: &str, name: &str) -> u64 {
+    const FNV_OFFSET: u64 = 14695981039346656037;
+    const FNV_PRIME: u64 = 1099511628211;
+
+    let mut hash = FNV_OFFSET;
+    for b in tag.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash ^= b':' as u64;
+    hash = hash.wrapping_mul(FNV_PRIME);
+    for b in name.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 /// Specification for well-founded recursion
@@ -51,12 +191,14 @@ pub struct WellFoundedInfo {
 }
 
 /// A global definition with totality tracking.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Definition {
     pub name: String,
     pub ty: Rc<Term>,
-    pub value: Option<Rc<Term>>,  // None for axioms/extern declarations
+    pub value: Option<Rc<Term>>, // None for axioms/extern declarations
     pub totality: Totality,
+    /// Axiom/primitive classification for dependency tracking.
+    pub kind: DefinitionKind,
     /// For structural recursion: which parameter is the decreasing argument (if any)
     pub rec_arg: Option<usize>,
     /// For well-founded recursion: the WF specification
@@ -67,64 +209,105 @@ pub struct Definition {
     pub transparency: Transparency,
     /// Explicit axiom tags (e.g., classical) when this definition is an axiom.
     pub axiom_tags: Vec<AxiomTag>,
-    /// Axioms used by this definition (transitive closure)
+    /// Logical axioms used by this definition (transitive closure).
     pub axioms: Vec<String>,
+    /// Runtime primitives used by this definition (transitive closure).
+    pub primitive_deps: Vec<String>,
+    /// Explicit noncomputable marker (opt-in for axiom-dependent code).
+    pub noncomputable: bool,
+    /// Per-closure capture mode annotations keyed by closure id.
+    pub capture_modes: DefCaptureModeMap,
+    /// Optional explicit borrow-shape marker for opaque wrapper aliases.
+    pub borrow_wrapper_marker: Option<BorrowWrapperMarker>,
 }
 
 impl Definition {
     /// Create a new total definition (must pass termination check)
     pub fn total(name: String, ty: Rc<Term>, value: Rc<Term>) -> Self {
         Definition {
-            name, ty, value: Some(value),
+            name,
+            ty,
+            value: Some(value),
             totality: Totality::Total,
+            kind: DefinitionKind::Def,
             rec_arg: None,
             wf_info: None,
             wf_checked: true,
             transparency: Transparency::Reducible, // Default: Transparent
             axiom_tags: vec![],
             axioms: vec![],
+            primitive_deps: vec![],
+            noncomputable: false,
+            capture_modes: DefCaptureModeMap::new(),
+            borrow_wrapper_marker: None,
         }
     }
 
     /// Create a total definition with explicit decreasing argument
     pub fn total_with_rec_arg(name: String, ty: Rc<Term>, value: Rc<Term>, rec_arg: usize) -> Self {
         Definition {
-            name, ty, value: Some(value),
+            name,
+            ty,
+            value: Some(value),
             totality: Totality::Total,
+            kind: DefinitionKind::Def,
             rec_arg: Some(rec_arg),
             wf_info: None,
             wf_checked: true,
             transparency: Transparency::Reducible,
             axiom_tags: vec![],
             axioms: vec![],
+            primitive_deps: vec![],
+            noncomputable: false,
+            capture_modes: DefCaptureModeMap::new(),
+            borrow_wrapper_marker: None,
         }
     }
 
     /// Create a well-founded recursive definition
-    pub fn wellfounded(name: String, ty: Rc<Term>, value: Rc<Term>, wf_info: WellFoundedInfo) -> Self {
+    pub fn wellfounded(
+        name: String,
+        ty: Rc<Term>,
+        value: Rc<Term>,
+        wf_info: WellFoundedInfo,
+    ) -> Self {
         Definition {
-            name, ty, value: Some(value),
+            name,
+            ty,
+            value: Some(value),
             totality: Totality::WellFounded,
+            kind: DefinitionKind::Def,
             rec_arg: Some(wf_info.decreasing_arg),
             wf_info: Some(wf_info),
             wf_checked: false,
             transparency: Transparency::Reducible,
             axiom_tags: vec![],
             axioms: vec![],
+            primitive_deps: vec![],
+            noncomputable: false,
+            capture_modes: DefCaptureModeMap::new(),
+            borrow_wrapper_marker: None,
         }
     }
 
     /// Create a partial definition (general recursion allowed)
     pub fn partial(name: String, ty: Rc<Term>, value: Rc<Term>) -> Self {
         Definition {
-            name, ty, value: Some(value),
+            name,
+            ty,
+            value: Some(value),
             totality: Totality::Partial,
+            kind: DefinitionKind::Def,
             rec_arg: None,
             wf_info: None,
             wf_checked: true,
             transparency: Transparency::Reducible,
             axiom_tags: vec![],
             axioms: vec![],
+            primitive_deps: vec![],
+            noncomputable: false,
+            capture_modes: DefCaptureModeMap::new(),
+            borrow_wrapper_marker: None,
         }
     }
 
@@ -144,35 +327,50 @@ impl Definition {
         tags.dedup();
         let axiom_name = name.clone();
         Definition {
-            name, ty, value: None,
+            name,
+            ty,
+            value: None,
             totality: Totality::Axiom,
+            kind: DefinitionKind::AxiomLogical,
             rec_arg: None,
             wf_info: None,
             wf_checked: true,
             transparency: Transparency::None, // Axioms don't unfold
             axiom_tags: tags,
             axioms: vec![axiom_name], // Axiom depends on itself
+            primitive_deps: vec![],
+            noncomputable: false,
+            capture_modes: DefCaptureModeMap::new(),
+            borrow_wrapper_marker: None,
         }
     }
 
     /// Create an unsafe definition
     pub fn unsafe_def(name: String, ty: Rc<Term>, value: Rc<Term>) -> Self {
         Definition {
-            name, ty, value: Some(value),
+            name,
+            ty,
+            value: Some(value),
             totality: Totality::Unsafe,
+            kind: DefinitionKind::Def,
             rec_arg: None,
             wf_info: None,
             wf_checked: true,
             transparency: Transparency::Reducible,
             axiom_tags: vec![],
             axioms: vec![],
+            primitive_deps: vec![],
+            noncomputable: false,
+            capture_modes: DefCaptureModeMap::new(),
+            borrow_wrapper_marker: None,
         }
     }
 
     /// Check if this definition can be unfolded in type contexts
     pub fn is_type_safe(&self) -> bool {
-        matches!(self.totality, Totality::Total | Totality::Axiom)
-            || (self.totality == Totality::WellFounded && self.wf_checked)
+        let totality = self.effective_totality();
+        matches!(totality, Totality::Total | Totality::Axiom)
+            || (totality == Totality::WellFounded && self.wf_checked)
     }
 
     /// Check if this definition is total (terminates)
@@ -181,9 +379,27 @@ impl Definition {
             || (self.totality == Totality::WellFounded && self.wf_checked)
     }
 
+    /// Check if this definition is noncomputable (explicit or axiom-dependent).
+    pub fn is_noncomputable(&self) -> bool {
+        self.noncomputable || !self.axioms.is_empty()
+    }
+
+    /// Effective totality accounting for unsafe-tagged axioms.
+    pub fn effective_totality(&self) -> Totality {
+        if self.totality == Totality::Axiom && self.axiom_tags.contains(&AxiomTag::Unsafe) {
+            Totality::Unsafe
+        } else {
+            self.totality
+        }
+    }
+
     /// Mark this definition as Opaque (Irreducible)
     pub fn mark_opaque(&mut self) {
         self.transparency = Transparency::None;
+    }
+
+    pub fn mark_borrow_wrapper(&mut self, marker: BorrowWrapperMarker) {
+        self.borrow_wrapper_marker = Some(marker);
     }
 
     /// Check if this definition is tagged as a classical axiom.
@@ -259,7 +475,9 @@ fn normalize_max(levels: Vec<Level>) -> Level {
 
     let mut iter = flat.into_iter();
     let first = iter.next().expect("non-empty");
-    iter.fold(first, |acc, level| Level::Max(Box::new(acc), Box::new(level)))
+    iter.fold(first, |acc, level| {
+        Level::Max(Box::new(acc), Box::new(level))
+    })
 }
 
 pub fn normalize_level(level: Level) -> Level {
@@ -295,9 +513,7 @@ pub fn levels_eq(ls1: &[Level], ls2: &[Level]) -> bool {
     if ls1.len() != ls2.len() {
         return false;
     }
-    ls1.iter()
-        .zip(ls2.iter())
-        .all(|(l1, l2)| level_eq(l1, l2))
+    ls1.iter().zip(ls2.iter()).all(|(l1, l2)| level_eq(l1, l2))
 }
 
 /// Binder information (explicit, implicit, strict implicit)
@@ -308,8 +524,16 @@ pub enum BinderInfo {
     StrictImplicit,
 }
 
+/// Function/closure kind for Pi/Lam.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FunctionKind {
+    Fn,
+    FnMut,
+    FnOnce,
+}
+
 /// The core terms of the calculus, using de Bruijn indices.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Term {
     /// Bound variable (de Bruijn index)
     Var(usize),
@@ -318,11 +542,12 @@ pub enum Term {
     /// Constant (global definition)
     Const(String, Vec<Level>),
     /// Application: (f a)
-    App(Rc<Term>, Rc<Term>),
+    /// Optional label is used for Ref lifetime annotations on the outer Ref application.
+    App(Rc<Term>, Rc<Term>, Option<String>),
     /// Lambda abstraction: \x:A. b
-    Lam(Rc<Term>, Rc<Term>, BinderInfo),
+    Lam(Rc<Term>, Rc<Term>, BinderInfo, FunctionKind),
     /// Pi type: (x:A) -> B
-    Pi(Rc<Term>, Rc<Term>, BinderInfo),
+    Pi(Rc<Term>, Rc<Term>, BinderInfo, FunctionKind),
     /// Let binding: let x:A = v in b
     LetE(Rc<Term>, Rc<Term>, Rc<Term>),
     /// Inductive type reference: (Ind "Nat" [levels])
@@ -337,11 +562,59 @@ pub enum Term {
     Meta(usize),
 }
 
+impl fmt::Debug for Term {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Term::Var(idx) => f.debug_tuple("Var").field(idx).finish(),
+            Term::Sort(level) => f.debug_tuple("Sort").field(level).finish(),
+            Term::Const(name, levels) => f.debug_tuple("Const").field(name).field(levels).finish(),
+            Term::App(fun, arg, label) => {
+                let mut dbg = f.debug_tuple("App");
+                dbg.field(fun).field(arg);
+                if let Some(label) = label {
+                    dbg.field(&format_args!("#{}", label));
+                }
+                dbg.finish()
+            }
+            Term::Lam(ty, body, info, kind) => f
+                .debug_tuple("Lam")
+                .field(ty)
+                .field(body)
+                .field(info)
+                .field(kind)
+                .finish(),
+            Term::Pi(ty, body, info, kind) => f
+                .debug_tuple("Pi")
+                .field(ty)
+                .field(body)
+                .field(info)
+                .field(kind)
+                .finish(),
+            Term::LetE(ty, val, body) => f
+                .debug_tuple("LetE")
+                .field(ty)
+                .field(val)
+                .field(body)
+                .finish(),
+            Term::Ind(name, levels) => f.debug_tuple("Ind").field(name).field(levels).finish(),
+            Term::Ctor(name, idx, levels) => f
+                .debug_tuple("Ctor")
+                .field(name)
+                .field(idx)
+                .field(levels)
+                .finish(),
+            Term::Rec(name, levels) => f.debug_tuple("Rec").field(name).field(levels).finish(),
+            Term::Fix(ty, body) => f.debug_tuple("Fix").field(ty).field(body).finish(),
+            Term::Meta(id) => f.debug_tuple("Meta").field(id).finish(),
+        }
+    }
+}
+
 /// A single constructor of an inductive type
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Constructor {
     pub name: String,
-    pub ty: Rc<Term>,  // Type relative to inductive params
+    pub ty: Rc<Term>, // Type relative to inductive params
 }
 
 /// Inductive type definition
@@ -350,11 +623,16 @@ pub struct InductiveDecl {
     pub name: String,
     pub univ_params: Vec<String>,
     pub num_params: usize,
-    pub ty: Rc<Term>,            // The "arity" (e.g., Type 0 for Nat)
+    pub ty: Rc<Term>, // The "arity" (e.g., Type 0 for Nat)
     pub ctors: Vec<Constructor>,
-    /// Whether this type has Copy semantics (can be used multiple times without moving).
-    /// Types like Nat, Bool are Copy; linear/resource types are not.
+    /// Whether Copy derivation was explicitly requested (e.g., `(inductive copy ...)`).
     pub is_copy: bool,
+    /// Marker identifiers attached to this type.
+    pub markers: Vec<MarkerId>,
+    /// Logical axioms used by this inductive (transitive closure).
+    pub axioms: Vec<String>,
+    /// Runtime primitives used by this inductive (transitive closure).
+    pub primitive_deps: Vec<String>,
 }
 
 impl InductiveDecl {
@@ -367,6 +645,9 @@ impl InductiveDecl {
             ty,
             ctors,
             is_copy: false,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         }
     }
 
@@ -379,7 +660,14 @@ impl InductiveDecl {
             ty,
             ctors,
             is_copy: true,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         }
+    }
+
+    pub fn has_marker_id(&self, marker: MarkerId) -> bool {
+        self.markers.contains(&marker)
     }
 }
 
@@ -388,21 +676,43 @@ impl Term {
     pub fn var(n: usize) -> Rc<Self> {
         Rc::new(Term::Var(n))
     }
-    
+
     pub fn sort(l: Level) -> Rc<Self> {
         Rc::new(Term::Sort(l))
     }
-    
+
     pub fn app(f: Rc<Term>, a: Rc<Term>) -> Rc<Self> {
-        Rc::new(Term::App(f, a))
+        Rc::new(Term::App(f, a, None))
     }
-    
+
+    pub fn app_with_label(f: Rc<Term>, a: Rc<Term>, label: Option<String>) -> Rc<Self> {
+        Rc::new(Term::App(f, a, label))
+    }
+
     pub fn lam(ty: Rc<Term>, body: Rc<Term>, info: BinderInfo) -> Rc<Self> {
-        Rc::new(Term::Lam(ty, body, info))
+        Rc::new(Term::Lam(ty, body, info, FunctionKind::Fn))
     }
-    
+
     pub fn pi(ty: Rc<Term>, body: Rc<Term>, info: BinderInfo) -> Rc<Self> {
-        Rc::new(Term::Pi(ty, body, info))
+        Rc::new(Term::Pi(ty, body, info, FunctionKind::Fn))
+    }
+
+    pub fn lam_with_kind(
+        ty: Rc<Term>,
+        body: Rc<Term>,
+        info: BinderInfo,
+        kind: FunctionKind,
+    ) -> Rc<Self> {
+        Rc::new(Term::Lam(ty, body, info, kind))
+    }
+
+    pub fn pi_with_kind(
+        ty: Rc<Term>,
+        body: Rc<Term>,
+        info: BinderInfo,
+        kind: FunctionKind,
+    ) -> Rc<Self> {
+        Rc::new(Term::Pi(ty, body, info, kind))
     }
 
     pub fn ind(name: String) -> Rc<Self> {
@@ -429,14 +739,21 @@ impl Term {
             }
             Term::Sort(l) => Rc::new(Term::Sort(l.clone())),
             Term::Const(n, ls) => Rc::new(Term::Const(n.clone(), ls.clone())),
-            Term::App(f, a) => Rc::new(Term::App(f.shift(c, d), a.shift(c, d))),
-            Term::Lam(ty, body, info) => Rc::new(Term::Lam(ty.shift(c, d), body.shift(c + 1, d), *info)),
-            Term::Pi(ty, body, info) => Rc::new(Term::Pi(ty.shift(c, d), body.shift(c + 1, d), *info)),
-            Term::LetE(ty, v, b) => Rc::new(Term::LetE(
+            Term::App(f, a, label) => {
+                Rc::new(Term::App(f.shift(c, d), a.shift(c, d), label.clone()))
+            }
+            Term::Lam(ty, body, info, kind) => Rc::new(Term::Lam(
                 ty.shift(c, d),
-                v.shift(c, d),
-                b.shift(c + 1, d),
+                body.shift(c + 1, d),
+                *info,
+                *kind,
             )),
+            Term::Pi(ty, body, info, kind) => {
+                Rc::new(Term::Pi(ty.shift(c, d), body.shift(c + 1, d), *info, *kind))
+            }
+            Term::LetE(ty, v, b) => {
+                Rc::new(Term::LetE(ty.shift(c, d), v.shift(c, d), b.shift(c + 1, d)))
+            }
             Term::Ind(n, ls) => Rc::new(Term::Ind(n.clone(), ls.clone())),
             Term::Ctor(n, idx, ls) => Rc::new(Term::Ctor(n.clone(), *idx, ls.clone())),
             Term::Rec(n, ls) => Rc::new(Term::Rec(n.clone(), ls.clone())),
@@ -459,16 +776,20 @@ impl Term {
             }
             Term::Sort(l) => Rc::new(Term::Sort(l.clone())),
             Term::Const(n, ls) => Rc::new(Term::Const(n.clone(), ls.clone())),
-            Term::App(f, a) => Rc::new(Term::App(f.subst(k, s), a.subst(k, s))),
-            Term::Lam(ty, body, info) => Rc::new(Term::Lam(
+            Term::App(f, a, label) => {
+                Rc::new(Term::App(f.subst(k, s), a.subst(k, s), label.clone()))
+            }
+            Term::Lam(ty, body, info, kind) => Rc::new(Term::Lam(
                 ty.subst(k, s),
                 body.subst(k + 1, &s.shift(0, 1)),
                 *info,
+                *kind,
             )),
-            Term::Pi(ty, body, info) => Rc::new(Term::Pi(
+            Term::Pi(ty, body, info, kind) => Rc::new(Term::Pi(
                 ty.subst(k, s),
                 body.subst(k + 1, &s.shift(0, 1)),
                 *info,
+                *kind,
             )),
             Term::LetE(ty, v, b) => Rc::new(Term::LetE(
                 ty.subst(k, s),
@@ -479,7 +800,9 @@ impl Term {
             Term::Ind(n, ls) => Rc::new(Term::Ind(n.clone(), ls.clone())),
             Term::Ctor(n, idx, ls) => Rc::new(Term::Ctor(n.clone(), *idx, ls.clone())),
             Term::Rec(n, ls) => Rc::new(Term::Rec(n.clone(), ls.clone())),
-            Term::Fix(ty, body) => Rc::new(Term::Fix(ty.subst(k, s), body.subst(k + 1, &s.shift(0, 1)))),
+            Term::Fix(ty, body) => {
+                Rc::new(Term::Fix(ty.subst(k, s), body.subst(k + 1, &s.shift(0, 1))))
+            }
             Term::Meta(id) => Rc::new(Term::Meta(*id)),
         }
     }

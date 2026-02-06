@@ -1,0 +1,37 @@
+(noncomputable use_shared (pi r (Ref #[r] Shared Nat) Nat)
+  (lam r (Ref #[r] Shared Nat) zero))
+
+(noncomputable use_mut (pi r (Ref #[r] Mut Nat) Nat)
+  (lam r (Ref #[r] Mut Nat) zero))
+
+;; Surface borrow syntax integration tests.
+
+(noncomputable borrow_shared_ok (pi x Nat Nat)
+  (lam x Nat
+    (let r (Ref #[r] Shared Nat) (& x)
+      x)))
+
+(noncomputable borrow_mut_ok (pi x Nat Nat)
+  (lam x Nat
+    (let r (Ref #[r] Mut Nat) (&mut x)
+      (use_mut r))))
+
+(noncomputable borrow_shared_app (pi x Nat Nat)
+  (lam x Nat
+    (use_shared (& x))))
+
+(noncomputable borrow_mut_app (pi x Nat Nat)
+  (lam x Nat
+    (use_mut (&mut x))))
+
+(noncomputable borrow_shared_twice (pi x Nat Nat)
+  (lam x Nat
+    (let r1 (Ref #[r] Shared Nat) (& x)
+      (let r2 (Ref #[r] Shared Nat) (& x)
+        zero))))
+
+(noncomputable borrow_from_let (pi x Nat Nat)
+  (lam x Nat
+    (let y Nat x
+      (let r (Ref #[r] Shared Nat) (& y)
+        zero))))

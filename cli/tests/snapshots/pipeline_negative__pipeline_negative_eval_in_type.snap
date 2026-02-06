@@ -1,0 +1,12 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Warning: Axiom 'Dyn' declared
+- Warning: Axiom 'EvalCap' declared
+- Warning: Axiom 'eval' declared (unsafe: eval)
+- Warning: Axiom 'dyn_code' declared
+- Warning: Axiom 'dyn_cap' declared
+- Error: [F0210] Elaboration error (Type) in 'bad': eval is not allowed in type position

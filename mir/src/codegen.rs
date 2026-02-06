@@ -1,14 +1,17 @@
-use crate::{Body, Statement, Terminator, Operand, Rvalue, Place, Literal, PlaceElem, RuntimeCheckKind};
-use kernel::ast::{Term, InductiveDecl};
-use std::rc::Rc;
+use crate::{
+    Body, CallOperand, Literal, Operand, Place, PlaceElem, RuntimeCheckKind, Rvalue, Statement,
+    Terminator,
+};
+use kernel::ast::{InductiveDecl, Term};
 use std::collections::HashMap;
+use std::rc::Rc;
 
-use kernel::checker::{Env, Builtin};
+use kernel::checker::{Builtin, Env};
 
 fn count_indices(ty: &Rc<Term>, num_params: usize) -> usize {
     let mut current = ty;
     let mut count = 0;
-    while let Term::Pi(_, body, _) = &**current {
+    while let Term::Pi(_, body, _, _) = &**current {
         count += 1;
         current = body;
     }
@@ -23,7 +26,7 @@ fn count_indices(ty: &Rc<Term>, num_params: usize) -> usize {
 fn is_recursive_arg(ty: &Rc<Term>, ind_name: &str) -> bool {
     match &**ty {
         Term::Ind(n, _) => n == ind_name,
-        Term::App(f, _) => is_recursive_arg(f, ind_name),
+        Term::App(f, _, _) => is_recursive_arg(f, ind_name),
         _ => false,
     }
 }
@@ -31,9 +34,12 @@ fn is_recursive_arg(ty: &Rc<Term>, ind_name: &str) -> bool {
 pub fn codegen_recursors(inductives: &HashMap<String, InductiveDecl>, env: &Env) -> String {
     let mut code = String::new();
     for (ind_name, decl) in inductives {
-        if env.is_builtin(Builtin::Nat, ind_name) || 
-           env.is_builtin(Builtin::Bool, ind_name) || 
-           env.is_builtin(Builtin::List, ind_name) { continue; }
+        if env.is_builtin(Builtin::Nat, ind_name)
+            || env.is_builtin(Builtin::Bool, ind_name)
+            || env.is_builtin(Builtin::List, ind_name)
+        {
+            continue;
+        }
 
         let num_params = decl.num_params;
         let num_ctors = decl.ctors.len();
@@ -41,21 +47,29 @@ pub fn codegen_recursors(inductives: &HashMap<String, InductiveDecl>, env: &Env)
         let total_args = num_params + 1 + num_ctors + num_indices + 1;
 
         // Entry point
-        code.push_str(&format!("fn rec_{}_entry(arg_0: Value) -> Value {{\n", ind_name));
+        code.push_str(&format!(
+            "fn rec_{}_entry(arg_0: Value) -> Value {{\n",
+            ind_name
+        ));
         for i in 1..total_args {
-            code.push_str(&format!("    Value::Func(Rc::new(move |arg_{}: Value| {{\n", i));
+            code.push_str(&format!(
+                "    Value::Func(Rc::new(move |arg_{}: Value| {{\n",
+                i
+            ));
             for j in 0..i {
                 code.push_str(&format!("        let arg_{} = arg_{}.clone();\n", j, j));
             }
         }
-        
+
         code.push_str(&format!("        rec_{}_impl(", ind_name));
         for i in 0..total_args {
-            if i > 0 { code.push_str(", "); }
+            if i > 0 {
+                code.push_str(", ");
+            }
             code.push_str(&format!("arg_{}", i));
         }
         code.push_str(")\n");
-        
+
         for _ in 1..total_args {
             code.push_str("    }))\n");
         }
@@ -64,60 +78,82 @@ pub fn codegen_recursors(inductives: &HashMap<String, InductiveDecl>, env: &Env)
         // Impl
         code.push_str(&format!("fn rec_{}_impl(", ind_name));
         for i in 0..total_args {
-            if i > 0 { code.push_str(", "); }
+            if i > 0 {
+                code.push_str(", ");
+            }
             code.push_str(&format!("arg_{}: Value", i));
         }
         code.push_str(") -> Value {\n");
-        
+
         let major_idx = total_args - 1;
         let first_minor_idx = num_params + 1;
-        
+
         code.push_str(&format!("    match arg_{} {{\n", major_idx));
         code.push_str("        Value::Inductive(n, idx, ctor_args) => {\n");
-        code.push_str(&format!("            if n != \"{}\" {{ panic!(\"rec_{}: type mismatch\"); }}\n", ind_name, ind_name));
+        code.push_str(&format!(
+            "            if n != \"{}\" {{ panic!(\"rec_{}: type mismatch\"); }}\n",
+            ind_name, ind_name
+        ));
         code.push_str("            match idx {\n");
-        
+
         for (c_idx, ctor) in decl.ctors.iter().enumerate() {
             code.push_str(&format!("                {} => {{\n", c_idx));
             let minor_idx = first_minor_idx + c_idx;
-            
+
             // Extract arg types
             let mut curr = &ctor.ty;
             for _ in 0..num_params {
-                if let Term::Pi(_, b, _) = &**curr { curr = b; }
+                if let Term::Pi(_, b, _, _) = &**curr {
+                    curr = b;
+                }
             }
             let mut arg_types = Vec::new();
-            while let Term::Pi(ty, b, _) = &**curr {
+            while let Term::Pi(ty, b, _, _) = &**curr {
                 arg_types.push(ty.clone());
                 curr = b;
             }
-            
-            code.push_str(&format!("                    let mut curr_fn = arg_{}.clone();\n", minor_idx));
-            
+
+            code.push_str(&format!(
+                "                    let mut curr_fn = arg_{}.clone();\n",
+                minor_idx
+            ));
+
             for (a_i, a_ty) in arg_types.iter().enumerate() {
-                code.push_str(&format!("                    let val_{} = ctor_args[{}].clone();\n", a_i, a_i));
+                code.push_str(&format!(
+                    "                    let val_{} = ctor_args[{}].clone();\n",
+                    a_i, a_i
+                ));
                 let is_rec = is_recursive_arg(a_ty, ind_name);
-                
+
                 code.push_str(&format!("                    match curr_fn {{ Value::Func(f) => curr_fn = f(val_{}.clone()), _ => panic!(\"rec_{}: expected func\") }}\n", a_i, ind_name));
-                
+
                 if is_rec {
-                    code.push_str(&format!("                    let ih_{} = rec_{}_impl(", a_i, ind_name));
-                    for k in 0..total_args-1 {
+                    code.push_str(&format!(
+                        "                    let ih_{} = rec_{}_impl(",
+                        a_i, ind_name
+                    ));
+                    for k in 0..total_args - 1 {
                         code.push_str(&format!("arg_{}.clone(), ", k));
                     }
                     code.push_str(&format!("val_{}.clone());\n", a_i));
-                    
+
                     code.push_str(&format!("                    match curr_fn {{ Value::Func(f) => curr_fn = f(ih_{}), _ => panic!(\"rec_{}: expected func for IH\") }}\n", a_i, ind_name));
                 }
             }
             code.push_str("                    curr_fn\n");
             code.push_str("                }\n");
         }
-        
-        code.push_str(&format!("                _ => panic!(\"rec_{}: invalid ctor idx\"),\n", ind_name));
+
+        code.push_str(&format!(
+            "                _ => panic!(\"rec_{}: invalid ctor idx\"),\n",
+            ind_name
+        ));
         code.push_str("            }\n");
         code.push_str("        }\n");
-        code.push_str(&format!("        _ => panic!(\"rec_{}: expected Inductive\"),\n", ind_name));
+        code.push_str(&format!(
+            "        _ => panic!(\"rec_{}: expected Inductive\"),\n",
+            ind_name
+        ));
         code.push_str("    }\n");
         code.push_str("}\n");
     }
@@ -184,9 +220,8 @@ fn runtime_bounds_check(container: &Value, index: &Value) {
         _ => return,
     };
 
-    let len = match container {
-        Value::List(list) => list_len(list),
-        _ => return,
+    let Some(len) = container_len(container) else {
+        return;
     };
 
     if idx >= len {
@@ -194,10 +229,58 @@ fn runtime_bounds_check(container: &Value, index: &Value) {
     }
 }
 
-fn list_len(list: &List) -> usize {
+fn runtime_index(container: &Value, index: &Value) -> Value {
+    let idx = match index {
+        Value::Nat(n) => *n as usize,
+        _ => return Value::Unit,
+    };
+
+    match container {
+        Value::List(list) => list_nth(list, idx),
+        Value::Inductive(name, _, args)
+            if (name == "VecDyn" || name == "Slice" || name == "Array") =>
+        {
+            match args.get(0) {
+                Some(Value::List(list)) => list_nth(list, idx),
+                _ => Value::Unit,
+            }
+        }
+        _ => Value::Unit,
+    }
+}
+
+fn list_len(list: &Rc<List>) -> usize {
     match &**list {
         List::Nil => 0,
         List::Cons(_, tail) => 1 + list_len(tail),
+    }
+}
+
+fn list_nth(list: &Rc<List>, idx: usize) -> Value {
+    match &**list {
+        List::Nil => Value::Unit,
+        List::Cons(head, tail) => {
+            if idx == 0 {
+                head.clone()
+            } else {
+                list_nth(tail, idx - 1)
+            }
+        }
+    }
+}
+
+fn container_len(container: &Value) -> Option<usize> {
+    match container {
+        Value::List(list) => Some(list_len(list)),
+        Value::Inductive(name, _, args)
+            if (name == "VecDyn" || name == "Slice" || name == "Array") =>
+        {
+            match args.get(0) {
+                Some(Value::List(list)) => Some(list_len(list)),
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 
@@ -300,7 +383,7 @@ fn rec_list_impl(t_val: Value, nil_case: Value, cons_case: Value, l_val: Value) 
 }
 
 /// Generates Rust code for a MIR Body using a state-machine approach.
-pub fn codegen_body(name: &str, body: &Body) -> String {
+pub fn codegen_body(name: &str, body: &Body, closure_base: usize) -> String {
     let mut code = String::new();
 
     // Determine if this is a closure (has 2 args: env + arg)
@@ -314,7 +397,10 @@ pub fn codegen_body(name: &str, body: &Body) -> String {
         format!("fn {}(__env: Vec<Value>, __arg: Value) -> Value", name)
     } else {
         // Generic multi-arg function
-        let args = (1..=body.arg_count).map(|i| format!("arg{}: Value", i)).collect::<Vec<_>>().join(", ");
+        let args = (1..=body.arg_count)
+            .map(|i| format!("arg{}: Value", i))
+            .collect::<Vec<_>>()
+            .join(", ");
         format!("fn {}({}) -> Value", name, args)
     };
 
@@ -347,7 +433,7 @@ pub fn codegen_body(name: &str, body: &Body) -> String {
 
     for (idx, block) in body.basic_blocks.iter().enumerate() {
         code.push_str(&format!("            {} => {{\n", idx));
-        code.push_str(&codegen_block(block, is_closure));
+        code.push_str(&codegen_block(block, is_closure, closure_base));
         code.push_str("            }\n");
     }
 
@@ -360,27 +446,27 @@ pub fn codegen_body(name: &str, body: &Body) -> String {
     code
 }
 
-fn codegen_block(data: &crate::BasicBlockData, is_closure: bool) -> String {
+fn codegen_block(data: &crate::BasicBlockData, is_closure: bool, closure_base: usize) -> String {
     let mut code = String::new();
 
     for stmt in &data.statements {
-        code.push_str(&codegen_statement(stmt, is_closure));
+        code.push_str(&codegen_statement(stmt, is_closure, closure_base));
     }
 
     if let Some(term) = &data.terminator {
-        code.push_str(&codegen_terminator(term, is_closure));
+        code.push_str(&codegen_terminator(term, is_closure, closure_base));
     }
 
     code
 }
 
-fn codegen_statement(stmt: &Statement, is_closure: bool) -> String {
+fn codegen_statement(stmt: &Statement, is_closure: bool, closure_base: usize) -> String {
     match stmt {
         Statement::Assign(place, rvalue) => {
             let dest = codegen_place_assign(place);
-            let val = codegen_rvalue(rvalue, is_closure);
+            let val = codegen_rvalue(rvalue, is_closure, closure_base);
             format!("                {} = {};\n", dest, val)
-        },
+        }
         Statement::RuntimeCheck(check) => codegen_runtime_check(check, is_closure),
         Statement::StorageLive(_) | Statement::StorageDead(_) | Statement::Nop => {
             format!("                // {:?}\n", stmt)
@@ -392,7 +478,10 @@ fn codegen_runtime_check(check: &RuntimeCheckKind, is_closure: bool) -> String {
     match check {
         RuntimeCheckKind::RefCellBorrow { local } => {
             let value = codegen_place_read(&Place::from(*local), is_closure);
-            format!("                runtime_refcell_borrow_check(&{});\n", value)
+            format!(
+                "                runtime_refcell_borrow_check(&{});\n",
+                value
+            )
         }
         RuntimeCheckKind::MutexLock { local } => {
             let value = codegen_place_read(&Place::from(*local), is_closure);
@@ -409,37 +498,53 @@ fn codegen_runtime_check(check: &RuntimeCheckKind, is_closure: bool) -> String {
     }
 }
 
-fn codegen_terminator(term: &Terminator, is_closure: bool) -> String {
+fn codegen_terminator(term: &Terminator, is_closure: bool, closure_base: usize) -> String {
     match term {
-        Terminator::Return => {
-            "                break;\n".to_string()
-        },
+        Terminator::Return => "                break;\n".to_string(),
         Terminator::Goto { target } => {
-            format!("                state = {};\n                continue;\n", target.index())
-        },
+            format!(
+                "                state = {};\n                continue;\n",
+                target.index()
+            )
+        }
         Terminator::SwitchInt { discr, targets } => {
             // Switch on discriminant
-            let val = codegen_operand(discr, is_closure);
-            let mut code = format!("                match (match &{} {{ Value::Nat(n) => *n, _ => 0 }}) {{\n", val);
+            let val = codegen_operand(discr, is_closure, closure_base);
+            let mut code = format!(
+                "                match (match &{} {{ Value::Nat(n) => *n, _ => 0 }}) {{\n",
+                val
+            );
             for (v_idx, val) in targets.values.iter().enumerate() {
                 let target = targets.targets[v_idx];
-                code.push_str(&format!("                    {} => {{ state = {}; continue; }}\n", val, target.index()));
+                code.push_str(&format!(
+                    "                    {} => {{ state = {}; continue; }}\n",
+                    val,
+                    target.index()
+                ));
             }
             if targets.targets.len() > targets.values.len() {
-                 let default_target = targets.targets.last().unwrap();
-                 code.push_str(&format!("                    _ => {{ state = {}; continue; }}\n", default_target.index()));
+                let default_target = targets.targets.last().unwrap();
+                code.push_str(&format!(
+                    "                    _ => {{ state = {}; continue; }}\n",
+                    default_target.index()
+                ));
             } else {
-                 code.push_str("                    _ => unreachable!(),\n");
+                code.push_str("                    _ => unreachable!(),\n");
             }
             code.push_str("                }\n");
             code
-        },
-        Terminator::Call { func, args, destination, target } => {
-            let func_str = codegen_operand(func, is_closure);
+        }
+        Terminator::Call {
+            func,
+            args,
+            destination,
+            target,
+        } => {
+            let func_str = codegen_call_operand(func, is_closure, closure_base);
             // Expect func to be Value::Func
             // args should be length 1
             let arg_str = if !args.is_empty() {
-                codegen_operand(&args[0], is_closure)
+                codegen_operand(&args[0], is_closure, closure_base)
             } else {
                 "Value::Unit".to_string()
             };
@@ -452,12 +557,15 @@ fn codegen_terminator(term: &Terminator, is_closure: bool) -> String {
             );
 
             if let Some(t) = target {
-                 code.push_str(&format!("                state = {};\n                continue;\n", t.index()));
+                code.push_str(&format!(
+                    "                state = {};\n                continue;\n",
+                    t.index()
+                ));
             } else {
-                 code.push_str("                break;\n");
+                code.push_str("                break;\n");
             }
             code
-        },
+        }
         Terminator::Unreachable => "                unreachable!();\n".to_string(),
     }
 }
@@ -496,18 +604,22 @@ fn codegen_place_read(place: &Place, is_closure: bool) -> String {
                 // Deref - just clone the value
                 s = format!("{}.clone()", s);
             }
+            PlaceElem::Index(index_local) => {
+                let idx = codegen_place_read(&Place::from(*index_local), is_closure);
+                s = format!("runtime_index(&{}, &{})", s, idx);
+            }
         }
     }
     s
 }
 
-fn codegen_rvalue(rvalue: &Rvalue, is_closure: bool) -> String {
+fn codegen_rvalue(rvalue: &Rvalue, is_closure: bool, closure_base: usize) -> String {
     match rvalue {
-        Rvalue::Use(op) => codegen_operand(op, is_closure),
+        Rvalue::Use(op) => codegen_operand(op, is_closure, closure_base),
         Rvalue::Ref(_, place) => {
             // Value is Clone, so we just copy
             codegen_place_read(place, is_closure)
-        },
+        }
         Rvalue::Discriminant(place) => {
             // Return discriminant value as Nat for SwitchInt
             let p = codegen_place_read(place, is_closure);
@@ -516,53 +628,99 @@ fn codegen_rvalue(rvalue: &Rvalue, is_closure: bool) -> String {
     }
 }
 
-fn codegen_operand(op: &Operand, is_closure: bool) -> String {
+fn codegen_operand(op: &Operand, is_closure: bool, closure_base: usize) -> String {
     match op {
         Operand::Copy(place) | Operand::Move(place) => {
             let s = codegen_place_read(place, is_closure);
             format!("{}.clone()", s)
-        },
-        Operand::Constant(c) => codegen_constant(&c.literal),
+        }
+        Operand::Constant(c) => codegen_constant(&c.literal, closure_base),
     }
 }
 
-pub fn codegen_constant(lit: &Literal) -> String {
+fn codegen_call_operand(op: &CallOperand, is_closure: bool, closure_base: usize) -> String {
+    match op {
+        CallOperand::Operand(op) => codegen_operand(op, is_closure, closure_base),
+        CallOperand::Borrow(_, place) => {
+            let s = codegen_place_read(place, is_closure);
+            format!("{}.clone()", s)
+        }
+    }
+}
+
+pub fn codegen_constant(lit: &Literal, closure_base: usize) -> String {
     match lit {
         Literal::Unit => "Value::Unit".to_string(),
         Literal::Nat(n) => format!("Value::Nat({})", n),
         Literal::Bool(b) => format!("Value::Bool({})", b),
+        Literal::GlobalDef(name) => format!("{}()", sanitize_name(name)),
+        Literal::Recursor(name) => {
+            if name == "Nat" {
+                "Value::Func(Rc::new(rec_nat_entry))".to_string()
+            } else if name == "Bool" {
+                "Value::Func(Rc::new(rec_bool_entry))".to_string()
+            } else if name == "List" {
+                "Value::Func(Rc::new(rec_list_entry))".to_string()
+            } else {
+                format!("Value::Func(Rc::new(rec_{}_entry))", name)
+            }
+        }
+        Literal::OpaqueConst(reason) => format!(
+            "panic!({:?})",
+            format!("OpaqueConst literal reached codegen: {}", reason)
+        ),
         Literal::Closure(idx, captures) => {
             // Generate a Value::Func that wraps the closure function
             // The closure function expects (env: Vec<Value>, arg: Value) -> Value
             // We capture the environment as a Vec and call the function
-            let func_name = format!("closure_{}", idx);
+            let func_name = format!("closure_{}", closure_base + idx);
             if captures.is_empty() {
                 // No captures - simple wrapper
-                format!("Value::Func(Rc::new(move |arg| {}(vec![], arg)))", func_name)
+                format!(
+                    "Value::Func(Rc::new(move |arg| {}(vec![], arg)))",
+                    func_name
+                )
             } else {
                 // Clone captures for the move closure
                 // Note: captures are operands from the outer scope, not inside a closure
-                let cap_clones: Vec<String> = captures.iter().enumerate()
-                    .map(|(i, op)| format!("let __cap{} = {}.clone();", i, codegen_operand(op, false)))
+                let cap_clones: Vec<String> = captures
+                    .iter()
+                    .enumerate()
+                    .map(|(i, op)| {
+                        format!(
+                            "let __cap{} = {}.clone();",
+                            i,
+                            codegen_operand(op, false, closure_base)
+                        )
+                    })
                     .collect();
                 let cap_vec: Vec<String> = (0..captures.len())
                     .map(|i| format!("__cap{}.clone()", i))
                     .collect();
-                format!("{{ {} Value::Func(Rc::new(move |arg| {}(vec![{}], arg))) }}",
+                format!(
+                    "{{ {} Value::Func(Rc::new(move |arg| {}(vec![{}], arg))) }}",
                     cap_clones.join(" "),
                     func_name,
                     cap_vec.join(", ")
                 )
             }
-        },
+        }
         Literal::Fix(idx, captures) => {
             // Recursive closure: env[0] is self, env[1..] are captures
-            let func_name = format!("closure_{}", idx);
+            let func_name = format!("closure_{}", closure_base + idx);
             if captures.is_empty() {
                 format!("Value::Func(Rc::new_cyclic(|self_ref| {{ let self_val = Value::Func(self_ref.clone()); move |arg| {}(vec![self_val.clone()], arg) }}))", func_name)
             } else {
-                let cap_clones: Vec<String> = captures.iter().enumerate()
-                    .map(|(i, op)| format!("let __cap{} = {}.clone();", i, codegen_operand(op, false)))
+                let cap_clones: Vec<String> = captures
+                    .iter()
+                    .enumerate()
+                    .map(|(i, op)| {
+                        format!(
+                            "let __cap{} = {}.clone();",
+                            i,
+                            codegen_operand(op, false, closure_base)
+                        )
+                    })
                     .collect();
                 let cap_vec: Vec<String> = (0..captures.len())
                     .map(|i| format!("__cap{}.clone()", i))
@@ -573,29 +731,34 @@ pub fn codegen_constant(lit: &Literal) -> String {
                     func_name
                 )
             }
-        },
-        Literal::InductiveCtor(name, idx, arity) => {
-            if name == "Nat" {
-                if *idx == 0 {
+        }
+        Literal::InductiveCtor(ctor, arity) => {
+            let adt = &ctor.adt;
+            if adt.is_builtin(Builtin::Nat) {
+                if ctor.index == 0 {
                     "Value::Nat(0)".to_string()
                 } else {
                     "Value::Func(Rc::new(|n| match n { Value::Nat(i) => Value::Nat(i+1), _ => panic!(\"succ expects Nat\") }))".to_string()
                 }
-            } else if name == "Bool" {
-                if *idx == 0 {
+            } else if adt.is_builtin(Builtin::Bool) {
+                if ctor.index == 0 {
                     "Value::Bool(true)".to_string()
                 } else {
                     "Value::Bool(false)".to_string()
                 }
-            } else if name == "List" {
-                if *idx == 0 {
+            } else if adt.is_builtin(Builtin::List) {
+                if ctor.index == 0 {
                     "Value::Func(Rc::new(|_| Value::List(Rc::new(List::Nil))))".to_string()
                 } else {
                     "Value::Func(Rc::new(|_| Value::Func(Rc::new(|h| { let h = h.clone(); Value::Func(Rc::new(move |t| match t { Value::List(l) => Value::List(Rc::new(List::Cons(h.clone(), l))), _ => panic!(\"cons expects List\") })) }))))".to_string()
                 }
             } else {
+                let name = adt.name();
                 if *arity == 0 {
-                    format!("Value::Inductive(\"{}\".to_string(), {}, vec![])", name, idx)
+                    format!(
+                        "Value::Inductive(\"{}\".to_string(), {}, vec![])",
+                        name, ctor.index
+                    )
                 } else {
                     let mut s = String::new();
                     for i in 0..*arity {
@@ -604,66 +767,24 @@ pub fn codegen_constant(lit: &Literal) -> String {
                             s.push_str(&format!("let a{} = a{}.clone();\n", j, j));
                         }
                     }
-                    
-                    s.push_str(&format!("Value::Inductive(\"{}\".to_string(), {}, vec![", name, idx));
+
+                    s.push_str(&format!(
+                        "Value::Inductive(\"{}\".to_string(), {}, vec![",
+                        name, ctor.index
+                    ));
                     for i in 0..*arity {
-                        if i > 0 { s.push_str(", "); }
+                        if i > 0 {
+                            s.push_str(", ");
+                        }
                         s.push_str(&format!("a{}", i));
                     }
                     s.push_str("])\n");
-                    
+
                     for _ in 0..*arity {
                         s.push_str("}))\n");
                     }
                     s
                 }
-            }
-        },
-        Literal::Term(t) => {
-            match &**t {
-                Term::Sort(_) => "Value::Unit".to_string(),
-                Term::Const(n, _) => {
-                     // Reference to another top-level Value definition
-                     format!("{}()", sanitize_name(n))
-                }
-                Term::Ctor(name, idx, _) => {
-                    // Constructor - generate appropriate value
-                    if name == "Nat" {
-                        if *idx == 0 {
-                            "Value::Nat(0)".to_string()
-                        } else {
-                            "Value::Func(Rc::new(|n| match n { Value::Nat(i) => Value::Nat(i+1), _ => panic!(\"succ expects Nat\") }))".to_string()
-                        }
-                    } else if name == "Bool" {
-                        if *idx == 0 {
-                            "Value::Bool(true)".to_string()
-                        } else {
-                            "Value::Bool(false)".to_string()
-                        }
-                    } else if name == "List" {
-                        if *idx == 0 {
-                            "Value::Func(Rc::new(|_| Value::List(Rc::new(List::Nil))))".to_string()
-                        } else {
-                            "Value::Func(Rc::new(|_| Value::Func(Rc::new(|h| { let h = h.clone(); Value::Func(Rc::new(move |t| match t { Value::List(l) => Value::List(Rc::new(List::Cons(h.clone(), l))), _ => panic!(\"cons expects List\") })) }))))".to_string()
-                        }
-                    } else {
-                        // Generic inductive constructor
-                        format!("Value::Inductive(\"{}\".to_string(), {}, vec![])", name, idx)
-                    }
-                }
-                Term::Rec(name, _) => {
-                    // Recursor - return the entry function
-                    if name == "Nat" {
-                        "Value::Func(Rc::new(rec_nat_entry))".to_string()
-                    } else if name == "Bool" {
-                        "Value::Func(Rc::new(rec_bool_entry))".to_string()
-                    } else if name == "List" {
-                        "Value::Func(Rc::new(rec_list_entry))".to_string()
-                    } else {
-                        format!("Value::Func(Rc::new(rec_{}_entry))", name)
-                    }
-                }
-                _ => "Value::Unit".to_string(),
             }
         }
     }
@@ -671,11 +792,12 @@ pub fn codegen_constant(lit: &Literal) -> String {
 
 pub fn sanitize_name(name: &str) -> String {
     match name {
-        "true" | "false" | "if" | "else" | "match" | "let" | "fn" | "struct" | "enum" | "type" | "return" |
-        "loop" | "while" | "for" | "in" | "use" | "mod" | "crate" | "pub" | "impl" | "trait" | "where" |
-        "as" | "break" | "continue" | "unsafe" | "async" | "await" | "move" | "ref" | "mut" | "static" | "const" => {
+        "true" | "false" | "if" | "else" | "match" | "let" | "fn" | "struct" | "enum" | "type"
+        | "return" | "loop" | "while" | "for" | "in" | "use" | "mod" | "crate" | "pub" | "impl"
+        | "trait" | "where" | "as" | "break" | "continue" | "unsafe" | "async" | "await"
+        | "move" | "ref" | "mut" | "static" | "const" => {
             format!("r#{}", name)
         }
-        _ => name.replace(".", "_")
+        _ => name.replace(".", "_"),
     }
 }

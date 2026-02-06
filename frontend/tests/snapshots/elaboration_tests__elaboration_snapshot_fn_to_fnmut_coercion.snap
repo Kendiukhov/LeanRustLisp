@@ -1,0 +1,7 @@
+---
+source: frontend/tests/elaboration_tests.rs
+expression: output
+---
+ElaboratedDef coerce_mut
+  ty: Pi(Ind("Nat", []), Ind("Nat", []), Default, FnMut)
+  val: Lam(Ind("Nat", []), App(Lam(Ind("Nat", []), Var(0), Default, Fn), Var(0)), Default, FnMut)

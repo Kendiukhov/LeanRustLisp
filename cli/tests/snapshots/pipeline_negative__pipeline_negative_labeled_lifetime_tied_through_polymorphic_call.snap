@@ -1,0 +1,22 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Warning: Axiom 'interior_mutable' declared (unsafe: interior_mutable)
+- Warning: Axiom 'may_panic_on_borrow_violation' declared (unsafe: may_panic_on_borrow_violation)
+- Warning: Axiom 'concurrency_primitive' declared (unsafe: concurrency_primitive)
+- Warning: Axiom 'atomic_primitive' declared (unsafe: atomic_primitive)
+- Warning: Axiom 'indexable' declared (unsafe: indexable)
+- Warning: Primitive 'Shared' declared
+- Warning: Primitive 'Mut' declared
+- Warning: Primitive 'Ref' declared
+- Warning: Primitive 'borrow_shared' declared
+- Warning: Primitive 'borrow_mut' declared
+- Warning: Definition 'use_shared' depends on primitives: Ref, Shared
+- Warning: Definition 'use_mut' depends on primitives: Mut, Ref
+- Warning: Definition 'choose_left' depends on primitives: Ref, Shared
+- Error: [M300] MIR typing error in bad_overlap closure 0: Call argument type mismatch: expected Ref(Region(16), Param(0), Not), got Ref(Region(6), Nat, Not)
+- Error: [M300] MIR typing error in bad_overlap closure 0: Call argument type mismatch: expected Ref(Region(17), Param(0), Not), got Ref(Region(7), Nat, Not)
+- Error: [M300] MIR typing error in bad_overlap closure 0: Call destination type mismatch: expected Ref(Region(17), Param(0), Not), got Ref(Region(3), Nat, Not) (callee: Fn([], [Ref(Region(17), Param(0), Not)], Ref(Region(17), Param(0), Not)), args: [Ref(Region(7), Nat, Not)])

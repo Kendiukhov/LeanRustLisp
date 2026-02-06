@@ -1,0 +1,15 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Warning: Axiom 'interior_mutable' declared (unsafe: interior_mutable)
+- Warning: Axiom 'may_panic_on_borrow_violation' declared (unsafe: may_panic_on_borrow_violation)
+- Warning: Axiom 'concurrency_primitive' declared (unsafe: concurrency_primitive)
+- Warning: Axiom 'atomic_primitive' declared (unsafe: atomic_primitive)
+- Warning: Axiom 'indexable' declared (unsafe: indexable)
+- Warning: Primitive 'Shared' declared
+- Warning: Primitive 'Mut' declared
+- Warning: Primitive 'Ref' declared
+- Error: [F0214] Elaboration error (Value) in 'coerce': Unification failed: (Ref #[a] Shared Nat) vs (Ref #[b] Shared Nat)

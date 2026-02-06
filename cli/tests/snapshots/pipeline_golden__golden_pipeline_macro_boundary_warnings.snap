@@ -1,0 +1,46 @@
+---
+source: cli/tests/pipeline_golden.rs
+expression: output
+---
+Diagnostics:
+- Warning: [F0104] Macro expansion for 'mk_unsafe' produced macro boundary form(s): unsafe
+- Warning: [F0104] Macro expansion for 'mk_classical' produced macro boundary form(s): axiom classical
+- Warning: [F0104] Macro expansion for 'mk_axiom' produced macro boundary form(s): axiom
+- Warning: [F0104] Macro expansion for 'mk_import_classical' produced macro boundary form(s): import classical
+- Warning: Axiom 'choice' declared (classical: choice)
+- Warning: Axiom 'postulate' declared
+- Warning: Axiom 'classical_choice' declared (classical: classical_choice)
+
+DefEqConfig
+  fuel: 100000
+  source: default
+  transparency: Reducible
+
+ElaboratedDef Foo
+  ty: Sort(Succ(Zero))
+  val: Sort(Zero)
+
+MirBody Foo
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Unit, ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Unit, name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {} } }
+
+BorrowCheck Foo
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+AxiomDependencies choice
+  axioms: ["choice"]
+  classical: ["choice"]
+
+AxiomDependencies classical_choice
+  axioms: ["classical_choice"]
+  classical: ["classical_choice"]
+
+AxiomDependencies postulate
+  axioms: ["postulate"]
+  classical: []

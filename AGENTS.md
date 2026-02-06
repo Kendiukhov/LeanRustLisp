@@ -11,6 +11,7 @@
 - `cargo build` -- build all workspace crates.
 - `cargo test --all` -- run Rust unit/integration tests across crates.
 - `cargo test -p frontend` / `cargo test -p cli` -- focus tests for a single crate.
+- `cargo test -p mir --lib` / `cargo test -p frontend --lib` / `cargo test -p cli --lib` -- run fast unit-test slices for MIR lowering, elaboration, and CLI compiler logic.
 - `cargo run -p cli -- tests/ownership_test.lrl` -- run a program in the interpreter (loads `stdlib/prelude.lrl`).
 - `cargo run -p cli -- compile tests/ownership_test.lrl` -- compile to Rust (optionally `-o/--output <path>`).
 - `cargo run -p cli -- compile-mir tests/ownership_test.lrl` -- lower to MIR for inspection.
@@ -24,7 +25,12 @@
 - Rust tests live in `*/tests/*.rs` and `src/*` test modules; snapshots use `insta` in `frontend/tests/snapshots` and `cli/tests`.
 - To update snapshots, run `INSTA_UPDATE=always cargo test -p frontend` (or `-p cli`).
 - `.lrl` programs in `tests/` are run via the CLI; add new cases alongside related files.
+- New unit tests for recent Fn/FnOnce + erased-type changes live in `mir/src/lower.rs`, `frontend/src/elaborator.rs`, and `cli/src/compiler.rs`.
 
 ## Commit & Pull Request Guidelines
 - Commit messages are short, capitalized imperatives (e.g., "Add ...", "Implement ...", "Remove ...").
 - PRs should describe scope, list tests run, and call out snapshot/output changes. Link relevant issues or design docs when available.
+
+## Advice
+If you were stuck with an error for a long time and finally found a solution, please document it here in concise form.
+- Persistent borrow errors in MIR often trace back to erased/Unit locals being marked non-Copy. Ensure `push_local`/`push_temp_local` set `is_copy` based on the lowered `MirType` and then refresh snapshots; otherwise closures may borrow ephemeral erased args and fail later in borrowck.

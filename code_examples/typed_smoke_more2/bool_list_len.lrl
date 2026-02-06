@@ -1,0 +1,12 @@
+(inductive copy BoolList (sort 1)
+  (ctor bnil BoolList)
+  (ctor bcons (pi h Bool (pi t BoolList BoolList)))
+)
+
+(def blen (pi xs BoolList Nat)
+  (lam xs BoolList
+    (match xs Nat
+      (case (bnil) zero)
+      (case (bcons h t ih) (succ ih)))))
+
+(blen (bcons true (bcons false bnil)))

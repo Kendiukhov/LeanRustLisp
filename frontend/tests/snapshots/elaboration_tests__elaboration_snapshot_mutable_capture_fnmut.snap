@@ -1,0 +1,7 @@
+---
+source: frontend/tests/elaboration_tests.rs
+expression: output
+---
+ElaboratedDef make_mut
+  ty: Pi(App(App(Const("Ref", []), Const("Mut", [])), Ind("Nat", []), #r), Pi(Ind("Nat", []), App(App(Const("Ref", []), Const("Mut", [])), Ind("Nat", []), #r), Default, FnMut), Default, Fn)
+  val: Lam(App(App(Const("Ref", []), Const("Mut", [])), Ind("Nat", []), #r), Lam(Ind("Nat", []), Var(1), Default, FnMut), Default, Fn)

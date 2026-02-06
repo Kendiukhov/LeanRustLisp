@@ -1,0 +1,15 @@
+(inductive copy EitherNatBool (sort 1)
+  (ctor left (pi n Nat EitherNatBool))
+  (ctor right (pi b Bool EitherNatBool))
+)
+
+(def tag (pi e EitherNatBool Nat)
+  (lam e EitherNatBool
+    (match e Nat
+      (case (left n) n)
+      (case (right b)
+        (match b Nat
+          (case (true) (succ zero))
+          (case (false) zero))))))
+
+(tag (right true))

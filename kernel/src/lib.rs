@@ -1,39 +1,67 @@
 pub mod ast;
-#[cfg(test)]
-mod test_support;
 pub mod checker;
 pub mod nbe;
 pub mod ownership;
+#[cfg(test)]
+mod test_support;
 
 pub use ast::*;
-pub use ast::{Totality, Definition, WellFoundedInfo};
+pub use ast::{Definition, DefinitionKind, Totality, WellFoundedInfo};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{InductiveDecl, Constructor, Term, Level};
+    use crate::ast::{BinderInfo, Constructor, InductiveDecl, Level, Term};
+    use crate::checker::{check, infer, Context, Env, TypeError};
     use crate::test_support::Parser;
-    use crate::checker::{check, infer, Context, Env};
     use std::rc::Rc;
+
+    fn add_comp(env: &mut Env) {
+        let allow_reserved = env.allows_reserved_primitives();
+        env.set_allow_reserved_primitives(true);
+        let type1 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
+        let comp_ind = Rc::new(Term::Ind("Comp".to_string(), vec![]));
+        let comp_body = Term::app(comp_ind.clone(), Term::var(1));
+        let ret_ty = Term::pi(
+            type1.clone(),
+            Term::pi(Term::var(0), comp_body, BinderInfo::Default),
+            BinderInfo::Default,
+        );
+        let comp_decl = InductiveDecl::new(
+            "Comp".to_string(),
+            Term::pi(
+                type1,
+                Term::sort(Level::Succ(Box::new(Level::Zero))),
+                BinderInfo::Default,
+            ),
+            vec![Constructor {
+                name: "ret".to_string(),
+                ty: ret_ty,
+            }],
+        );
+        env.add_inductive(comp_decl)
+            .expect("Comp inductive should be accepted");
+        env.set_allow_reserved_primitives(allow_reserved);
+    }
 
     #[test]
     fn test_identity_function() {
         // \x:Prop. x
-        let input = "(lam (sort 0) 0)"; 
+        let input = "(lam (sort 0) 0)";
         let mut parser = Parser::new(input);
         let term = parser.parse_term().expect("Failed to parse");
-        
+
         let env = Env::new();
         let ctx = Context::new();
-        
+
         // Expected type: Prop -> Prop  => (pi (sort 0) (sort 0))
         let expected_input = "(pi (sort 0) (sort 0))";
         let mut parser2 = Parser::new(expected_input);
         let expected = parser2.parse_term().expect("Failed to parse expected");
-        
+
         let inferred = infer(&env, &ctx, term.clone()).expect("Failed to infer");
         println!("Inferred: {:?}", inferred);
-        
+
         check(&env, &ctx, term, expected).expect("Type check failed");
     }
 
@@ -60,15 +88,16 @@ mod tests {
 
     #[test]
     fn test_nat_inductive() {
-        use crate::ast::{Constructor, InductiveDecl, BinderInfo};
+        use crate::ast::{BinderInfo, Constructor, InductiveDecl};
         // Register Nat: Type 0
         // Nat.zero : Nat
         // Nat.succ : Nat -> Nat
         let mut env = Env::new();
-        
+        env.set_allow_reserved_primitives(true);
+
         let nat_ty = Term::sort(Level::Succ(Box::new(Level::Zero))); // Type 0
         let nat_ref = Term::ind("Nat".to_string());
-        
+
         let nat_decl = InductiveDecl {
             name: "Nat".to_string(),
             univ_params: vec![],
@@ -85,28 +114,31 @@ mod tests {
                 },
             ],
             is_copy: true, // Nat has Copy semantics
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
 
         env.add_inductive(nat_decl).expect("Failed to add Nat");
         let ctx = Context::new();
-        
+
         // Check that (ind Nat) has type Type 0
         let ind_nat = Term::ind("Nat".to_string());
         let inferred = infer(&env, &ctx, ind_nat).expect("Failed to infer Nat");
         println!("Nat type: {:?}", inferred);
         assert!(matches!(&*inferred, Term::Sort(Level::Succ(_))));
-        
+
         // Check that (ctor Nat 0) = zero has type Nat
         let zero = Term::ctor("Nat".to_string(), 0);
         let zero_ty = infer(&env, &ctx, zero).expect("Failed to infer zero");
         println!("zero type: {:?}", zero_ty);
         assert!(matches!(&*zero_ty, Term::Ind(name, _) if name == "Nat"));
-        
+
         // Check that (ctor Nat 1) = succ has type Nat -> Nat
         let succ = Term::ctor("Nat".to_string(), 1);
         let succ_ty = infer(&env, &ctx, succ).expect("Failed to infer succ");
         println!("succ type: {:?}", succ_ty);
-        assert!(matches!(&*succ_ty, Term::Pi(_, _, _)));
+        assert!(matches!(&*succ_ty, Term::Pi(_, _, _, _)));
     }
 
     #[test]
@@ -116,13 +148,13 @@ mod tests {
         let mut parser = Parser::new(input);
         let term = parser.parse_term().expect("Failed to parse ind");
         assert!(matches!(&*term, Term::Ind(name, _) if name == "Nat"));
-        
+
         // Test parsing (ctor Nat 0)
         let input2 = "(ctor Nat 0)";
         let mut parser2 = Parser::new(input2);
         let term2 = parser2.parse_term().expect("Failed to parse ctor");
         assert!(matches!(&*term2, Term::Ctor(name, 0, _) if name == "Nat"));
-        
+
         // Test parsing (rec Nat 1)
         let input3 = "(rec Nat 1)";
         let mut parser3 = Parser::new(input3);
@@ -134,7 +166,7 @@ mod tests {
     fn test_unknown_inductive_error() {
         let env = Env::new();
         let ctx = Context::new();
-        
+
         // Trying to infer type of unknown inductive should fail
         let ind = Term::ind("Unknown".to_string());
         let result = infer(&env, &ctx, ind);
@@ -143,14 +175,15 @@ mod tests {
 
     #[test]
     fn test_recursor_type() {
-        use crate::checker::compute_recursor_type;
         use crate::ast::BinderInfo;
-        
+        use crate::checker::compute_recursor_type;
+
         // Set up Nat inductive
         let mut env = Env::new();
+        env.set_allow_reserved_primitives(true);
         let nat_ty = Term::sort(Level::Succ(Box::new(Level::Zero)));
         let nat_ref = Term::ind("Nat".to_string());
-        
+
         let nat_decl = InductiveDecl {
             name: "Nat".to_string(),
             univ_params: vec![],
@@ -167,35 +200,40 @@ mod tests {
                 },
             ],
             is_copy: true,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
 
-        env.add_inductive(nat_decl.clone()).expect("Failed to add Nat");
+        env.add_inductive(nat_decl.clone())
+            .expect("Failed to add Nat");
         let ctx = Context::new();
-        
+
         // Check that (rec Nat) has a Pi type (motive → ... → result)
         let rec_nat = Term::rec("Nat".to_string(), vec![Level::Succ(Box::new(Level::Zero))]);
         let rec_ty = infer(&env, &ctx, rec_nat).expect("Failed to infer recursor type");
         println!("Nat.rec type: {:?}", rec_ty);
-        
+
         // The computed type should be a Pi
-        assert!(matches!(&*rec_ty, Term::Pi(_, _, _)));
-        
+        assert!(matches!(&*rec_ty, Term::Pi(_, _, _, _)));
+
         // Also test compute_recursor_type directly
         let computed = compute_recursor_type(&nat_decl, &[Level::Succ(Box::new(Level::Zero))]);
         println!("Computed type: {:?}", computed);
-        assert!(matches!(&*computed, Term::Pi(_, _, _)));
+        assert!(matches!(&*computed, Term::Pi(_, _, _, _)));
     }
 
     #[test]
     fn test_iota_reduction() {
-        use crate::checker::whnf;
         use crate::ast::BinderInfo;
-        
+        use crate::checker::whnf;
+
         // Set up Nat inductive with zero and succ
         let mut env = Env::new();
+        env.set_allow_reserved_primitives(true);
         let nat_ty = Term::sort(Level::Succ(Box::new(Level::Zero)));
         let nat_ref = Term::ind("Nat".to_string());
-        
+
         let nat_decl = InductiveDecl {
             name: "Nat".to_string(),
             univ_params: vec![],
@@ -211,7 +249,10 @@ mod tests {
                     ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default),
                 },
             ],
-            is_copy: true,
+            is_copy: false,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
 
         env.add_inductive(nat_decl).expect("Failed to add Nat");
@@ -223,48 +264,57 @@ mod tests {
         let base = Term::ctor("Nat".to_string(), 0); // zero
         let step = Term::lam(
             nat_ref.clone(),
-            Term::lam(nat_ref.clone(), Term::app(Term::ctor("Nat".to_string(), 1), Term::var(0)), BinderInfo::Default),
-            BinderInfo::Default
+            Term::lam(
+                nat_ref.clone(),
+                Term::app(Term::ctor("Nat".to_string(), 1), Term::var(0)),
+                BinderInfo::Default,
+            ),
+            BinderInfo::Default,
         ); // λn. λih. succ ih
         let major = Term::ctor("Nat".to_string(), 0); // zero
-        
+
         // Apply: rec motive base step zero
         let app1 = Term::app(rec, motive);
         let app2 = Term::app(app1, base.clone());
         let app3 = Term::app(app2, step);
         let app4 = Term::app(app3, major);
-        
+
         // After iota reduction, should reduce to base (zero)
         let result = whnf(&env, app4, crate::Transparency::All).expect("whnf failed");
         println!("Iota reduction result: {:?}", result);
-        
+
         // Result should be zero (ctor Nat 0)
         assert!(matches!(&*result, Term::Ctor(name, 0, _) if name == "Nat"));
     }
 
     #[test]
     fn test_universe_levels() {
-        use crate::checker::{level_imax, level_max, reduce_level};
         use crate::ast::BinderInfo;
-        
+        use crate::checker::{level_imax, level_max, reduce_level};
+
         let env = Env::new();
         let ctx = Context::new();
-        
+
         let prop = Term::sort(Level::Zero);
         let type0 = Term::sort(Level::Succ(Box::new(Level::Zero)));
         let type1 = Term::sort(Level::Succ(Box::new(Level::Succ(Box::new(Level::Zero)))));
 
-        // Test 1: Prop → Prop has type Type 0 
+        // Test 1: Prop → Prop has type Type 0
         // (Pi Prop Prop) : Type 0 (since imax(1, 1) = 1)
         // Note: Prop itself is Type 0. Prop -> Prop is the type of functions mapping props to props.
         let prop_to_prop = Term::pi(
             Term::sort(Level::Zero),
             Term::sort(Level::Zero),
-            BinderInfo::Default
+            BinderInfo::Default,
         );
         let ty = infer(&env, &ctx, prop_to_prop).expect("Failed to infer Prop → Prop");
         println!("Prop → Prop : {:?}", ty);
-        assert!(checker::is_def_eq(&env, ty, type0.clone(), crate::Transparency::All));
+        assert!(checker::is_def_eq(
+            &env,
+            ty,
+            type0.clone(),
+            crate::Transparency::All
+        ));
 
         // Test 1b: Impredicativity check
         // (p : Prop) -> p has type Prop
@@ -274,37 +324,55 @@ mod tests {
         let impredicative = Term::pi(
             Term::sort(Level::Zero), // domain: Prop
             Term::var(0),            // codomain: p
-            BinderInfo::Default /* ast::BinderInfo */
+            BinderInfo::Default,     /* ast::BinderInfo */
         );
         let ty_impred = infer(&env, &ctx, impredicative).expect("Failed to infer (p:Prop) -> p");
         println!("(p:Prop) -> p : {:?}", ty_impred);
-        assert!(checker::is_def_eq(&env, ty_impred, prop.clone(), crate::Transparency::All));
-        
+        assert!(checker::is_def_eq(
+            &env,
+            ty_impred,
+            prop.clone(),
+            crate::Transparency::All
+        ));
+
         // Test 2: Type 0 → Type 0 has type Type 1
         // (Pi (Type 0) (Type 0)) : Type 1 (since imax(2, 2) = 2)
         let type0_level = Level::Succ(Box::new(Level::Zero));
         let type0_to_type0 = Term::pi(
             Term::sort(type0_level.clone()),
             Term::sort(type0_level.clone()),
-            BinderInfo::Default
+            BinderInfo::Default,
         );
         let ty2 = infer(&env, &ctx, type0_to_type0).expect("Failed to infer Type 0 → Type 0");
         println!("Type 0 → Type 0 : {:?}", ty2);
-        assert!(checker::is_def_eq(&env, ty2, type1.clone(), crate::Transparency::All));
-        
+        assert!(checker::is_def_eq(
+            &env,
+            ty2,
+            type1.clone(),
+            crate::Transparency::All
+        ));
+
         // Test 3: Prop → Type 0 has type Type 1
         // Domain Prop (u=1). Codomain Type 0 (v=2). imax(1, 2) = 2.
         let prop_to_type0 = Term::pi(
             Term::sort(Level::Zero),
             Term::sort(Level::Succ(Box::new(Level::Zero))),
-            BinderInfo::Default
+            BinderInfo::Default,
         );
         let ty3 = infer(&env, &ctx, prop_to_type0).expect("Failed to infer Prop → Type 0");
         println!("Prop → Type 0 : {:?}", ty3);
-        assert!(checker::is_def_eq(&env, ty3, type1.clone(), crate::Transparency::All));
-        
+        assert!(checker::is_def_eq(
+            &env,
+            ty3,
+            type1.clone(),
+            crate::Transparency::All
+        ));
+
         // Test universe helper functions
-        assert_eq!(reduce_level(level_imax(Level::Zero, Level::Zero)), Level::Zero);
+        assert_eq!(
+            reduce_level(level_imax(Level::Zero, Level::Zero)),
+            Level::Zero
+        );
         assert!(matches!(
             reduce_level(level_max(Level::Zero, Level::Succ(Box::new(Level::Zero)))),
             Level::Succ(_)
@@ -313,25 +381,25 @@ mod tests {
 
     #[test]
     fn test_eta_reduction() {
-        use crate::checker::is_def_eq;
         use crate::ast::BinderInfo;
-        
+        use crate::checker::is_def_eq;
+
         let env = Env::new();
         // Define f = (lam (sort 0) 0)  -- Identity function
         let f = Term::lam(Term::sort(Level::Zero), Term::var(0), BinderInfo::Default);
-        
+
         // Define eta = (lam (sort 0) (app f 0))
         // Note: f must be shifted if it were a variable, but it's a closed term here?
         // Wait, f is constructed above. If we embed it in `eta`, does it need shifting?
         // Terms are immutable Rc. `f` has no free variables.
-        // `eta` body: `app f 0`. 
+        // `eta` body: `app f 0`.
         // `f` is closed, so no shift needed for embedding.
         let eta = Term::lam(
-            Term::sort(Level::Zero), 
+            Term::sort(Level::Zero),
             Term::app(f.clone(), Term::var(0)),
-            BinderInfo::Default
+            BinderInfo::Default,
         );
-        
+
         // Check if f == eta
         assert!(is_def_eq(&env, f, eta, crate::Transparency::All));
     }
@@ -349,32 +417,34 @@ mod tests {
             univ_params: vec![],
             num_params: 0,
             ty: prop.clone(),
-            ctors: vec![
-                Constructor {
-                    name: "mk".to_string(),
-                    // (Bad -> Prop) -> Bad
-                    ty: Term::pi(
-                        Term::pi(bad_ref.clone(), prop.clone(), BinderInfo::Default),
-                        bad_ref.clone(),
-                        BinderInfo::Default
-                    ),
-                }
-            ],
+            ctors: vec![Constructor {
+                name: "mk".to_string(),
+                // (Bad -> Prop) -> Bad
+                ty: Term::pi(
+                    Term::pi(bad_ref.clone(), prop.clone(), BinderInfo::Default),
+                    bad_ref.clone(),
+                    BinderInfo::Default,
+                ),
+            }],
             is_copy: false,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
 
         let result = env.add_inductive(bad_decl);
         assert!(result.is_err());
         match result {
-            Err(crate::checker::TypeError::NonPositiveOccurrence(..)) => {}, // Expected
+            Err(crate::checker::TypeError::NonPositiveOccurrence(..)) => {} // Expected
             _ => panic!("Expected NonPositiveOccurrence error, got {:?}", result),
         }
     }
 
     #[test]
-    fn test_inductive_nested_positive_ok() {
+    fn test_inductive_nested_rejected() {
         use crate::ast::BinderInfo;
         let mut env = Env::new();
+        env.set_allow_reserved_primitives(true);
         let type0 = Term::sort(Level::Succ(Box::new(Level::Zero)));
 
         // List : Type0 -> Type0
@@ -396,8 +466,14 @@ mod tests {
                         Term::pi(
                             Term::var(0),
                             Term::pi(
-                                Term::app(Rc::new(Term::Ind("List".to_string(), vec![])), Term::var(1)),
-                                Term::app(Rc::new(Term::Ind("List".to_string(), vec![])), Term::var(2)),
+                                Term::app(
+                                    Rc::new(Term::Ind("List".to_string(), vec![])),
+                                    Term::var(1),
+                                ),
+                                Term::app(
+                                    Rc::new(Term::Ind("List".to_string(), vec![])),
+                                    Term::var(2),
+                                ),
                                 BinderInfo::Default,
                             ),
                             BinderInfo::Default,
@@ -407,8 +483,12 @@ mod tests {
                 },
             ],
             is_copy: false,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
-        env.add_inductive(list_decl).expect("List should be accepted");
+        env.add_inductive(list_decl)
+            .expect("List should be accepted");
 
         // Tree : Type0, node : List Tree -> Tree (nested positive)
         let list_tree = Term::app(
@@ -422,17 +502,32 @@ mod tests {
             ty: type0,
             ctors: vec![Constructor {
                 name: "node".to_string(),
-                ty: Term::pi(list_tree, Rc::new(Term::Ind("Tree".to_string(), vec![])), BinderInfo::Default),
+                ty: Term::pi(
+                    list_tree,
+                    Rc::new(Term::Ind("Tree".to_string(), vec![])),
+                    BinderInfo::Default,
+                ),
             }],
             is_copy: false,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
-        env.add_inductive(tree_decl).expect("Tree with List Tree should be accepted");
+        match env.add_inductive(tree_decl) {
+            Err(TypeError::NestedInductive { ind, ctor, field }) => {
+                assert_eq!(ind, "Tree");
+                assert_eq!(ctor, "node");
+                assert_eq!(field, 0);
+            }
+            other => panic!("Expected NestedInductive for Tree, got {:?}", other),
+        }
     }
 
     #[test]
     fn test_inductive_parameter_mismatch_rejected() {
         use crate::ast::BinderInfo;
         let mut env = Env::new();
+        env.set_allow_reserved_primitives(true);
         let type0 = Term::sort(Level::Succ(Box::new(Level::Zero)));
 
         // List : Type0 -> Type0
@@ -454,8 +549,14 @@ mod tests {
                         Term::pi(
                             Term::var(0),
                             Term::pi(
-                                Term::app(Rc::new(Term::Ind("List".to_string(), vec![])), Term::var(1)),
-                                Term::app(Rc::new(Term::Ind("List".to_string(), vec![])), Term::var(2)),
+                                Term::app(
+                                    Rc::new(Term::Ind("List".to_string(), vec![])),
+                                    Term::var(1),
+                                ),
+                                Term::app(
+                                    Rc::new(Term::Ind("List".to_string(), vec![])),
+                                    Term::var(2),
+                                ),
                                 BinderInfo::Default,
                             ),
                             BinderInfo::Default,
@@ -465,8 +566,12 @@ mod tests {
                 },
             ],
             is_copy: false,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
-        env.add_inductive(list_decl).expect("List should be accepted");
+        env.add_inductive(list_decl)
+            .expect("List should be accepted");
 
         // BadParam : (A:Type0) -> Type0
         // mk : (BadParam (List A)) -> BadParam A  (parameter mismatch)
@@ -475,7 +580,10 @@ mod tests {
             Rc::new(Term::Ind("BadParam".to_string(), vec![])),
             Term::app(Rc::new(Term::Ind("List".to_string(), vec![])), Term::var(0)),
         );
-        let bad_param_a = Term::app(Rc::new(Term::Ind("BadParam".to_string(), vec![])), Term::var(1));
+        let bad_param_a = Term::app(
+            Rc::new(Term::Ind("BadParam".to_string(), vec![])),
+            Term::var(1),
+        );
         let bad_decl = InductiveDecl {
             name: "BadParam".to_string(),
             univ_params: vec![],
@@ -490,12 +598,15 @@ mod tests {
                 ),
             }],
             is_copy: false,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
 
         let result = env.add_inductive(bad_decl);
         assert!(result.is_err());
         match result {
-            Err(crate::checker::TypeError::NonPositiveOccurrence(..)) => {},
+            Err(crate::checker::TypeError::NonPositiveOccurrence(..)) => {}
             _ => panic!("Expected NonPositiveOccurrence error, got {:?}", result),
         }
     }
@@ -506,10 +617,14 @@ mod tests {
 
     #[test]
     fn test_totality_markers() {
-        use crate::ast::{Definition, Totality, BinderInfo};
+        use crate::ast::{BinderInfo, Definition, Totality};
 
         // Test that Definition correctly tracks totality
-        let ty = Term::pi(Term::sort(Level::Zero), Term::sort(Level::Zero), BinderInfo::Default);
+        let ty = Term::pi(
+            Term::sort(Level::Zero),
+            Term::sort(Level::Zero),
+            BinderInfo::Default,
+        );
         let val = Term::lam(Term::sort(Level::Zero), Term::var(0), BinderInfo::Default);
 
         let total_def = Definition::total("id".to_string(), ty.clone(), val.clone());
@@ -528,27 +643,36 @@ mod tests {
 
     #[test]
     fn test_termination_non_recursive() {
-        use crate::checker::check_termination;
         use crate::ast::BinderInfo;
+        use crate::checker::check_termination;
 
         let env = Env::new();
 
         // Non-recursive function: id : A -> A = \x. x
-        let ty = Term::pi(Term::sort(Level::Zero), Term::sort(Level::Zero), BinderInfo::Default);
+        let ty = Term::pi(
+            Term::sort(Level::Zero),
+            Term::sort(Level::Zero),
+            BinderInfo::Default,
+        );
         let body = Term::lam(Term::sort(Level::Zero), Term::var(0), BinderInfo::Default);
 
         // Should pass - no recursion
         let result = check_termination(&env, "id", &ty, &body);
-        assert!(result.is_ok(), "Non-recursive function should pass: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Non-recursive function should pass: {:?}",
+            result
+        );
     }
 
     #[test]
     fn test_termination_with_recursor() {
-        use crate::checker::check_termination;
         use crate::ast::BinderInfo;
+        use crate::checker::check_termination;
 
         // Set up Nat
         let mut env = Env::new();
+        env.set_allow_reserved_primitives(true);
         let nat_ty = Term::sort(Level::Succ(Box::new(Level::Zero)));
         let nat_ref = Term::ind("Nat".to_string());
 
@@ -558,10 +682,19 @@ mod tests {
             num_params: 0,
             ty: nat_ty,
             ctors: vec![
-                Constructor { name: "zero".to_string(), ty: nat_ref.clone() },
-                Constructor { name: "succ".to_string(), ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default) },
+                Constructor {
+                    name: "zero".to_string(),
+                    ty: nat_ref.clone(),
+                },
+                Constructor {
+                    name: "succ".to_string(),
+                    ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default),
+                },
             ],
             is_copy: true,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
         env.add_inductive(nat_decl).unwrap();
 
@@ -580,24 +713,42 @@ mod tests {
                         ),
                         Term::ctor("Nat".to_string(), 0), // zero case
                     ),
-                    Term::lam(nat_ref.clone(), Term::lam(nat_ref.clone(), Term::var(1), BinderInfo::Default), BinderInfo::Default), // succ case
+                    Term::lam_with_kind(
+                        nat_ref.clone(),
+                        Term::lam_with_kind(
+                            nat_ref.clone(),
+                            Term::var(1),
+                            BinderInfo::Default,
+                            FunctionKind::FnOnce,
+                        ),
+                        BinderInfo::Default,
+                        FunctionKind::FnOnce,
+                    ), // succ case
                 ),
                 Term::var(0), // argument
             ),
-            BinderInfo::Default
+            BinderInfo::Default,
         );
 
         // Should pass - uses recursor which guarantees termination
         let result = check_termination(&env, "pred", &ty, &body);
-        assert!(result.is_ok(), "Function using recursor should pass: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Function using recursor should pass: {:?}",
+            result
+        );
     }
 
     #[test]
     fn test_env_type_safety() {
-        use crate::ast::{Definition, Totality, BinderInfo};
+        use crate::ast::{BinderInfo, Definition, Totality};
 
         let mut env = Env::new();
-        let ty = Term::pi(Term::sort(Level::Zero), Term::sort(Level::Zero), BinderInfo::Default);
+        let ty = Term::pi(
+            Term::sort(Level::Zero),
+            Term::sort(Level::Zero),
+            BinderInfo::Default,
+        );
         let val = Term::lam(Term::sort(Level::Zero), Term::var(0), BinderInfo::Default);
 
         // Add a total definition
@@ -620,15 +771,31 @@ mod tests {
 
     #[test]
     fn test_partial_in_type_rejected() {
-        use crate::ast::{Definition, BinderInfo};
+        use crate::ast::{BinderInfo, Definition};
         use crate::checker::TypeError;
 
         let mut env = Env::new();
+        add_comp(&mut env);
 
         // First add a partial definition
-        let partial_ty = Term::pi(Term::sort(Level::Zero), Term::sort(Level::Zero), BinderInfo::Default);
-        let partial_val = Term::lam(Term::sort(Level::Zero), Term::var(0), BinderInfo::Default);
-        let partial_def = Definition::partial("partial_fn".to_string(), partial_ty.clone(), partial_val);
+        let type1 = Term::sort(Level::Succ(Box::new(Level::Zero)));
+        let comp_app = Term::app(Term::ind("Comp".to_string()), Term::var(1));
+        let partial_ty = Term::pi(
+            type1.clone(),
+            Term::pi(Term::var(0), comp_app, BinderInfo::Default),
+            BinderInfo::Default,
+        );
+        let ret_app = Term::app(
+            Term::app(Term::ctor("Comp".to_string(), 0), Term::var(1)),
+            Term::var(0),
+        );
+        let partial_val = Term::lam(
+            type1,
+            Term::lam(Term::var(0), ret_app, BinderInfo::Default),
+            BinderInfo::Default,
+        );
+        let partial_def =
+            Definition::partial("partial_fn".to_string(), partial_ty.clone(), partial_val);
         env.add_definition(partial_def).unwrap();
 
         // Verify it's not type-safe
@@ -638,7 +805,7 @@ mod tests {
         // This should be rejected
         let bad_type = Term::app(
             Rc::new(Term::Const("partial_fn".to_string(), vec![])),
-            Term::sort(Level::Zero)
+            Term::sort(Level::Zero),
         );
         let good_val = Term::sort(Level::Zero);
 
@@ -656,9 +823,13 @@ mod tests {
 
     #[test]
     fn test_wellfounded_definition() {
-        use crate::ast::{Definition, Totality, WellFoundedInfo, BinderInfo};
+        use crate::ast::{BinderInfo, Definition, Totality, WellFoundedInfo};
 
-        let ty = Term::pi(Term::sort(Level::Zero), Term::sort(Level::Zero), BinderInfo::Default);
+        let ty = Term::pi(
+            Term::sort(Level::Zero),
+            Term::sort(Level::Zero),
+            BinderInfo::Default,
+        );
         let val = Term::lam(Term::sort(Level::Zero), Term::var(0), BinderInfo::Default);
 
         // Create a well-founded definition
@@ -678,11 +849,12 @@ mod tests {
 
     #[test]
     fn test_recursion_with_recursor() {
-        use crate::ast::{Definition, Constructor, InductiveDecl, BinderInfo};
+        use crate::ast::{BinderInfo, Constructor, Definition, FunctionKind, InductiveDecl};
         use crate::checker::Env; // checker is now public or we use crate::checker
 
         // Set up Nat
         let mut env = Env::new();
+        env.set_allow_reserved_primitives(true);
         let nat_ty = Term::sort(Level::Succ(Box::new(Level::Zero)));
         let nat_ref = Term::ind("Nat".to_string());
 
@@ -692,10 +864,19 @@ mod tests {
             num_params: 0,
             ty: nat_ty,
             ctors: vec![
-                Constructor { name: "zero".to_string(), ty: nat_ref.clone() },
-                Constructor { name: "succ".to_string(), ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default) },
+                Constructor {
+                    name: "zero".to_string(),
+                    ty: nat_ref.clone(),
+                },
+                Constructor {
+                    name: "succ".to_string(),
+                    ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default),
+                },
             ],
             is_copy: true,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
         env.add_inductive(nat_decl).unwrap();
 
@@ -713,11 +894,21 @@ mod tests {
                         ),
                         Term::ctor("Nat".to_string(), 0), // zero case
                     ),
-                    Term::lam(nat_ref.clone(), Term::lam(nat_ref.clone(), Term::var(1), BinderInfo::Default), BinderInfo::Default), // succ case
+                    Term::lam_with_kind(
+                        nat_ref.clone(),
+                        Term::lam_with_kind(
+                            nat_ref.clone(),
+                            Term::var(1),
+                            BinderInfo::Default,
+                            FunctionKind::FnOnce,
+                        ),
+                        BinderInfo::Default,
+                        FunctionKind::FnOnce,
+                    ), // succ case
                 ),
                 Term::var(0), // argument
             ),
-            BinderInfo::Default
+            BinderInfo::Default,
         );
 
         // Add definition without specifying rec_arg
@@ -728,16 +919,21 @@ mod tests {
 
         // After adding, rec_arg should be automatically set to 0 (first arg is Nat)
         let stored_def = env.get_definition("pred").unwrap();
-        assert_eq!(stored_def.rec_arg, Some(0), "rec_arg should be automatically set to 0");
+        assert_eq!(
+            stored_def.rec_arg,
+            Some(0),
+            "rec_arg should be automatically set to 0"
+        );
     }
 
     #[test]
     fn test_termination_rejection_non_smaller_arg() {
-        use crate::ast::{Constructor, InductiveDecl, BinderInfo};
-        use crate::checker::{check_termination, TypeError, TerminationErrorDetails};
+        use crate::ast::{BinderInfo, Constructor, InductiveDecl};
+        use crate::checker::{check_termination, TerminationErrorDetails, TypeError};
 
         // Set up Nat
         let mut env = Env::new();
+        env.set_allow_reserved_primitives(true);
         let nat_ty = Term::sort(Level::Succ(Box::new(Level::Zero)));
         let nat_ref = Term::ind("Nat".to_string());
 
@@ -747,10 +943,19 @@ mod tests {
             num_params: 0,
             ty: nat_ty,
             ctors: vec![
-                Constructor { name: "zero".to_string(), ty: nat_ref.clone() },
-                Constructor { name: "succ".to_string(), ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default) },
+                Constructor {
+                    name: "zero".to_string(),
+                    ty: nat_ref.clone(),
+                },
+                Constructor {
+                    name: "succ".to_string(),
+                    ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default),
+                },
             ],
             is_copy: true,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
         env.add_inductive(nat_decl).unwrap();
 
@@ -766,12 +971,15 @@ mod tests {
                 Rc::new(Term::Const("infinite".to_string(), vec![])),
                 Term::var(0),
             ),
-            BinderInfo::Default
+            BinderInfo::Default,
         );
 
         // Termination check should fail because recursive call uses same argument
         let result = check_termination(&env, "infinite", &ty, &body);
-        assert!(result.is_err(), "Non-terminating function should be rejected");
+        assert!(
+            result.is_err(),
+            "Non-terminating function should be rejected"
+        );
 
         if let Err(TypeError::TerminationError { def_name, details }) = result {
             assert_eq!(def_name, "infinite");
@@ -789,8 +997,8 @@ mod tests {
 
     #[test]
     fn test_termination_rejection_no_decreasing_arg() {
-        use crate::checker::{check_termination, TypeError, TerminationErrorDetails};
         use crate::ast::BinderInfo;
+        use crate::checker::{check_termination, TerminationErrorDetails, TypeError};
 
         let env = Env::new();
 
@@ -801,15 +1009,15 @@ mod tests {
         let ty = Term::pi(sort0.clone(), sort0.clone(), BinderInfo::Default);
         let body = Term::lam(
             sort0.clone(),
-            Term::app(
-                Rc::new(Term::Const("f".to_string(), vec![])),
-                Term::var(0),
-            ),
-            BinderInfo::Default
+            Term::app(Rc::new(Term::Const("f".to_string(), vec![])), Term::var(0)),
+            BinderInfo::Default,
         );
 
         let result = check_termination(&env, "f", &ty, &body);
-        assert!(result.is_err(), "Recursive function with no inductive arg should be rejected");
+        assert!(
+            result.is_err(),
+            "Recursive function with no inductive arg should be rejected"
+        );
 
         if let Err(TypeError::TerminationError { def_name, details }) = result {
             assert_eq!(def_name, "f");
@@ -826,11 +1034,12 @@ mod tests {
 
     #[test]
     fn test_mutual_recursion_valid() {
-        use crate::ast::{Constructor, InductiveDecl, Definition};
+        use crate::ast::{Constructor, InductiveDecl};
         use crate::checker::check_mutual_termination;
 
         // Set up Nat
         let mut env = Env::new();
+        env.set_allow_reserved_primitives(true);
         let nat_ty = Term::sort(Level::Succ(Box::new(Level::Zero)));
         let nat_ref = Term::ind("Nat".to_string());
 
@@ -840,10 +1049,19 @@ mod tests {
             num_params: 0,
             ty: nat_ty,
             ctors: vec![
-                Constructor { name: "zero".to_string(), ty: nat_ref.clone() },
-                Constructor { name: "succ".to_string(), ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default) },
+                Constructor {
+                    name: "zero".to_string(),
+                    ty: nat_ref.clone(),
+                },
+                Constructor {
+                    name: "succ".to_string(),
+                    ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default),
+                },
             ],
             is_copy: true,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
         env.add_inductive(nat_decl).unwrap();
 
@@ -857,10 +1075,19 @@ mod tests {
             num_params: 0,
             ty: bool_ty,
             ctors: vec![
-                Constructor { name: "true".to_string(), ty: bool_ref.clone() },
-                Constructor { name: "false".to_string(), ty: bool_ref.clone() },
+                Constructor {
+                    name: "true".to_string(),
+                    ty: bool_ref.clone(),
+                },
+                Constructor {
+                    name: "false".to_string(),
+                    ty: bool_ref.clone(),
+                },
             ],
             is_copy: true,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
         env.add_inductive(bool_decl).unwrap();
 
@@ -889,17 +1116,22 @@ mod tests {
                         Term::ctor("Bool".to_string(), 0), // true for zero case
                     ),
                     // succ case: \m. \ih. odd m
-                    Term::lam(nat_ref.clone(), Term::lam(bool_ref.clone(),
-                        Term::app(
-                            Rc::new(Term::Const("odd".to_string(), vec![])),
-                            Term::var(1), // m (smaller!)
+                    Term::lam(
+                        nat_ref.clone(),
+                        Term::lam(
+                            bool_ref.clone(),
+                            Term::app(
+                                Rc::new(Term::Const("odd".to_string(), vec![])),
+                                Term::var(1), // m (smaller!)
+                            ),
+                            BinderInfo::Default,
                         ),
-                        BinderInfo::Default
-                    ), BinderInfo::Default),
+                        BinderInfo::Default,
+                    ),
                 ),
                 Term::var(0), // n
             ),
-            BinderInfo::Default
+            BinderInfo::Default,
         );
 
         // odd n = match n { zero => false, succ m => even m }
@@ -915,17 +1147,22 @@ mod tests {
                         Term::ctor("Bool".to_string(), 1), // false for zero case
                     ),
                     // succ case: \m. \ih. even m
-                    Term::lam(nat_ref.clone(), Term::lam(bool_ref.clone(),
-                        Term::app(
-                            Rc::new(Term::Const("even".to_string(), vec![])),
-                            Term::var(1), // m (smaller!)
+                    Term::lam(
+                        nat_ref.clone(),
+                        Term::lam(
+                            bool_ref.clone(),
+                            Term::app(
+                                Rc::new(Term::Const("even".to_string(), vec![])),
+                                Term::var(1), // m (smaller!)
+                            ),
+                            BinderInfo::Default,
                         ),
-                        BinderInfo::Default
-                    ), BinderInfo::Default),
+                        BinderInfo::Default,
+                    ),
                 ),
                 Term::var(0), // n
             ),
-            BinderInfo::Default
+            BinderInfo::Default,
         );
 
         let defs = vec![
@@ -935,7 +1172,11 @@ mod tests {
 
         // Should pass - both functions decrease on the same argument position
         let result = check_mutual_termination(&env, &defs);
-        assert!(result.is_ok(), "Valid mutual recursion should pass: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Valid mutual recursion should pass: {:?}",
+            result
+        );
 
         let results = result.unwrap();
         assert_eq!(results.len(), 2);
@@ -947,10 +1188,11 @@ mod tests {
     #[test]
     fn test_mutual_recursion_incompatible_args() {
         use crate::ast::{Constructor, InductiveDecl};
-        use crate::checker::{check_mutual_termination, TypeError, TerminationErrorDetails};
+        use crate::checker::{check_mutual_termination, TerminationErrorDetails, TypeError};
 
         // Set up Nat and Bool
         let mut env = Env::new();
+        env.set_allow_reserved_primitives(true);
         let nat_ty = Term::sort(Level::Succ(Box::new(Level::Zero)));
         let nat_ref = Term::ind("Nat".to_string());
         let bool_ty = Term::sort(Level::Succ(Box::new(Level::Zero)));
@@ -962,11 +1204,21 @@ mod tests {
             num_params: 0,
             ty: nat_ty,
             ctors: vec![
-                Constructor { name: "zero".to_string(), ty: nat_ref.clone() },
-                Constructor { name: "succ".to_string(), ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default) },
+                Constructor {
+                    name: "zero".to_string(),
+                    ty: nat_ref.clone(),
+                },
+                Constructor {
+                    name: "succ".to_string(),
+                    ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default),
+                },
             ],
             is_copy: true,
-        }).unwrap();
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
+        })
+        .unwrap();
 
         env.add_inductive(InductiveDecl {
             name: "Bool".to_string(),
@@ -974,18 +1226,36 @@ mod tests {
             num_params: 0,
             ty: bool_ty,
             ctors: vec![
-                Constructor { name: "true".to_string(), ty: bool_ref.clone() },
-                Constructor { name: "false".to_string(), ty: bool_ref.clone() },
+                Constructor {
+                    name: "true".to_string(),
+                    ty: bool_ref.clone(),
+                },
+                Constructor {
+                    name: "false".to_string(),
+                    ty: bool_ref.clone(),
+                },
             ],
             is_copy: true,
-        }).unwrap();
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
+        })
+        .unwrap();
 
         // Define functions with incompatible decreasing arguments
         // f : Nat -> Bool -> Nat  (decreases on arg 0)
         // g : Bool -> Nat -> Nat  (decreases on arg 0, but different type!)
 
-        let f_ty = Term::pi(nat_ref.clone(), Term::pi(bool_ref.clone(), nat_ref.clone(), BinderInfo::Default), BinderInfo::Default);
-        let g_ty = Term::pi(bool_ref.clone(), Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default), BinderInfo::Default);
+        let f_ty = Term::pi(
+            nat_ref.clone(),
+            Term::pi(bool_ref.clone(), nat_ref.clone(), BinderInfo::Default),
+            BinderInfo::Default,
+        );
+        let g_ty = Term::pi(
+            bool_ref.clone(),
+            Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default),
+            BinderInfo::Default,
+        );
 
         // f n b = g b n (calls g with different argument order)
         let f_body = Term::lam(
@@ -999,9 +1269,9 @@ mod tests {
                     ),
                     Term::var(1), // n
                 ),
-                BinderInfo::Default
+                BinderInfo::Default,
             ),
-            BinderInfo::Default
+            BinderInfo::Default,
         );
 
         // g b n = f n b
@@ -1016,9 +1286,9 @@ mod tests {
                     ),
                     Term::var(1), // b
                 ),
-                BinderInfo::Default
+                BinderInfo::Default,
             ),
-            BinderInfo::Default
+            BinderInfo::Default,
         );
 
         let defs = vec![
@@ -1046,10 +1316,11 @@ mod tests {
     #[test]
     fn test_wellfounded_recursion_with_acc() {
         use crate::ast::{Constructor, InductiveDecl};
-        use crate::checker::{WellFoundedSpec, check_wellfounded_termination};
+        use crate::checker::{check_wellfounded_termination, WellFoundedSpec};
 
         // Set up Nat
         let mut env = Env::new();
+        env.set_allow_reserved_primitives(true);
         let nat_ty = Term::sort(Level::Succ(Box::new(Level::Zero)));
         let nat_ref = Term::ind("Nat".to_string());
 
@@ -1059,11 +1330,21 @@ mod tests {
             num_params: 0,
             ty: nat_ty.clone(),
             ctors: vec![
-                Constructor { name: "zero".to_string(), ty: nat_ref.clone() },
-                Constructor { name: "succ".to_string(), ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default) },
+                Constructor {
+                    name: "zero".to_string(),
+                    ty: nat_ref.clone(),
+                },
+                Constructor {
+                    name: "succ".to_string(),
+                    ty: Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default),
+                },
             ],
             is_copy: true,
-        }).unwrap();
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
+        })
+        .unwrap();
 
         let prop = Term::sort(Level::Zero);
 
@@ -1118,10 +1399,7 @@ mod tests {
                         Term::pi(
                             Term::var(2),
                             Term::pi(
-                                Term::app(
-                                    Term::app(Term::var(2), Term::var(0)),
-                                    Term::var(1),
-                                ),
+                                Term::app(Term::app(Term::var(2), Term::var(0)), Term::var(1)),
                                 acc_app(Term::var(4), Term::var(3), Term::var(1)),
                                 BinderInfo::Default,
                             ),
@@ -1148,6 +1426,9 @@ mod tests {
                 ty: intro_ty,
             }],
             is_copy: false,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         })
         .unwrap();
 
@@ -1179,9 +1460,12 @@ mod tests {
 
         // Should pass with Acc proof parameter present
         let result = check_wellfounded_termination(&env, "div", &div_ty, &div_body, &spec);
-        assert!(result.is_ok(), "Well-founded recursion should pass: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Well-founded recursion should pass: {:?}",
+            result
+        );
     }
-
 
     #[test]
     fn test_impredicative_prop() {
@@ -1190,15 +1474,18 @@ mod tests {
         let env = Env::new();
         let ctx = Context::new();
 
-        let prop   = Term::sort(Level::Zero);
-        let type0  = Term::sort(Level::Succ(Box::new(Level::Zero)));
-        let type1  = Term::sort(Level::Succ(Box::new(Level::Succ(Box::new(Level::Zero)))));
+        let prop = Term::sort(Level::Zero);
+        let type0 = Term::sort(Level::Succ(Box::new(Level::Zero)));
+        let type1 = Term::sort(Level::Succ(Box::new(Level::Succ(Box::new(Level::Zero)))));
 
         // Test 1: (A : Type 0) -> Prop is NOT Prop, it is Type 1.
         // Domain Type 0 (u=2). Codomain Prop (v=1). max(2, 1) = 2.
         let pi_type0_prop = Term::pi(type0.clone(), prop.clone(), BinderInfo::Default);
         let inferred1 = infer(&env, &ctx, pi_type0_prop).expect("infer failed");
-        assert!(checker::is_def_eq(&env, inferred1, type1.clone(), crate::Transparency::All), "Expected `(Type 0 -> Prop) : Type 1`");
+        assert!(
+            checker::is_def_eq(&env, inferred1, type1.clone(), crate::Transparency::All),
+            "Expected `(Type 0 -> Prop) : Type 1`"
+        );
 
         // Test 1b: Real impredicativity
         // (A : Type 0) -> ((p : Prop) -> p)
@@ -1207,25 +1494,37 @@ mod tests {
         let prop_imp = Term::pi(prop.clone(), Term::var(0), BinderInfo::Default); // (p:Prop)->p
         let pi_type0_imp = Term::pi(type0.clone(), prop_imp, BinderInfo::Default);
         let inferred1b = infer(&env, &ctx, pi_type0_imp).expect("infer failed");
-        assert!(checker::is_def_eq(&env, inferred1b, prop.clone(), crate::Transparency::All), "Expected `(Type 0 -> ((p:Prop)->p)) : Prop`");
+        assert!(
+            checker::is_def_eq(&env, inferred1b, prop.clone(), crate::Transparency::All),
+            "Expected `(Type 0 -> ((p:Prop)->p)) : Prop`"
+        );
 
         // Test 2: (p : Prop) → p is Prop
         // Domain Prop (u=1). Codomain p (v=0). imax(1, 0) = 0.
         let pi_prop_var = Term::pi(prop.clone(), Term::var(0), BinderInfo::Default);
         let inferred2 = infer(&env, &ctx, pi_prop_var).expect("infer failed");
-        assert!(checker::is_def_eq(&env, inferred2, prop.clone(), crate::Transparency::All), "Expected `(Prop -> p) : Prop`");
+        assert!(
+            checker::is_def_eq(&env, inferred2, prop.clone(), crate::Transparency::All),
+            "Expected `(Prop -> p) : Prop`"
+        );
 
         // Test 3: (A : Type 0) → A is Type 1 (predicative)
         // Domain Type 0 (u=2). Codomain A (v=1). max(2, 1) = 2.
         let pi_type0_var = Term::pi(type0.clone(), Term::var(0), BinderInfo::Default);
         let inferred3 = infer(&env, &ctx, pi_type0_var).expect("infer failed");
-        assert!(checker::is_def_eq(&env, inferred3, type1.clone(), crate::Transparency::All), "Expected `(Type 0 -> A) : Type 1`");
+        assert!(
+            checker::is_def_eq(&env, inferred3, type1.clone(), crate::Transparency::All),
+            "Expected `(Type 0 -> A) : Type 1`"
+        );
 
         // Test 4: Mixed universe `Prop -> Type 0` is `Type 1`
         // Domain Prop (u=1). Codomain Type 0 (v=2). max(1, 2) = 2.
         let pi_prop_type0 = Term::pi(prop.clone(), type0.clone(), BinderInfo::Default);
         let inferred4 = infer(&env, &ctx, pi_prop_type0).expect("infer failed");
-        assert!(checker::is_def_eq(&env, inferred4, type1.clone(), crate::Transparency::All), "Expected `(Prop -> Type 0) : Type 1`");
+        assert!(
+            checker::is_def_eq(&env, inferred4, type1.clone(), crate::Transparency::All),
+            "Expected `(Prop -> Type 0) : Type 1`"
+        );
     }
 
     #[test]
@@ -1238,7 +1537,9 @@ mod tests {
         let prop = Term::sort(Level::Zero);
         let type0 = Term::sort(Level::Succ(Box::new(Level::Zero)));
         let type1 = Term::sort(Level::Succ(Box::new(Level::Succ(Box::new(Level::Zero)))));
-        let type2 = Term::sort(Level::Succ(Box::new(Level::Succ(Box::new(Level::Succ(Box::new(Level::Zero)))))));
+        let type2 = Term::sort(Level::Succ(Box::new(Level::Succ(Box::new(Level::Succ(
+            Box::new(Level::Zero),
+        ))))));
 
         // Case 1: Deep impredicativity
         // (A : Type 0) -> (B : Type 0) -> ((p : Prop) -> p)
@@ -1258,13 +1559,16 @@ mod tests {
         // infer(MiddlePi) = Prop. v=0.
         // imax(1, 0) = 0.
         // Result: Prop.
-        
+
         let prop_imp = Term::pi(prop.clone(), Term::var(0), BinderInfo::Default); // (p:Prop)->p
         let middle = Term::pi(type0.clone(), prop_imp, BinderInfo::Default);
         let outer = Term::pi(type0.clone(), middle, BinderInfo::Default);
-        
+
         let inferred1 = infer(&env, &ctx, outer).expect("infer failed");
-        assert!(checker::is_def_eq(&env, inferred1, prop.clone(), crate::Transparency::All), "Expected Deep Impredicativity : Prop");
+        assert!(
+            checker::is_def_eq(&env, inferred1, prop.clone(), crate::Transparency::All),
+            "Expected Deep Impredicativity : Prop"
+        );
 
         // Case 2: Polymorphic identity in Prop
         // (p : Prop) -> p -> p
@@ -1276,7 +1580,7 @@ mod tests {
         // Domain Prop (u=1). Body (p->p) (inhabits Prop). infer=Prop. v=0.
         // imax(1, 0) = 0.
         // Result: Prop.
-        
+
         // Wait, de Bruijn indices.
         // Outer binds p (at 0).
         // Inner binds "x" of type p.
@@ -1285,9 +1589,12 @@ mod tests {
         // Body of inner is p (Var 1).
         let inner_pi = Term::pi(Term::var(0), Term::var(1), BinderInfo::Default);
         let outer_pi = Term::pi(prop.clone(), inner_pi, BinderInfo::Default);
-        
+
         let inferred2 = infer(&env, &ctx, outer_pi).expect("infer failed");
-        assert!(checker::is_def_eq(&env, inferred2, prop.clone(), crate::Transparency::All), "Expected (p:Prop)->p->p : Prop");
+        assert!(
+            checker::is_def_eq(&env, inferred2, prop.clone(), crate::Transparency::All),
+            "Expected (p:Prop)->p->p : Prop"
+        );
 
         // Case 3: Type of predicates on A
         // (A : Type 0) -> (A -> Prop)
@@ -1301,12 +1608,15 @@ mod tests {
         // Body (Type 0 term). infer(Body) = Type 1. v=2.
         // imax(2, 2) = 2.
         // Result: Type 1.
-        
+
         let pred_ty = Term::pi(Term::var(0), prop.clone(), BinderInfo::Default); // A -> Prop
         let predicate_gen = Term::pi(type0.clone(), pred_ty, BinderInfo::Default);
-        
+
         let inferred3 = infer(&env, &ctx, predicate_gen).expect("infer failed");
-        assert!(checker::is_def_eq(&env, inferred3, type1.clone(), crate::Transparency::All), "Expected (A:Type 0)->(A->Prop) : Type 1");
+        assert!(
+            checker::is_def_eq(&env, inferred3, type1.clone(), crate::Transparency::All),
+            "Expected (A:Type 0)->(A->Prop) : Type 1"
+        );
 
         // Case 4: Large Type dependency
         // (A : Type 1) -> Prop
@@ -1314,10 +1624,13 @@ mod tests {
         // Codomain Prop (Sort 0). infer(Prop) = Type 0 (Sort 1). v=1.
         // imax(3, 1) = 3.
         // Result: Sort 3 = Type 2.
-        
+
         let large_dep = Term::pi(type1.clone(), prop.clone(), BinderInfo::Default);
         let inferred4 = infer(&env, &ctx, large_dep).expect("infer failed");
-        assert!(checker::is_def_eq(&env, inferred4, type2.clone(), crate::Transparency::All), "Expected (Type 1 -> Prop) : Type 2");
+        assert!(
+            checker::is_def_eq(&env, inferred4, type2.clone(), crate::Transparency::All),
+            "Expected (Type 1 -> Prop) : Type 2"
+        );
     }
 
     #[test]
@@ -1337,21 +1650,33 @@ mod tests {
             .expect("Failed to add zero axiom");
         env.add_definition(Definition::axiom("succ".to_string(), succ_ty))
             .expect("Failed to add succ axiom");
-        
+
         // def one := succ zero
         let one_val = Term::app(succ.clone(), zero.clone());
         let mut def = Definition::total("one".to_string(), nat_ty.clone(), one_val.clone());
         def.mark_opaque(); // Mark as Opaque
+        def.noncomputable = true;
         env.add_definition(def).unwrap();
-        
+
         let one_term = Rc::new(Term::Const("one".to_string(), vec![]));
-        
+
         // 1. With Transparency::Reducible (default), it should NOT unfold
         // so one != succ zero (because one is Opaque)
-        assert!(!is_def_eq(&env, one_term.clone(), one_val.clone(), Transparency::Reducible), "Opaque def should not unfold with Reducible");
-        
+        assert!(
+            !is_def_eq(
+                &env,
+                one_term.clone(),
+                one_val.clone(),
+                Transparency::Reducible
+            ),
+            "Opaque def should not unfold with Reducible"
+        );
+
         // 2. With Transparency::All, it SHOULD unfold
-        assert!(is_def_eq(&env, one_term.clone(), one_val.clone(), Transparency::All), "Opaque def should unfold with All");
+        assert!(
+            is_def_eq(&env, one_term.clone(), one_val.clone(), Transparency::All),
+            "Opaque def should unfold with All"
+        );
     }
 
     #[test]
@@ -1370,7 +1695,10 @@ mod tests {
         let shifted = ctx.shift();
         assert!(shifted.acc_proof_target(1).is_some());
         assert!(shifted.has_acc_fn(3));
-        assert!(matches!(&*shifted.acc_proof_target(1).unwrap(), Term::Var(1)));
+        assert!(matches!(
+            &*shifted.acc_proof_target(1).unwrap(),
+            Term::Var(1)
+        ));
     }
 
     #[test]
@@ -1381,14 +1709,18 @@ mod tests {
         let mut env = Env::new();
         let prop = Term::sort(Level::Zero);
         let or_ref = Term::ind("Or".to_string());
-        
+
         // Or p q : Prop
         let or_decl = InductiveDecl {
             name: "Or".to_string(),
             univ_params: vec![],
             num_params: 2, // p, q
             // (p:Prop) -> (q:Prop) -> Prop
-            ty: Term::pi(prop.clone(), Term::pi(prop.clone(), prop.clone(), BinderInfo::Default), BinderInfo::Default),
+            ty: Term::pi(
+                prop.clone(),
+                Term::pi(prop.clone(), prop.clone(), BinderInfo::Default),
+                BinderInfo::Default,
+            ),
             ctors: vec![
                 Constructor {
                     name: "inl".to_string(),
@@ -1400,12 +1732,12 @@ mod tests {
                             Term::pi(
                                 Term::var(1), // p
                                 Term::app(Term::app(or_ref.clone(), Term::var(2)), Term::var(1)),
-                                BinderInfo::Default
+                                BinderInfo::Default,
                             ),
-                            BinderInfo::Default
+                            BinderInfo::Default,
                         ),
-                        BinderInfo::Default
-                    )
+                        BinderInfo::Default,
+                    ),
                 },
                 Constructor {
                     name: "inr".to_string(),
@@ -1417,25 +1749,28 @@ mod tests {
                             Term::pi(
                                 Term::var(0), // q
                                 Term::app(Term::app(or_ref.clone(), Term::var(2)), Term::var(1)),
-                                BinderInfo::Default
+                                BinderInfo::Default,
                             ),
-                            BinderInfo::Default
+                            BinderInfo::Default,
                         ),
-                        BinderInfo::Default
-                    )
-                }
+                        BinderInfo::Default,
+                    ),
+                },
             ],
-            is_copy: true,
+            is_copy: false,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
         env.add_inductive(or_decl).unwrap();
-        
+
         // Try to infer Or.rec eliminating to Type 0 (Level::Succ(Zero))
         // This is "Large Elimination" from a Prop inductive with >1 constructor.
         let level_type0 = Level::Succ(Box::new(Level::Zero));
         let rec = Term::Rec("Or".to_string(), vec![level_type0]);
-        
+
         let result = infer(&env, &Context::new(), Rc::new(rec));
-        
+
         if let Err(TypeError::LargeElimination(name)) = &result {
             assert_eq!(name, "Or");
         } else {
@@ -1445,10 +1780,11 @@ mod tests {
 
     #[test]
     fn test_opaque_abstraction() {
-        use crate::ast::{BinderInfo, Definition, InductiveDecl, Constructor};
+        use crate::ast::{BinderInfo, Constructor, Definition, InductiveDecl};
         use crate::checker::infer;
 
         let mut env = Env::new();
+        env.set_allow_reserved_primitives(true);
         // Setup Nat
         let nat_ty = Term::sort(Level::Zero);
         let nat_decl = InductiveDecl {
@@ -1456,45 +1792,54 @@ mod tests {
             univ_params: vec![],
             num_params: 0,
             ty: nat_ty.clone(),
-            ctors: vec![
-                Constructor { name: "zero".to_string(), ty: Rc::new(Term::Ind("Nat".to_string(), vec![])) },
-            ],
+            ctors: vec![Constructor {
+                name: "zero".to_string(),
+                ty: Rc::new(Term::Ind("Nat".to_string(), vec![])),
+            }],
             is_copy: false,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
         env.add_inductive(nat_decl).unwrap();
-        
+
         let nat_ref = Rc::new(Term::Ind("Nat".to_string(), vec![]));
-        
+
         // def MyNat = Nat. Mark Opaque.
-        let mut my_nat_def = Definition::total("MyNat".to_string(), nat_ty.clone(), nat_ref.clone());
+        let mut my_nat_def =
+            Definition::total("MyNat".to_string(), nat_ty.clone(), nat_ref.clone());
         my_nat_def.mark_opaque();
         env.add_definition(my_nat_def).unwrap();
-        
+
         let my_nat = Rc::new(Term::Const("MyNat".to_string(), vec![]));
-        
+
         // f : MyNat -> MyNat
         let f = Term::lam(my_nat.clone(), Term::var(0), BinderInfo::Default);
-        
+
         // zero : Nat
         let zero = Rc::new(Term::Ctor("Nat".to_string(), 0, vec![]));
-        
+
         // f zero
         let app = Term::app(f, zero);
-        
+
         // Infer should fail because infer(zero) = Nat, but expected MyNat.
         // MyNat is opaque, so Nat != MyNat.
         let result = infer(&env, &Context::new(), app);
-        
-        assert!(result.is_err(), "Opaque abstraction should prevent type equality between Nat and MyNat");
+
+        assert!(
+            result.is_err(),
+            "Opaque abstraction should prevent type equality between Nat and MyNat"
+        );
     }
 
     #[test]
     fn test_recursion_on_opaque() {
-        use crate::ast::{BinderInfo, Definition, Transparency, Constructor, InductiveDecl};
-        use crate::checker::{is_def_eq};
-        use crate::nbe::{eval, Value, Neutral};
+        use crate::ast::{BinderInfo, Constructor, Definition, InductiveDecl, Transparency};
+        use crate::checker::is_def_eq;
+        use crate::nbe::{eval, Neutral, Value};
 
         let mut env = Env::new();
+        env.set_allow_reserved_primitives(true);
         // Nat
         let nat_ty = Term::sort(Level::Zero);
         let nat_decl = InductiveDecl {
@@ -1503,30 +1848,65 @@ mod tests {
             num_params: 0,
             ty: nat_ty.clone(),
             ctors: vec![
-                Constructor { name: "zero".to_string(), ty: Rc::new(Term::Ind("Nat".to_string(), vec![])) },
-                Constructor { name: "succ".to_string(), ty: Term::pi(Rc::new(Term::Ind("Nat".to_string(), vec![])), Rc::new(Term::Ind("Nat".to_string(), vec![])), BinderInfo::Default) }
+                Constructor {
+                    name: "zero".to_string(),
+                    ty: Rc::new(Term::Ind("Nat".to_string(), vec![])),
+                },
+                Constructor {
+                    name: "succ".to_string(),
+                    ty: Term::pi(
+                        Rc::new(Term::Ind("Nat".to_string(), vec![])),
+                        Rc::new(Term::Ind("Nat".to_string(), vec![])),
+                        BinderInfo::Default,
+                    ),
+                },
             ],
             is_copy: false,
+            markers: vec![],
+            axioms: vec![],
+            primitive_deps: vec![],
         };
         env.add_inductive(nat_decl).unwrap();
-        
+
         let zero = Rc::new(Term::Ctor("Nat".to_string(), 0, vec![]));
-        
+
         // def my_zero = zero. Opaque.
-        let mut my_zero_def = Definition::total("my_zero".to_string(), Rc::new(Term::Ind("Nat".to_string(), vec![])), zero.clone());
+        let mut my_zero_def = Definition::total(
+            "my_zero".to_string(),
+            Rc::new(Term::Ind("Nat".to_string(), vec![])),
+            zero.clone(),
+        );
         my_zero_def.mark_opaque();
         env.add_definition(my_zero_def).unwrap();
-        
+
         let my_zero = Rc::new(Term::Const("my_zero".to_string(), vec![]));
-        
+
         // Nat.rec motive base step my_zero
         let recursor = Term::Rec("Nat".to_string(), vec![Level::Zero]);
-        let motive = Term::lam(Rc::new(Term::Ind("Nat".to_string(), vec![])), Rc::new(Term::Ind("Nat".to_string(), vec![])), BinderInfo::Default);
+        let motive = Term::lam(
+            Rc::new(Term::Ind("Nat".to_string(), vec![])),
+            Rc::new(Term::Ind("Nat".to_string(), vec![])),
+            BinderInfo::Default,
+        );
         let base = zero.clone();
-        let step = Term::lam(Rc::new(Term::Ind("Nat".to_string(), vec![])), Term::lam(Rc::new(Term::Ind("Nat".to_string(), vec![])), Term::var(0), BinderInfo::Default), BinderInfo::Default);
-        
-        let app = Term::app(Term::app(Term::app(Term::app(Rc::new(recursor), motive), base.clone()), step), my_zero.clone());
-        
+        let step = Term::lam(
+            Rc::new(Term::Ind("Nat".to_string(), vec![])),
+            Term::lam(
+                Rc::new(Term::Ind("Nat".to_string(), vec![])),
+                Term::var(0),
+                BinderInfo::Default,
+            ),
+            BinderInfo::Default,
+        );
+
+        let app = Term::app(
+            Term::app(
+                Term::app(Term::app(Rc::new(recursor), motive), base.clone()),
+                step,
+            ),
+            my_zero.clone(),
+        );
+
         // 1. With Reducible: Should NOT reduce (stuck on my_zero)
         let val_red = eval(&app, &vec![], &env, Transparency::Reducible)
             .expect("nbe eval (Reducible) failed");
@@ -1541,12 +1921,11 @@ mod tests {
             }
             _ => panic!("Expected Neutral (stuck), got {:?}", val_red),
         }
-        
+
         // 2. With All: Should reduce to base (zero)
-        let val_all = eval(&app, &vec![], &env, Transparency::All)
-            .expect("nbe eval (All) failed");
-        let quoted = crate::nbe::quote(val_all, 0, &env, Transparency::All)
-            .expect("nbe quote failed");
+        let val_all = eval(&app, &vec![], &env, Transparency::All).expect("nbe eval (All) failed");
+        let quoted =
+            crate::nbe::quote(val_all, 0, &env, Transparency::All).expect("nbe quote failed");
         assert!(is_def_eq(&env, quoted, base, Transparency::All));
     }
 
@@ -1557,28 +1936,38 @@ mod tests {
 
         let mut env = Env::new();
         let prop = Term::sort(Level::Zero);
-        
+
         // def MyProp = Prop. Opaque.
         let type0 = Term::sort(Level::Succ(Box::new(Level::Zero)));
         let mut my_prop_def = Definition::total("MyProp".to_string(), type0, prop.clone());
         my_prop_def.mark_opaque();
         env.add_definition(my_prop_def).unwrap();
-        
+
         let my_prop = Rc::new(Term::Const("MyProp".to_string(), vec![]));
-        
+
         // t = (p : MyProp) -> p
         let t = Term::pi(my_prop.clone(), Term::var(0), BinderInfo::Default);
-        
+
         let inferred = infer(&env, &Context::new(), t).expect("Infer failed");
-        
+
         // Inferred type should be MyProp
         assert!(matches!(&*inferred, Term::Const(n, _) if n == "MyProp"));
-        
+
         // Check equality with Prop
         // Reducible: False (Opaque)
-        assert!(!is_def_eq(&env, inferred.clone(), prop.clone(), Transparency::Reducible));
-        
+        assert!(!is_def_eq(
+            &env,
+            inferred.clone(),
+            prop.clone(),
+            Transparency::Reducible
+        ));
+
         // All: True (Unfolds)
-        assert!(is_def_eq(&env, inferred.clone(), prop.clone(), Transparency::All));
+        assert!(is_def_eq(
+            &env,
+            inferred.clone(),
+            prop.clone(),
+            Transparency::All
+        ));
     }
 }

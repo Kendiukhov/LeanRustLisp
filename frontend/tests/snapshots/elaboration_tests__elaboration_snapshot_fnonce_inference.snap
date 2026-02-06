@@ -1,0 +1,7 @@
+---
+source: frontend/tests/elaboration_tests.rs
+expression: output
+---
+ElaboratedDef make_once
+  ty: Pi(App(Const("Box", []), Ind("Nat", [])), Pi(Ind("Nat", []), App(Const("Box", []), Ind("Nat", [])), Default, FnOnce), Default, Fn)
+  val: Lam(App(Const("Box", []), Ind("Nat", [])), Lam(Ind("Nat", []), Var(1), Default, FnOnce), Default, Fn)

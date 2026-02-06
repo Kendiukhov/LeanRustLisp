@@ -7,7 +7,16 @@ This document outlines how LeanRustLisp integrates Rust-style ownership into a d
 **Affine Types**: Values are affine by default.
 *   Usage: 0 or 1 times.
 *   Drop: Allowed (destructors run).
-*   Copy: Opt-in via `is_copy` metadata on inductive type declarations (surface syntax: `(inductive copy ...)`).
+*   Copy: Opt-in via derived Copy instances on inductives (surface syntax: `(inductive copy ...)`). Explicit Copy instances are permitted only under `unsafe` and are tracked as unsafe axioms.
+
+## 1.1 Copy Instances and Safety
+
+Copy instances come from two sources:
+
+*   **Derived**: `(inductive copy ...)` requests derivation. The kernel checks that the inductive is not interior-mutable and that all constructor fields are Copy (or depend only on parameters). If derivation fails and `copy` was requested, the declaration is rejected.
+*   **Explicit**: `(unsafe instance copy (pi ...))` registers a Copy instance. Explicit instances are always treated as unsafe axioms (recorded as `copy_instance(TypeName)` with the `unsafe` tag) and are rejected for interior-mutable inductives.
+
+Explicit instances take precedence over derived ones during Copy resolution.
 
 ## 2. Borrowing & References
 
@@ -20,12 +29,49 @@ Borrowing produces references with explicit lifetimes (regions):
     *   Read-write access.
     *   **Linear capability**: Cannot be aliased. Must be used linearly to preserve the ability to mutate.
 
+At the core, references are expressed via the reserved primitives `Ref`, `Shared`, and `Mut`
+(e.g., `Ref Shared A`, `Ref Mut A`). These names are reserved by the kernel and must have fixed
+prelude-defined signatures; user code may not redefine them.
+
+Surface `&`/`&mut` desugar to the reserved primitives `borrow_shared` and `borrow_mut`. These
+primitives are admitted by the kernel as total axioms with fixed signatures. Their safety
+contract is enforced by the MIR borrow checker (outside the TCB), so safe code may borrow without
+an explicit `unsafe` marker.
+
 ## 3. Lifetimes at the Type Level
 
 *   Lifetimes (`'ρ`) are first-class terms at the type level.
 *   They are **not** value-dependent at runtime (erased).
 *   The compiler implies a partial order (outlives relation) on regions.
 *   **Verification**: A constraint solver runs on the mid-level IR (LRL-MIR) and generates evidence or checkable constraints for the kernel (or acts as a trusted oracle if split logic is used).
+
+### 3.1 Lifetime Labels and Elision (Function Types)
+
+Function *types* may label reference lifetimes by attaching an attribute to
+`Ref` in the signature. The label becomes a named region parameter; reusing the
+same label ties lifetimes together.
+
+Core/surface form:
+```
+Ref #[label] Shared T
+Ref #[label] Mut T
+```
+
+Implementation note: lifetime labels are carried structurally on the core `Ref`
+application node (not in side tables) and are preserved through term
+transformations (`shift`, `subst`, WHNF). Labels participate in definitional
+equality (label-strict); see `docs/spec/mir/borrows-regions.md` §Call-Site Region Constraints.
+
+Example (return tied to the first argument):
+```
+(pi a (Ref #[a] Shared Nat)
+  (pi b (Ref #[b] Shared Nat)
+    (Ref #[a] Shared Nat)))
+```
+
+Elision rule (Rust-style): if a signature contains exactly one distinct
+reference lifetime among its inputs, unlabeled return references are assigned
+that lifetime. Otherwise, return references must be explicitly labeled.
 
 ## 4. Mutation & Dependent Types
 
@@ -50,11 +96,36 @@ Systems programming wants in-place mutation, but dependent types need type stabi
 
 ---
 
-## 6. Implementation: MIR-Based Analysis
+## 6. Functions and Closure Kinds
+
+Function values carry an explicit kind (`Fn`, `FnMut`, `FnOnce`) that controls
+call semantics and ownership. See `docs/spec/function_kinds.md` for details.
+
+*   **Fn** calls use a shared borrow of the closure environment.
+*   **FnMut** calls use a mutable borrow of the closure environment.
+*   **FnOnce** calls consume the closure environment.
+*   Function values are non-Copy by default. The current compiler does not
+    derive Copy for closures based on captures; pass by shared reference or
+    lift to top-level definitions if duplication is required.
+
+### 6.1 Implicit binders (observational-only)
+
+Implicit binders (`{x}`) are for inference and erasure, not for consuming
+resources. For ownership soundness:
+
+*   Implicit **value** binders may only be used observationally at runtime:
+    read or copy, but never move, mutably borrow, or store in non-Copy
+    positions.
+*   Using an implicit value in a consuming position is a kernel error.
+*   If you need to consume a value, make the binder explicit.
+
+---
+
+## 7. Implementation: MIR-Based Analysis
 
 The ownership and borrow checking is implemented in the `mir` crate as a dataflow analysis over the Mid-level Intermediate Representation (MIR).
 
-### 6.1 Architecture
+### 7.1 Architecture
 
 ```
 kernel::Term (typed AST)
@@ -72,7 +143,7 @@ mir::Body
                Tracks active loans and reference conflicts
 ```
 
-### 6.2 Ownership Analysis (`mir/src/analysis/ownership.rs`)
+### 7.2 Ownership Analysis (`mir/src/analysis/ownership.rs`)
 
 Tracks the state of each local variable through program execution:
 
@@ -94,25 +165,23 @@ enum LocalState {
 **Copy type detection:**
 Types are considered Copy if:
 - They are `Sort` (types themselves)
-- They are `Pi` types (function types)
-- They are inductive types with `is_copy: true` metadata
+- They are inductive types with a resolved Copy instance whose requirements are Copy (derived or explicit)
+- Function types (`Pi`) are never Copy
+Function values are non-Copy by default; capture information currently affects
+call mode, not Copy.
 
 ```rust
-fn is_type_copy(&self, ty: &Rc<Term>) -> bool {
-    match &**ty {
+fn is_copy_type(&self, ty: &Rc<Term>) -> bool {
+    match whnf(ty) {
         Term::Sort(_) => true,
-        Term::Pi(_, _, _) => true,
-        Term::Ind(name, _) => {
-            self.kernel_env.inductives.get(name)
-                .map(|decl| decl.is_copy)
-                .unwrap_or(false)
-        },
-        _ => false
+        Term::Pi(_, _, _, _) => false,
+        Term::Ind(name, args) => copy_instance_satisfiable(name, args),
+        _ => false,
     }
 }
 ```
 
-### 6.3 Borrow Checking (`mir/src/analysis/borrow.rs`)
+### 7.3 Borrow Checking (`mir/src/analysis/borrow.rs`)
 
 Tracks active loans (borrows) and detects conflicts:
 
@@ -137,7 +206,7 @@ enum BorrowKind {
 - **Escaping references**: Cannot return references to local variables
 - **Mutate through shared ref**: Cannot write through `&T`
 
-### 6.4 Structured Error Types (`mir/src/errors.rs`)
+### 7.4 Structured Error Types (`mir/src/errors.rs`)
 
 Errors include source location information via `MirSpan`:
 
@@ -173,9 +242,12 @@ use of moved value: local _1 at block 0 statement 2
   help: value was moved earlier; consider using Clone or restructuring to avoid the move
 ```
 
-### 6.5 Copy Type Metadata
+### 7.5 Copy Type Metadata
 
-Inductive types can be marked as Copy via the `is_copy` field in `InductiveDecl`:
+Inductive types can request derived Copy via the `is_copy` field in `InductiveDecl`.
+This is a derivation request; the kernel attempts to build a Copy instance and
+rejects the inductive if derivation fails. Explicit Copy instances are stored
+separately and treated as unsafe axioms.
 
 ```rust
 // kernel/src/ast.rs
@@ -185,7 +257,9 @@ struct InductiveDecl {
     num_params: usize,
     ty: Rc<Term>,
     ctors: Vec<Constructor>,
-    is_copy: bool,  // Whether values of this type can be freely copied
+    is_copy: bool,  // Whether Copy derivation was explicitly requested
+    markers: Vec<TypeMarker>,
+    axioms: Vec<String>,
 }
 
 impl InductiveDecl {
@@ -194,13 +268,15 @@ impl InductiveDecl {
 }
 ```
 
-This metadata is propagated to MIR locals via `LocalDecl::is_copy`, enabling the ownership analysis to distinguish between linear and freely-copyable types.
+Resolved Copy instances (derived or explicit) are propagated to MIR locals via
+`LocalDecl::is_copy`, enabling the ownership analysis to distinguish between
+linear and freely-copyable types.
 
-### 6.6 Integration Points
+### 7.6 Integration Points
 
 **Lowering (`mir/src/lower.rs`):**
 - Converts kernel `Term` to MIR `Body`
-- Looks up `is_copy` from kernel environment for each local
+- Resolves Copy via kernel Copy-instance checking for each local
 - Generates `Move` vs `Copy` operands based on type
 
 **Compilation (`cli/src/compiler.rs`):**

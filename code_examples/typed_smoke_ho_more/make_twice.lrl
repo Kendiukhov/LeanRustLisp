@@ -1,0 +1,11 @@
+(def succ1 (pi n Nat Nat)
+  (lam n Nat (succ n)))
+
+(def make_twice
+  (pi #[fn] f (pi #[fn] x Nat Nat)
+    (pi #[fn] y Nat Nat))
+  (lam #[fn] f (pi #[fn] x Nat Nat)
+    (lam #[fn] y Nat
+      (f (f y)))))
+
+((make_twice succ1) zero)

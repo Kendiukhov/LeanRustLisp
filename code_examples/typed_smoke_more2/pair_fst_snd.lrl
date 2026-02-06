@@ -1,0 +1,15 @@
+(inductive copy PairNat (sort 1)
+  (ctor pair (pi a Nat (pi b Nat PairNat)))
+)
+
+(def fst (pi p PairNat Nat)
+  (lam p PairNat
+    (match p Nat
+      (case (pair a b) a))))
+
+(def snd (pi p PairNat Nat)
+  (lam p PairNat
+    (match p Nat
+      (case (pair a b) b))))
+
+(snd (pair zero (succ zero)))

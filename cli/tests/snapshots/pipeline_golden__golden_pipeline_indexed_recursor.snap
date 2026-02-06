@@ -1,14 +1,28 @@
 ---
 source: cli/tests/pipeline_golden.rs
-assertion_line: 139
 expression: output
 ---
+Diagnostics:
+- Error: [M300] MIR typing error in vlen closure 6: Assignment type mismatch: expected Adt(AdtId(Vec, 4342519251499682640), [Param(0), IndexTerm(Var(1))]), got Adt(AdtId(Vec, 4342519251499682640), [Unit, IndexTerm(Var(0))])
+
+DefEqConfig
+  fuel: 100000
+  source: default
+  transparency: Reducible
+
 ElaboratedDef vlen
-  ty: Pi(Sort(Succ(Zero)), Pi(Ind("Nat", []), Pi(App(App(Ind("Vec", []), Var(1)), Var(0)), Ind("Nat", []), Default), Default), Default)
-  val: Lam(Sort(Succ(Zero)), Lam(Ind("Nat", []), Lam(App(App(Ind("Vec", []), Var(1)), Var(0)), App(App(App(App(App(App(Rec("Vec", [Succ(Zero)]), Var(2)), Lam(Ind("Nat", []), Lam(App(App(Ind("Vec", []), Var(3)), Var(0)), Ind("Nat", []), Default), Default)), Const("zero", [])), Lam(Ind("Nat", []), Lam(Var(3), Lam(App(App(Ind("Vec", []), Var(4)), Var(1)), Lam(Ind("Nat", []), App(Const("succ", []), Var(0)), Default), Default), Default), Default)), Var(1)), Var(0)), Default), Default), Default)
+  ty: Pi(Sort(Succ(Zero)), Pi(Ind("Nat", []), Pi(App(App(Ind("Vec", []), Var(1)), Var(0)), Ind("Nat", []), Default, Fn), Default, Fn), Default, Fn)
+  val: Lam(Sort(Succ(Zero)), Lam(Ind("Nat", []), Lam(App(App(Ind("Vec", []), Var(1)), Var(0)), App(App(App(App(App(App(Rec("Vec", [Succ(Zero)]), Var(2)), Lam(Ind("Nat", []), Lam(App(App(Ind("Vec", []), Var(3)), Var(0)), Ind("Nat", []), Default, Fn), Default, Fn)), Const("zero", [])), Lam(Ind("Nat", []), Lam(Var(3), Lam(App(App(Ind("Vec", []), Var(4)), Var(1)), Lam(Ind("Nat", []), App(Const("succ", []), Var(0)), Default, FnOnce), Default, FnOnce), Default, FnOnce), Default, FnOnce)), Var(1)), Var(0)), Default, Fn), Default, Fn), Default, Fn)
 
 MirBody vlen
-  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(8, []), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([Unit], Fn([Nat], Fn([Unit], Nat))), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0 }
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(8, []), ty: Closure(Region(1), [], [Unit], Fn([], [Nat], Fn([], [Adt(AdtId(Vec, 4342519251499682640), [Param(0), IndexTerm(Var(0))])], Nat))) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([], [Unit], Fn([], [Nat], Fn([], [Adt(AdtId(Vec, 4342519251499682640), [Param(0), IndexTerm(Var(0))])], Nat))), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }, AdtId(Vec, 4342519251499682640): AdtLayout { adt: AdtId(Vec, 4342519251499682640), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Vec, 4342519251499682640), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Vec, 4342519251499682640), index: 1 }, fields: [Nat, Param(0), Adt(AdtId(Vec, 4342519251499682640), [Param(0), IndexTerm(Var(1))])] }] }} } }
 
 BorrowCheck vlen
   ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)

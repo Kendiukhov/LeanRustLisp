@@ -17,6 +17,9 @@
   \- kernel/src/checker.rs::check\_wellfounded\_termination is not called by Env::add\_definition for  
     Totality::WellFounded, but nbe::eval still unfolds those defs as total; this can make defeq  
     unsound; industrial alternative is mandatory WF proof checking before marking a def unfoldable.  
+  \- kernel/src/checker.rs admits general recursion (`fix`) in total defs; this breaks totality  
+    guarantees and can make defeq diverge; industrial alternative is to restrict `fix` to partial  
+    defs and reject it in total values and types.  
   \- kernel/src/nbe.rs::apply\_with\_config panics on non-function application and other internal  
     mismatches; a trusted kernel should not panic on ill-typed terms; industrial alternative is to  
     return a neutral or typed error and fail gracefully.  
@@ -55,9 +58,9 @@
   \- cli/src/compiler.rs runs mir/src/analysis/nll.rs for top-level defs but mir/src/analysis/borrow.rs  
     for closures; this creates two inconsistent borrow semantics; industrial alternative is one NLL-  
     based checker for all bodies.  
-  \- mir/src/analysis/nll.rs::BorrowCheckResult computes runtime\_checks but mir/src/codegen.rs never  
-    emits them; interior mutability checks are effectively dropped; industrial alternative is MIR  
-    statements for runtime checks with codegen support.  
+  \- mir/src/analysis/nll.rs::BorrowCheckResult computes runtime\_checks and MIR injects them, but  
+    mir/src/codegen.rs uses stubbed RefCell/Mutex hooks, so interior mutability checks are no-ops;  
+    industrial alternative is real runtime checks with codegen support.  
   \- mir/src/codegen.rs uses a dynamic Value with many panic\! paths in recursors and constructors;  
     well-typed programs can still panic on runtime tag mismatches; industrial alternative is typed  
     Rust enums per inductive and a panic-free runtime path for the safe profile.  
@@ -108,20 +111,37 @@
   \- Inductives/eliminators generality (no Nat/Bool/List special cases in semantics) \- Status: partial;  
     kernel is mostly generic, but MIR and codegen special-case heavily.  
   \- Termination and well-founded recursion soundness \- Status: needs work; WellFounded is not verified  
-    before unfolding.
+    before unfolding, and general recursion (`fix`) must be restricted to partial defs.
+  \- Axiom execution policy (Option A: noncomputable gate + explicit opt-in) \- Status: partial; total  
+    defs depending on any axioms (tagged or untagged) require `noncomputable`/`unsafe`, and codegen/run  
+    blocks axiom-dependent defs unless `noncomputable` or `--allow-axioms`. `Comp{Axiom}` is not  
+    implemented yet; axioms still compile to panic stubs as a backstop.  
+  \- Prelude macro boundary CI gate (including staged `quasiquote` expansions) \- Status: enforced by  
+    `cli/tests/prelude_macro_boundary.rs` (fails CI on violations).
 
   Borrowing and Runtime
 
   \- NLL-ready MIR with CFG, regions, constraints, diagnostics \- Status: partial; CFG exists and NLL  
     prototype works but spans and full constraint coverage are missing.  
-  \- Borrow checker output integrated into codegen \- Status: missing; runtime checks are computed but  
-    unused.  
+  \- Borrow checker output integrated into codegen \- Status: partial; runtime checks are computed and  
+    injected, but RefCell/Mutex hooks are stubbed (no-op), so interior mutability checks are not  
+    enforced.  
+  \- Lifetime labels on `Ref` \- Status: partial; defeq now compares labels, elision is treated as an  
+    implicit label variable and normalized during elaboration, and explicit mismatches are rejected.  
+  \- Borrow/lifetime safety boundary \- Status: explicit; MIR typing + NLL are required in the  
+    production pipeline for all defs/closures (outside the kernel).  
   \- Panic-free safe subset definition and enforcement points \- Status: partial; PanicFreeLinter exists  
-    but codegen still panics.  
+    (flags interior mutability, indexing, and borrow axioms). Interior mutability remains gated to  
+    `noncomputable`/`unsafe`; noncomputable uses require `--allow-axioms`, and runtime hooks are stubbed.  
   \- Interior mutability policy explicit and enforced (RefCell/Mutex/Atomic) \- Status: partial; types  
-    exist but naming/documentation and runtime hooks are missing.  
+    exist and are tracked as unsafe axioms (safe defs rejected unless `unsafe` or `--allow-axioms`),  
+    but runtime hooks are stubbed and codegen semantics are incomplete.  
   \- Ownership/linearity semantics preserved across kernel \-\> MIR \- Status: partial; kernel ownership  
     checker is unused and MIR analysis is independent.
+  \- Closure kinds and call semantics (Fn/FnOnce) \- Status: partial; kernel/elab/MIR carry Fn/FnOnce,  
+    but FnMut and capture-aware Copy are not implemented; see docs/spec/function_kinds.md.  
+  \- Copy instance safety and tracking \- Status: partial; explicit Copy instances require `unsafe`, are  
+    rejected for interior-mutable types, and are tracked as unsafe axioms.
 
   Determinism and Tooling
 
@@ -193,6 +213,8 @@
   \- Do not pursue heavy optimization passes until defeq, inductives, and borrow checks are stable.  
   \- Do not attempt full LSP or package manager in v0.1; focus on deterministic diagnostics and core  
     CLI.
+  \- Do not promise runtime Syntax objects in v0.1; syntax-as-data is a compile-time macro feature,  
+    and runtime Syntax remains optional.
 
   Issue List  
   Kernel
@@ -214,8 +236,8 @@
     introduced identifiers do not capture user vars in tests.  
   \- high frontend: Context-aware meta unification and zonking \- Acceptance: implicit args and metas  
     solve with correct scoping in tests.  
-  \- med frontend: Implement quote/quasiquote as syntax objects or remove orphan helpers \- Acceptance:  
-    no dead files; quote semantics are documented and tested.  
+  \- med frontend: Document compile-time syntax-as-data; runtime Syntax optional; remove orphan helpers  
+    if unused \- Acceptance: quote semantics are documented and tested; no dead files.  
   \- med frontend: Support string literals in parser and surface AST \- Acceptance: parser recognizes  
     strings and round-trips spans.  
   \- low frontend: Replace debug println\! with diagnostics \- Acceptance: no debug prints in normal  

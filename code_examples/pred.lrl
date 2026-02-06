@@ -1,0 +1,2 @@
+(def entry Nat
+  (print_nat (succ zero)))

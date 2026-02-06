@@ -1,4 +1,4 @@
-use kernel::ast::{BinderInfo, Level, Term};
+use kernel::ast::{BinderInfo, FunctionKind, Level, Term};
 use kernel::checker::{infer, Context, Env};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::rc::Rc;
@@ -77,7 +77,7 @@ fn gen_typed_term(rng: &mut Lcg, depth: usize, ctx: &mut Vec<TyKind>, target: Ty
         (TyKind::Prop, 1) => {
             let func = gen_typed_term(rng, depth.saturating_sub(1), ctx, TyKind::PropToProp);
             let arg = gen_typed_term(rng, depth.saturating_sub(1), ctx, TyKind::Prop);
-            Rc::new(Term::App(func, arg))
+            Term::app(func, arg)
         }
         (TyKind::Prop, 2) => {
             let value = gen_typed_term(rng, depth.saturating_sub(1), ctx, TyKind::Prop);
@@ -90,7 +90,12 @@ fn gen_typed_term(rng: &mut Lcg, depth: usize, ctx: &mut Vec<TyKind>, target: Ty
             ctx.push(TyKind::Prop);
             let body = gen_typed_term(rng, depth.saturating_sub(1), ctx, TyKind::Prop);
             ctx.pop();
-            Rc::new(Term::Lam(prop_term(), body, BinderInfo::Default))
+            Rc::new(Term::Lam(
+                prop_term(),
+                body,
+                BinderInfo::Default,
+                FunctionKind::Fn,
+            ))
         }
         _ => prop_term(),
     }

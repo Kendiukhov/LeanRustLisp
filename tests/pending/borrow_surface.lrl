@@ -1,2 +1,0 @@
-;; Pending: surface ref/borrow syntax not available yet.
-;; Enable CLI test in cli/tests/pending_borrow_surface.rs once syntax lands.

@@ -7,7 +7,7 @@
 //! Note: Full function inlining is complex for functional languages with closures.
 //! This module provides a foundation that can be extended.
 
-use crate::{Body, Statement, Rvalue, Operand, Local, Constant};
+use crate::{Body, CallOperand, Constant, Local, Operand, Rvalue, Statement};
 use std::collections::HashMap;
 
 /// Perform constant folding and copy propagation on a MIR body.
@@ -47,7 +47,7 @@ fn optimize_once(body: &mut Body) -> bool {
                     }
                 }
                 crate::Terminator::Call { func, args, .. } => {
-                    if propagate_operand_copies(func, &copy_map) {
+                    if propagate_call_operand_copies(func, &copy_map) {
                         changed = true;
                     }
                     for arg in args {
@@ -176,6 +176,26 @@ fn propagate_operand_copies(op: &mut Operand, copy_map: &HashMap<usize, KnownVal
     }
 }
 
+fn propagate_call_operand_copies(
+    op: &mut CallOperand,
+    copy_map: &HashMap<usize, KnownValue>,
+) -> bool {
+    match op {
+        CallOperand::Operand(inner) => propagate_operand_copies(inner, copy_map),
+        CallOperand::Borrow(_, place) => {
+            if place.projection.is_empty() {
+                if let Some(KnownValue::Local(src)) = copy_map.get(&place.local.index()) {
+                    if src.index() != place.local.index() {
+                        place.local = *src;
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+    }
+}
+
 /// Fold constant Nat operations (addition, etc.) if we ever add binary ops to MIR.
 /// Currently a placeholder for future expansion.
 pub fn fold_constants(_body: &mut Body) {
@@ -186,8 +206,8 @@ pub fn fold_constants(_body: &mut Body) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BasicBlockData, LocalDecl, Terminator, Place, Literal};
     use crate::types::MirType;
+    use crate::{BasicBlockData, Literal, LocalDecl, Place, Terminator};
 
     fn dummy_ty() -> MirType {
         MirType::Unit
@@ -200,8 +220,10 @@ mod tests {
         // _0: return
         // _1 = Nat(42)
         // _0 = _1
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_1".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_1".to_string())));
 
         body.basic_blocks.push(BasicBlockData {
             statements: vec![
@@ -223,7 +245,9 @@ mod tests {
         optimize(&mut body);
 
         // After optimization, _0 should be assigned the constant directly
-        if let Statement::Assign(_, Rvalue::Use(Operand::Constant(c))) = &body.basic_blocks[0].statements[1] {
+        if let Statement::Assign(_, Rvalue::Use(Operand::Constant(c))) =
+            &body.basic_blocks[0].statements[1]
+        {
             if let Literal::Nat(n) = c.literal {
                 assert_eq!(n, 42, "Constant should be propagated");
             } else {
@@ -243,10 +267,14 @@ mod tests {
         // _2 = _1
         // _3 = _2
         // _0 = _3
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_1".to_string())));
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_2".to_string())));
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_3".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_1".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_2".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_3".to_string())));
 
         body.basic_blocks.push(BasicBlockData {
             statements: vec![
@@ -276,7 +304,9 @@ mod tests {
         optimize(&mut body);
 
         // After optimization, _0 should be assigned the constant directly
-        if let Statement::Assign(_, Rvalue::Use(Operand::Constant(c))) = &body.basic_blocks[0].statements[3] {
+        if let Statement::Assign(_, Rvalue::Use(Operand::Constant(c))) =
+            &body.basic_blocks[0].statements[3]
+        {
             if let Literal::Nat(n) = c.literal {
                 assert_eq!(n, 100, "Constant should be propagated through chain");
             } else {
@@ -295,9 +325,12 @@ mod tests {
         // _1: argument
         // _2 = _1
         // _0 = _2
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_1".to_string())));
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_2".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_1".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_2".to_string())));
 
         body.basic_blocks.push(BasicBlockData {
             statements: vec![
@@ -316,7 +349,9 @@ mod tests {
         optimize(&mut body);
 
         // After optimization, _0 should be assigned from _1 directly
-        if let Statement::Assign(_, Rvalue::Use(Operand::Copy(place))) = &body.basic_blocks[0].statements[1] {
+        if let Statement::Assign(_, Rvalue::Use(Operand::Copy(place))) =
+            &body.basic_blocks[0].statements[1]
+        {
             assert_eq!(place.local.index(), 1, "Should copy from _1 directly");
         } else {
             panic!("Expected copy from _1");

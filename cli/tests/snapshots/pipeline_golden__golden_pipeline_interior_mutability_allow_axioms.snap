@@ -1,0 +1,58 @@
+---
+source: cli/tests/pipeline_golden.rs
+expression: output
+---
+Diagnostics:
+- Warning: Axiom 'interior_mutable' declared (unsafe: interior_mutable)
+- Warning: Axiom 'may_panic_on_borrow_violation' declared (unsafe: may_panic_on_borrow_violation)
+- Warning: Axiom 'concurrency_primitive' declared (unsafe: concurrency_primitive)
+- Warning: Axiom 'atomic_primitive' declared (unsafe: atomic_primitive)
+- Warning: Axiom 'indexable' declared (unsafe: indexable)
+- Warning: Inductive 'RefCell' depends on axioms: may_panic_on_borrow_violation (unsafe: may_panic_on_borrow_violation)
+- Warning: Definition 'uses_refcell' depends on axioms: may_panic_on_borrow_violation (unsafe: may_panic_on_borrow_violation)
+
+DefEqConfig
+  fuel: 100000
+  source: default
+  transparency: Reducible
+
+ElaboratedDef uses_refcell
+  ty: Pi(App(Ind("RefCell", []), Ind("Foo", [])), Ind("Foo", []), Default, Fn)
+  val: Lam(App(Ind("RefCell", []), Ind("Foo", [])), Const("mk_foo", []), Default, Fn)
+
+MirBody uses_refcell
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(0, []), ty: Closure(Region(1), [], [InteriorMutable(Adt(AdtId(Foo, 14277314895250841674), []), RefCell)], Adt(AdtId(Foo, 14277314895250841674), [])) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([], [InteriorMutable(Adt(AdtId(Foo, 14277314895250841674), []), RefCell)], Adt(AdtId(Foo, 14277314895250841674), [])), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Foo, 14277314895250841674): AdtLayout { adt: AdtId(Foo, 14277314895250841674), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Foo, 14277314895250841674), index: 0 }, fields: [] }] }, AdtId(RefCell, 16116052685739653519): AdtLayout { adt: AdtId(RefCell, 16116052685739653519), variants: [VariantLayout { ctor: CtorId { adt: AdtId(RefCell, 16116052685739653519), index: 0 }, fields: [Param(0)] }] }} } }
+
+BorrowCheck uses_refcell
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+AxiomDependencies atomic_primitive
+  axioms: ["atomic_primitive"]
+  classical: []
+
+AxiomDependencies concurrency_primitive
+  axioms: ["concurrency_primitive"]
+  classical: []
+
+AxiomDependencies indexable
+  axioms: ["indexable"]
+  classical: []
+
+AxiomDependencies interior_mutable
+  axioms: ["interior_mutable"]
+  classical: []
+
+AxiomDependencies may_panic_on_borrow_violation
+  axioms: ["may_panic_on_borrow_violation"]
+  classical: []
+
+AxiomDependencies uses_refcell
+  axioms: ["may_panic_on_borrow_violation"]
+  classical: []

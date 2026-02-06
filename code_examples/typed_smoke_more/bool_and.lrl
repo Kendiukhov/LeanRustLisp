@@ -1,0 +1,9 @@
+(def and
+  (pi a Bool (pi b Bool Bool))
+  (lam a Bool
+    (lam b Bool
+      (match a Bool
+        (case (true) b)
+        (case (false) false)))))
+
+(and true false)

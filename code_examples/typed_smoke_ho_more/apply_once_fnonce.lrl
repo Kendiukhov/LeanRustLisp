@@ -1,0 +1,11 @@
+(def once_id (pi #[once] x Nat Nat)
+  (lam #[once] x Nat x))
+
+(def apply_once
+  (pi #[fn] f (pi #[once] x Nat Nat)
+    (pi #[once] n Nat Nat))
+  (lam #[fn] f (pi #[once] x Nat Nat)
+    (lam #[once] n Nat
+      (f n))))
+
+(apply_once once_id (succ zero))

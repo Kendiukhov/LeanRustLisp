@@ -1,0 +1,8 @@
+(def len
+  (pi l ListRc Nat)
+  (lam l ListRc
+    (match l Nat
+      (case (nil) zero)
+      (case (cons h t ih) (succ ih)))))
+
+(len (cons zero (cons (succ zero) nil)))

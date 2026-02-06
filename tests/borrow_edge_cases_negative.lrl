@@ -1,0 +1,16 @@
+(noncomputable use_shared (pi r (Ref #[r] Shared Nat) Nat)
+  (lam r (Ref #[r] Shared Nat) zero))
+
+(noncomputable use_mut (pi r (Ref #[r] Mut Nat) Nat)
+  (lam r (Ref #[r] Mut Nat) zero))
+
+;; Negative: shared borrow from match escapes join, conflicts with later mutable borrow.
+(noncomputable branch_shared_then_mut (pi x Nat (pi n Nat Nat))
+  (lam x Nat
+    (lam n Nat
+      (let r (Ref #[r] Shared Nat)
+        (match n (Ref #[r] Shared Nat)
+          (case (zero) (& x))
+          (case (succ k) (& x)))
+        (let m (Ref #[r] Mut Nat) (&mut x)
+          (use_shared r))))))

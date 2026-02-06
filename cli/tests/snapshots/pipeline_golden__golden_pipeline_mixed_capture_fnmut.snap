@@ -1,0 +1,46 @@
+---
+source: cli/tests/pipeline_golden.rs
+expression: output
+---
+Diagnostics:
+- Warning: Definition 'use_mut' depends on primitives: Mut, Ref
+- Warning: Definition 'mixed_capture_fnmut' depends on primitives: Mut, Ref, borrow_mut
+
+DefEqConfig
+  fuel: 100000
+  source: default
+  transparency: Reducible
+
+ElaboratedDef mixed_capture_fnmut
+  ty: Pi(Ind("Nat", []), Ind("Nat", []), Default, Fn)
+  val: Lam(Ind("Nat", []), LetE(App(App(Const("Ref", []), Const("Mut", [])), Ind("Nat", []), #r), App(App(Const("borrow_mut", []), Ind("Nat", [])), Var(0)), LetE(Pi(Ind("Nat", []), Ind("Nat", []), Default, Fn), Lam(Ind("Nat", []), Var(0), Default, Fn), LetE(Pi(Ind("Nat", []), Ind("Nat", []), Default, FnMut), Lam(Ind("Nat", []), LetE(Ind("Nat", []), App(Const("use_mut", []), Var(2)), App(Var(2), Const("zero", []))), Default, FnMut), LetE(Ind("Nat", []), App(Var(1), Const("zero", [])), App(Var(1), Const("zero", [])))))), Default, Fn)
+
+ElaboratedDef use_mut
+  ty: Pi(App(App(Const("Ref", []), Const("Mut", [])), Ind("Nat", []), #r), Ind("Nat", []), Default, Fn)
+  val: Lam(App(App(Const("Ref", []), Const("Mut", [])), Ind("Nat", []), #r), Const("zero", []), Default, Fn)
+
+MirBody mixed_capture_fnmut
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(2, []), ty: Closure(Region(1), [], [Nat], Nat) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([], [Nat], Nat), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Array, 17560580047052612315): AdtLayout { adt: AdtId(Array, 17560580047052612315), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Array, 17560580047052612315), index: 0 }, fields: [Adt(AdtId(List, 18281496015322716214), [Param(0)])] }] }, AdtId(Atomic, 7944917567764537563): AdtLayout { adt: AdtId(Atomic, 7944917567764537563), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Atomic, 7944917567764537563), index: 0 }, fields: [Param(0)] }] }, AdtId(Bool, 1212688576893102294): AdtLayout { adt: AdtId(Bool, 1212688576893102294), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Bool, 1212688576893102294), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Bool, 1212688576893102294), index: 1 }, fields: [] }] }, AdtId(Comp, 5865758043995769001): AdtLayout { adt: AdtId(Comp, 5865758043995769001), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Comp, 5865758043995769001), index: 0 }, fields: [Unit, Unit] }, VariantLayout { ctor: CtorId { adt: AdtId(Comp, 5865758043995769001), index: 1 }, fields: [Unit, Unit, Adt(AdtId(Comp, 5865758043995769001), [IndexTerm(Var(1))]), Fn([], [Unit], Adt(AdtId(Comp, 5865758043995769001), [IndexTerm(Var(2))]))] }] }, AdtId(Eq, 7478576897359074100): AdtLayout { adt: AdtId(Eq, 7478576897359074100), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Eq, 7478576897359074100), index: 0 }, fields: [] }] }, AdtId(List, 18281496015322716214): AdtLayout { adt: AdtId(List, 18281496015322716214), variants: [VariantLayout { ctor: CtorId { adt: AdtId(List, 18281496015322716214), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(List, 18281496015322716214), index: 1 }, fields: [Param(0), Adt(AdtId(List, 18281496015322716214), [Param(0)])] }] }, AdtId(Mutex, 11502663489156599097): AdtLayout { adt: AdtId(Mutex, 11502663489156599097), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Mutex, 11502663489156599097), index: 0 }, fields: [Param(0)] }] }, AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }, AdtId(RefCell, 16116052685739653519): AdtLayout { adt: AdtId(RefCell, 16116052685739653519), variants: [VariantLayout { ctor: CtorId { adt: AdtId(RefCell, 16116052685739653519), index: 0 }, fields: [Param(0)] }] }, AdtId(Slice, 17243552778994937024): AdtLayout { adt: AdtId(Slice, 17243552778994937024), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Slice, 17243552778994937024), index: 0 }, fields: [Adt(AdtId(List, 18281496015322716214), [Param(0)])] }] }, AdtId(VecDyn, 5672451972718783331): AdtLayout { adt: AdtId(VecDyn, 5672451972718783331), variants: [VariantLayout { ctor: CtorId { adt: AdtId(VecDyn, 5672451972718783331), index: 0 }, fields: [Adt(AdtId(List, 18281496015322716214), [Param(0)])] }] }} } }
+
+MirBody use_mut
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(0, []), ty: Closure(Region(3), [Region(2)], [Ref(Region(2), Nat, Mut)], Nat) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([Region(1)], [Ref(Region(1), Nat, Mut)], Nat), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Array, 17560580047052612315): AdtLayout { adt: AdtId(Array, 17560580047052612315), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Array, 17560580047052612315), index: 0 }, fields: [Adt(AdtId(List, 18281496015322716214), [Param(0)])] }] }, AdtId(Atomic, 7944917567764537563): AdtLayout { adt: AdtId(Atomic, 7944917567764537563), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Atomic, 7944917567764537563), index: 0 }, fields: [Param(0)] }] }, AdtId(Bool, 1212688576893102294): AdtLayout { adt: AdtId(Bool, 1212688576893102294), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Bool, 1212688576893102294), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Bool, 1212688576893102294), index: 1 }, fields: [] }] }, AdtId(Comp, 5865758043995769001): AdtLayout { adt: AdtId(Comp, 5865758043995769001), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Comp, 5865758043995769001), index: 0 }, fields: [Unit, Unit] }, VariantLayout { ctor: CtorId { adt: AdtId(Comp, 5865758043995769001), index: 1 }, fields: [Unit, Unit, Adt(AdtId(Comp, 5865758043995769001), [IndexTerm(Var(1))]), Fn([], [Unit], Adt(AdtId(Comp, 5865758043995769001), [IndexTerm(Var(2))]))] }] }, AdtId(Eq, 7478576897359074100): AdtLayout { adt: AdtId(Eq, 7478576897359074100), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Eq, 7478576897359074100), index: 0 }, fields: [] }] }, AdtId(List, 18281496015322716214): AdtLayout { adt: AdtId(List, 18281496015322716214), variants: [VariantLayout { ctor: CtorId { adt: AdtId(List, 18281496015322716214), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(List, 18281496015322716214), index: 1 }, fields: [Param(0), Adt(AdtId(List, 18281496015322716214), [Param(0)])] }] }, AdtId(Mutex, 11502663489156599097): AdtLayout { adt: AdtId(Mutex, 11502663489156599097), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Mutex, 11502663489156599097), index: 0 }, fields: [Param(0)] }] }, AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }, AdtId(RefCell, 16116052685739653519): AdtLayout { adt: AdtId(RefCell, 16116052685739653519), variants: [VariantLayout { ctor: CtorId { adt: AdtId(RefCell, 16116052685739653519), index: 0 }, fields: [Param(0)] }] }, AdtId(Slice, 17243552778994937024): AdtLayout { adt: AdtId(Slice, 17243552778994937024), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Slice, 17243552778994937024), index: 0 }, fields: [Adt(AdtId(List, 18281496015322716214), [Param(0)])] }] }, AdtId(VecDyn, 5672451972718783331): AdtLayout { adt: AdtId(VecDyn, 5672451972718783331), variants: [VariantLayout { ctor: CtorId { adt: AdtId(VecDyn, 5672451972718783331), index: 0 }, fields: [Adt(AdtId(List, 18281496015322716214), [Param(0)])] }] }} } }
+
+BorrowCheck mixed_capture_fnmut
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+BorrowCheck use_mut
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)

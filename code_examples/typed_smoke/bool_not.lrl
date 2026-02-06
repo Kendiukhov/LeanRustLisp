@@ -1,0 +1,7 @@
+(def not (pi b Bool Bool)
+  (lam b Bool
+    (match b Bool
+      (case (true) false)
+      (case (false) true))))
+
+(not false)

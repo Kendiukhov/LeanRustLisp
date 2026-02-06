@@ -23,7 +23,7 @@
 **MIR & Borrowing**
 - `mir/src/analysis/nll_tests.rs`: NLL accept/reject unit tests.
 - `mir/tests/borrowck_corpus.rs`: extended NLL corpus (branches, reborrows, loops).
-- `mir/src/lints.rs`: panic-free profile lints (RefCell flagged, Mutex allowed).
+- `mir/src/lints.rs`: panic-free profile lints (interior mutability flagged).
 
 **CLI / Pipeline**
 - `cli/tests/golden_suite.rs`: file-driven golden pipeline snapshots (elab + MIR + borrowck).

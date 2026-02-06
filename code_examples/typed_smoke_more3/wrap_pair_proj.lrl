@@ -1,0 +1,18 @@
+(inductive copy PairNat (sort 1)
+  (ctor pair (pi a Nat (pi b Nat PairNat)))
+)
+
+(inductive copy Wrap (sort 1)
+  (ctor empty Wrap)
+  (ctor wrap (pi p PairNat Wrap))
+)
+
+(def first_or (pi w Wrap Nat)
+  (lam w Wrap
+    (match w Nat
+      (case (empty) zero)
+      (case (wrap p)
+        (match p Nat
+          (case (pair a b) a))))))
+
+(first_or (wrap (pair (succ zero) zero)))

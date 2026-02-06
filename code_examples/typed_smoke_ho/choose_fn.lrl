@@ -1,0 +1,14 @@
+(def succ1 (pi n Nat Nat)
+  (lam n Nat (succ n)))
+
+(def id_nat (pi #[fn] x Nat Nat)
+  (lam #[fn] x Nat x))
+
+(def choose
+  (pi b Bool (pi #[fn] x Nat Nat))
+  (lam b Bool
+    (match b (pi #[fn] x Nat Nat)
+      (case (true) succ1)
+      (case (false) id_nat))))
+
+((choose true) (succ zero))

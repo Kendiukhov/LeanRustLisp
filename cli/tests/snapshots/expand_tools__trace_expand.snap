@@ -1,0 +1,8 @@
+---
+source: cli/tests/expand_tools.rs
+expression: traced
+---
+1
+Macro Trace:
+- m1 @ 1:0 [0..4]
+  - m2 @ 1:0 [0..4]

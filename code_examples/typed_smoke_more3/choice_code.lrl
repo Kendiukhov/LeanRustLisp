@@ -1,0 +1,17 @@
+(inductive copy Choice (sort 1)
+  (ctor c_nat (pi n Nat Choice))
+  (ctor c_bool (pi b Bool Choice))
+  (ctor c_none Choice)
+)
+
+(def choice_code (pi c Choice Nat)
+  (lam c Choice
+    (match c Nat
+      (case (c_nat n) n)
+      (case (c_bool b)
+        (match b Nat
+          (case (true) (succ zero))
+          (case (false) zero)))
+      (case (c_none) (succ (succ zero))))))
+
+(choice_code (c_bool true))

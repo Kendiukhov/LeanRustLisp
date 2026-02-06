@@ -1,0 +1,8 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Warning: Axiom 'Res' declared
+- Error: [F0207] Elaboration error (Value) in 'bad_kind': Annotated function kind Fn is too small; requires FnOnce

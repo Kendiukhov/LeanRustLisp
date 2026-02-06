@@ -1,0 +1,24 @@
+(inductive copy Nat Type
+  (zero Nat)
+  (succ (pi n Nat Nat))
+)
+
+(inductive Option (pi T Type Type)
+  (none (pi {T Type} (Option T)))
+  (some (pi {T Type} (pi x T (Option T))))
+)
+
+(def choose (pi #[once] {T Type} (pi #[once] opt (Option T) (pi #[once] alt T T)))
+  (lam #[once] {T} Type
+    (lam #[once] opt (Option T)
+      (match opt (pi #[once] alt T T)
+        (case (none) (lam #[once] alt T alt))
+        (case (some x) (lam #[once] alt T x))
+      )
+    )
+  )
+)
+
+(def one Nat (succ zero))
+(def chosen Nat ((choose {Nat} (none {Nat})) one))
+(def chosen2 Nat ((choose {Nat} (some {Nat} one)) zero))

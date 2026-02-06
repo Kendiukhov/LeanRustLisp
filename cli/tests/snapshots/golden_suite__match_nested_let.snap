@@ -1,14 +1,25 @@
 ---
 source: cli/tests/golden_suite.rs
-assertion_line: 154
 expression: output
 ---
+DefEqConfig
+  fuel: 100000
+  source: default
+  transparency: Reducible
+
 ElaboratedDef nested_match
-  ty: Pi(Ind("Bool", []), Pi(Ind("Nat", []), Ind("Nat", []), Default), Default)
-  val: Lam(Ind("Bool", []), Lam(Ind("Nat", []), App(App(App(App(Rec("Bool", [Succ(Zero)]), Lam(Ind("Bool", []), Ind("Nat", []), Default)), LetE(Ind("Nat", []), Var(0), App(Const("succ", []), Var(0)))), LetE(Ind("Nat", []), Const("zero", []), Var(0))), Var(1)), Default), Default)
+  ty: Pi(Ind("Bool", []), Pi(Ind("Nat", []), Ind("Nat", []), Default, Fn), Default, Fn)
+  val: Lam(Ind("Bool", []), Lam(Ind("Nat", []), App(App(App(App(Rec("Bool", [Succ(Zero)]), Lam(Ind("Bool", []), Ind("Nat", []), Default, Fn)), LetE(Ind("Nat", []), Var(0), App(Const("succ", []), Var(0)))), LetE(Ind("Nat", []), Const("zero", []), Var(0))), Var(1)), Default, Fn), Default, Fn)
 
 MirBody nested_match
-  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(2, []), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([Bool], Fn([Nat], Nat)), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0 }
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(2, []), ty: Closure(Region(1), [], [Bool], Fn([], [Nat], Nat)) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([], [Bool], Fn([], [Nat], Nat)), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Bool, 1212688576893102294): AdtLayout { adt: AdtId(Bool, 1212688576893102294), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Bool, 1212688576893102294), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Bool, 1212688576893102294), index: 1 }, fields: [] }] }, AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }} } }
 
 BorrowCheck nested_match
   ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)

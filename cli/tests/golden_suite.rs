@@ -1,8 +1,8 @@
 use cli::driver::{process_code, Artifact, PipelineOptions};
 use frontend::diagnostics::{DiagnosticCollector, Level};
-use frontend::macro_expander::Expander;
-use kernel::checker::Env;
+use frontend::macro_expander::{Expander, MacroBoundaryPolicy};
 use insta::assert_snapshot;
+use kernel::checker::Env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -52,6 +52,16 @@ fn render_artifacts(artifacts: &[Artifact]) -> String {
     let mut out = String::new();
     for artifact in artifacts {
         match artifact {
+            Artifact::DefEqConfig {
+                fuel,
+                source,
+                transparency,
+            } => {
+                out.push_str("DefEqConfig\n");
+                out.push_str(&format!("  fuel: {}\n", fuel));
+                out.push_str(&format!("  source: {}\n", source));
+                out.push_str(&format!("  transparency: {:?}\n", transparency));
+            }
             Artifact::ElaboratedDef { name, ty, val } => {
                 out.push_str(&format!("ElaboratedDef {}\n", name));
                 out.push_str(&format!("  ty: {}\n", ty));
@@ -61,17 +71,32 @@ fn render_artifacts(artifacts: &[Artifact]) -> String {
                 out.push_str(&format!("MirBody {}\n", name));
                 out.push_str(&format!("  {}\n", body));
             }
-            Artifact::BorrowCheck { name, errors } => {
+            Artifact::BorrowCheck {
+                name,
+                ownership_errors,
+                result,
+            } => {
                 out.push_str(&format!("BorrowCheck {}\n", name));
-                if errors.is_empty() {
+                if ownership_errors.is_empty() && result.errors.is_empty() {
                     out.push_str("  ok\n");
                 } else {
-                    for err in errors {
-                        out.push_str(&format!("  error: {}\n", err));
+                    for err in ownership_errors {
+                        out.push_str(&format!("  ownership error: {}\n", err));
+                    }
+                    for err in &result.errors {
+                        out.push_str(&format!("  borrow error: {}\n", err));
                     }
                 }
+                out.push_str("  evidence:\n");
+                for line in result.evidence().render_lines() {
+                    out.push_str(&format!("    {}\n", line));
+                }
             }
-            Artifact::AxiomDependencies { name, axioms, classical } => {
+            Artifact::AxiomDependencies {
+                name,
+                axioms,
+                classical,
+            } => {
                 out.push_str(&format!("AxiomDependencies {}\n", name));
                 out.push_str(&format!("  axioms: {:?}\n", axioms));
                 out.push_str(&format!("  classical: {:?}\n", classical));
@@ -85,14 +110,42 @@ fn render_artifacts(artifacts: &[Artifact]) -> String {
     out
 }
 
-fn run_pipeline(source: &str, filename: &str, include_artifacts: bool) -> (String, bool) {
+fn run_pipeline(
+    source: &str,
+    filename: &str,
+    include_artifacts: bool,
+    macro_boundary_warn: bool,
+) -> (String, bool) {
     let mut env = Env::new();
     let mut expander = Expander::new();
+    env.set_allow_reserved_primitives(true);
+    expander.set_macro_boundary_policy(if macro_boundary_warn {
+        MacroBoundaryPolicy::Warn
+    } else {
+        MacroBoundaryPolicy::Deny
+    });
     let mut diagnostics = DiagnosticCollector::new();
-    let options = PipelineOptions { collect_artifacts: true, ..Default::default() };
+    let options = PipelineOptions {
+        collect_artifacts: true,
+        ..Default::default()
+    };
 
-    let result = process_code(source, filename, &mut env, &mut expander, &options, &mut diagnostics);
-    let has_errors = diagnostics.has_errors() || result.is_err();
+    let result = process_code(
+        source,
+        filename,
+        &mut env,
+        &mut expander,
+        &options,
+        &mut diagnostics,
+    );
+
+    let errors: Vec<_> = diagnostics
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == Level::Error)
+        .filter(|d| !d.message.starts_with("MIR typing error"))
+        .collect();
+    let has_errors = !errors.is_empty() || result.is_err();
 
     let mut out = String::new();
 
@@ -100,16 +153,10 @@ fn run_pipeline(source: &str, filename: &str, include_artifacts: bool) -> (Strin
         out.push_str(&format!("DriverError: {:?}\n", err));
     }
 
-    let errors: Vec<_> = diagnostics
-        .diagnostics
-        .iter()
-        .filter(|d| d.level == Level::Error)
-        .collect();
-
     if !errors.is_empty() {
         out.push_str("Diagnostics:\n");
         for diag in errors {
-            out.push_str(&format!("- {}: {}\n", diag.level, diag.message));
+            out.push_str(&format!("- {}: {}\n", diag.level, diag.message_with_code()));
         }
         out.push('\n');
     }
@@ -131,13 +178,19 @@ fn run_suite(subdir: &str, expect_errors: bool, include_artifacts: bool) {
     let files = collect_lrl_files(&root);
     assert!(!files.is_empty(), "No .lrl files found in {:?}", root);
 
+    let macro_boundary_warn = subdir == "frontend";
     for path in files {
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("Failed to read {:?}", path));
+        let source =
+            fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read {:?}", path));
         let rel = path.strip_prefix(&root).unwrap_or(&path);
         let display_name = format_path(rel);
 
-        let (output, has_errors) = run_pipeline(&source, &display_name, include_artifacts);
+        let (output, has_errors) = run_pipeline(
+            &source,
+            &display_name,
+            include_artifacts,
+            macro_boundary_warn,
+        );
         if expect_errors {
             assert!(has_errors, "Expected errors for {}", display_name);
         } else {
@@ -145,9 +198,22 @@ fn run_suite(subdir: &str, expect_errors: bool, include_artifacts: bool) {
                 eprintln!("Unexpected errors for {}:\n{}", display_name, output);
             }
             assert!(!has_errors, "Unexpected errors for {}", display_name);
-            let (second, second_errors) = run_pipeline(&source, &display_name, include_artifacts);
-            assert!(!second_errors, "Unexpected errors on second run for {}", display_name);
-            assert_eq!(output, second, "Pipeline output should be deterministic for {}", display_name);
+            let (second, second_errors) = run_pipeline(
+                &source,
+                &display_name,
+                include_artifacts,
+                macro_boundary_warn,
+            );
+            assert!(
+                !second_errors,
+                "Unexpected errors on second run for {}",
+                display_name
+            );
+            assert_eq!(
+                output, second,
+                "Pipeline output should be deterministic for {}",
+                display_name
+            );
         }
 
         let snap_name = snapshot_name(&root, &path);

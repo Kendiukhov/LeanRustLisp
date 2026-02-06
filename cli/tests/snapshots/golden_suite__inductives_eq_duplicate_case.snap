@@ -3,4 +3,4 @@ source: cli/tests/golden_suite.rs
 expression: output
 ---
 Diagnostics:
-- Error: Elaboration error (Value) in 'bad': Duplicate case refl in match on Eq
+- Error: [F0212] Elaboration error (Value) in 'bad': Duplicate case refl in match on Eq

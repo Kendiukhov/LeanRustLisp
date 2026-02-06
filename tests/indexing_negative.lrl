@@ -1,0 +1,5 @@
+;; Negative indexing test: non-indexable container should be rejected.
+
+(unsafe index_nat_bad Nat
+  (let n Nat 1
+    n[0]))

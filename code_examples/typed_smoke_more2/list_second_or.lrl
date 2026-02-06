@@ -1,0 +1,11 @@
+(def second_or (pi xs ListRc (pi d Nat Nat))
+  (lam xs ListRc
+    (lam d Nat
+      (match xs Nat
+        (case (nil) d)
+        (case (cons h t ih)
+          (match t Nat
+            (case (nil) h)
+            (case (cons h2 t2 ih2) h2)))))))
+
+(second_or (cons zero (cons (succ zero) nil)) (succ (succ zero)))

@@ -1,0 +1,7 @@
+---
+source: frontend/tests/elaboration_tests.rs
+expression: output
+---
+ElaboratedDef make_const
+  ty: Pi(Ind("Nat", []), Pi(Ind("Nat", []), Ind("Nat", []), Default, Fn), Default, Fn)
+  val: Lam(Ind("Nat", []), Lam(Ind("Nat", []), Var(1), Default, Fn), Default, Fn)

@@ -4,10 +4,10 @@ This file splits the remaining **pre-codegen** macro work into parallel, non-ove
 
 ## Stream 0: Decision Lock (short, unblocker)
 - Decide macro expansion target and boundaries:
-  - Option A: `Syntax -> Syntax` macro expansion, then separate desugarer `Syntax -> SurfaceTerm`.
+  - Option A (DECIDED FOR IT): `Syntax -> Syntax` macro expansion, then separate desugarer `Syntax -> SurfaceTerm`.
   - Option B: keep `Syntax -> SurfaceTerm` (current) but formalize/justify.
 - Decide quasiquote semantics:
-  - Syntax-object construction (macro-time) vs runtime list construction.
+  - Syntax-object construction (DECIDED FOR IT) (macro-time) vs runtime list construction.
 - Output a short decision note in `docs/spec/macro_system.md`.
 - **Dependency:** All other streams should align to these decisions.
 
@@ -25,7 +25,7 @@ This file splits the remaining **pre-codegen** macro work into parallel, non-ove
 - **Dependency:** Stream 0 decisions only.
 
 ## Stream 2: Macro Expansion Architecture (core refactor)
-- If Stream 0 chooses `Syntax -> Syntax`:
+
   - Refactor `frontend/src/macro_expander.rs` to *only* expand to `Syntax`.
   - Add a new desugarer pass (`Syntax -> SurfaceTerm`) in a dedicated module.
   - Update `frontend/src/declaration_parser.rs` to: expand macros first, then parse/desugar.

@@ -1,0 +1,7 @@
+---
+source: frontend/tests/elaboration_tests.rs
+expression: output
+---
+ElaboratedDef coerce_once
+  ty: Pi(Ind("Nat", []), Ind("Nat", []), Default, FnOnce)
+  val: Lam(Ind("Nat", []), App(Lam(Ind("Nat", []), Var(0), Default, Fn), Var(0)), Default, FnOnce)

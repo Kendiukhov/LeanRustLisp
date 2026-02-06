@@ -1,6 +1,7 @@
-use crate::surface::{Declaration, Syntax, SyntaxKind};
-use crate::macro_expander::{Expander, ExpansionError};
+use crate::desugar::Desugarer;
+use crate::macro_expander::{is_reserved_macro_name, Expander, ExpansionError};
 use crate::parser::ParseError;
+use crate::surface::{Declaration, Span, Syntax, SyntaxKind};
 use kernel::ast::{AxiomTag, Totality, Transparency};
 use thiserror::Error;
 
@@ -12,13 +13,31 @@ pub enum DeclarationParseError {
     Parse(#[from] ParseError),
 }
 
+impl DeclarationParseError {
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            DeclarationParseError::Expansion(err) => err.diagnostic_code(),
+            DeclarationParseError::Parse(err) => err.diagnostic_code(),
+        }
+    }
+
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            DeclarationParseError::Expansion(_) => None,
+            DeclarationParseError::Parse(err) => Some(err.span()),
+        }
+    }
+}
+
 pub struct DeclarationParser<'a> {
     expander: &'a mut Expander,
+    desugarer: Desugarer,
 }
 
 fn parse_axiom_tag(tag: &str) -> Result<AxiomTag, ExpansionError> {
     match tag {
         "classical" => Ok(AxiomTag::Classical),
+        "unsafe" => Ok(AxiomTag::Unsafe),
         _ => Err(ExpansionError::InvalidSyntax(
             "axiom".to_string(),
             format!("Unknown axiom tag '{}'", tag),
@@ -26,12 +45,69 @@ fn parse_axiom_tag(tag: &str) -> Result<AxiomTag, ExpansionError> {
     }
 }
 
-impl<'a> DeclarationParser<'a> {
-    pub fn new(expander: &'a mut Expander) -> Self {
-        DeclarationParser { expander }
+fn parse_inductive_attr_list(
+    list: &[Syntax],
+    is_copy: &mut bool,
+    attrs: &mut Vec<String>,
+) -> Result<(), ExpansionError> {
+    for attr in list {
+        match &attr.kind {
+            SyntaxKind::Symbol(s) => {
+                if s == "copy" {
+                    *is_copy = true;
+                } else {
+                    attrs.push(s.clone());
+                }
+            }
+            _ => {
+                return Err(ExpansionError::InvalidSyntax(
+                    "inductive".to_string(),
+                    "Inductive attributes must be symbols".to_string(),
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_inductive_attrs(items: &[Syntax]) -> Result<(bool, Vec<String>, usize), ExpansionError> {
+    let mut is_copy = false;
+    let mut attrs = Vec::new();
+    let mut name_index = 1;
+
+    match &items[1].kind {
+        SyntaxKind::List(list) | SyntaxKind::BracedList(list) => {
+            parse_inductive_attr_list(list, &mut is_copy, &mut attrs)?;
+            name_index = 2;
+        }
+        SyntaxKind::Symbol(s) if s == "copy" => {
+            is_copy = true;
+            name_index = 2;
+            if items.len() > 2 {
+                if let SyntaxKind::List(list) | SyntaxKind::BracedList(list) = &items[2].kind {
+                    parse_inductive_attr_list(list, &mut is_copy, &mut attrs)?;
+                    name_index = 3;
+                }
+            }
+        }
+        _ => {}
     }
 
-    pub fn parse(&mut self, syntax_nodes: Vec<Syntax>) -> Result<Vec<Declaration>, DeclarationParseError> {
+    Ok((is_copy, attrs, name_index))
+}
+
+impl<'a> DeclarationParser<'a> {
+    pub fn new(expander: &'a mut Expander) -> Self {
+        DeclarationParser {
+            expander,
+            desugarer: Desugarer::new(),
+        }
+    }
+
+    pub fn parse(
+        &mut self,
+        syntax_nodes: Vec<Syntax>,
+    ) -> Result<Vec<Declaration>, DeclarationParseError> {
         let mut decls = Vec::new();
         for syntax in syntax_nodes {
             if let Some(decl) = self.parse_decl(syntax)? {
@@ -44,13 +120,101 @@ impl<'a> DeclarationParser<'a> {
     fn parse_decl(&mut self, syntax: Syntax) -> Result<Option<Declaration>, DeclarationParseError> {
         let result = self.parse_decl_inner(syntax.clone());
         if let Err(ref e) = result {
-             println!("Failed to parse decl: {:?}\nSyntax: {:?}", e, syntax.kind);
+            println!("Failed to parse decl: {:?}\nSyntax: {:?}", e, syntax.kind);
         }
         result
     }
 
-    fn parse_decl_inner(&mut self, syntax: Syntax) -> Result<Option<Declaration>, DeclarationParseError> {
-        // Clone syntax kind to inspect structure without moving parts of syntax
+    fn parse_decl_inner(
+        &mut self,
+        syntax: Syntax,
+    ) -> Result<Option<Declaration>, DeclarationParseError> {
+        if let Some(decl) = self.parse_defmacro(&syntax)? {
+            return Ok(Some(decl));
+        }
+
+        let expanded = match self.expander.expand(syntax)? {
+            Some(expanded) => expanded,
+            None => return Ok(None),
+        };
+
+        if let Some(decl) = self.parse_defmacro(&expanded)? {
+            return Ok(Some(decl));
+        }
+
+        self.parse_expanded_decl(expanded)
+    }
+
+    fn parse_defmacro(
+        &mut self,
+        syntax: &Syntax,
+    ) -> Result<Option<Declaration>, DeclarationParseError> {
+        let items = match &syntax.kind {
+            SyntaxKind::List(items) if !items.is_empty() => items,
+            _ => return Ok(None),
+        };
+
+        let head = match &items[0].kind {
+            SyntaxKind::Symbol(s) if s == "defmacro" => s.as_str(),
+            _ => return Ok(None),
+        };
+
+        if items.len() != 4 {
+            return Err(ExpansionError::ArgumentCountMismatch(
+                head.to_string(),
+                3,
+                items.len() - 1,
+            )
+            .into());
+        }
+        let name = if let SyntaxKind::Symbol(n) = &items[1].kind {
+            n.clone()
+        } else {
+            return Err(ExpansionError::InvalidSyntax(
+                head.to_string(),
+                "Name must be a symbol".to_string(),
+            )
+            .into());
+        };
+        if is_reserved_macro_name(&name) {
+            return Err(ExpansionError::InvalidSyntax(
+                head.to_string(),
+                format!("'{}' is a reserved macro name", name),
+            )
+            .into());
+        }
+
+        let mut args = Vec::new();
+        if let SyntaxKind::List(arg_list) = &items[2].kind {
+            for arg in arg_list {
+                if let SyntaxKind::Symbol(a) = &arg.kind {
+                    args.push(a.clone());
+                } else {
+                    return Err(ExpansionError::InvalidSyntax(
+                        head.to_string(),
+                        "Args must be symbols".to_string(),
+                    )
+                    .into());
+                }
+            }
+        } else {
+            return Err(ExpansionError::InvalidSyntax(
+                head.to_string(),
+                "Arg list expected".to_string(),
+            )
+            .into());
+        }
+
+        let body = items[3].clone();
+        self.expander
+            .add_macro(name.clone(), args.clone(), body.clone());
+        Ok(Some(Declaration::DefMacro { name, args, body }))
+    }
+
+    fn parse_expanded_decl(
+        &mut self,
+        syntax: Syntax,
+    ) -> Result<Option<Declaration>, DeclarationParseError> {
         match &syntax.kind {
             SyntaxKind::List(items) => {
                 if items.is_empty() {
@@ -58,14 +222,63 @@ impl<'a> DeclarationParser<'a> {
                 }
                 if let SyntaxKind::Symbol(s) = &items[0].kind {
                     match s.as_str() {
-                        "def" => self.parse_def_with_transparency(items, "def", Totality::Total),
-                        "partial" => self.parse_def_with_transparency(items, "partial", Totality::Partial),
-                        "unsafe" => self.parse_def_with_transparency(items, "unsafe", Totality::Unsafe),
-                        "opaque" => self.parse_def_fixed_transparency(items, "opaque", Totality::Total, Transparency::None),
-                        "transparent" => self.parse_def_fixed_transparency(items, "transparent", Totality::Total, Transparency::Reducible),
+                        "def" => {
+                            self.parse_def_with_transparency(items, "def", Totality::Total, false)
+                        }
+                        "partial" => self.parse_def_with_transparency(
+                            items,
+                            "partial",
+                            Totality::Partial,
+                            false,
+                        ),
+                        "unsafe" => {
+                            if items.len() >= 2 {
+                                if let SyntaxKind::Symbol(sym) = &items[1].kind {
+                                    if sym == "instance" {
+                                        return self.parse_instance_at(
+                                            items,
+                                            "unsafe instance",
+                                            2,
+                                            true,
+                                        );
+                                    }
+                                }
+                            }
+                            self.parse_def_with_transparency(
+                                items,
+                                "unsafe",
+                                Totality::Unsafe,
+                                false,
+                            )
+                        }
+                        "noncomputable" => self.parse_def_with_transparency(
+                            items,
+                            "noncomputable",
+                            Totality::Total,
+                            true,
+                        ),
+                        "opaque" => self.parse_def_fixed_transparency(
+                            items,
+                            "opaque",
+                            Totality::Total,
+                            Transparency::None,
+                            false,
+                        ),
+                        "transparent" => self.parse_def_fixed_transparency(
+                            items,
+                            "transparent",
+                            Totality::Total,
+                            Transparency::Reducible,
+                            false,
+                        ),
                         "axiom" => {
                             if !(items.len() == 3 || items.len() == 4) {
-                                return Err(ExpansionError::ArgumentCountMismatch("axiom".to_string(), 2, items.len() - 1).into());
+                                return Err(ExpansionError::ArgumentCountMismatch(
+                                    "axiom".to_string(),
+                                    2,
+                                    items.len() - 1,
+                                )
+                                .into());
                             }
 
                             let (tags_syntax, name_syntax, ty_syntax) = if items.len() == 3 {
@@ -88,15 +301,18 @@ impl<'a> DeclarationParser<'a> {
                                                 return Err(ExpansionError::InvalidSyntax(
                                                     "axiom".to_string(),
                                                     "Axiom tags must be symbols".to_string(),
-                                                ).into());
+                                                )
+                                                .into());
                                             }
                                         }
                                     }
                                     _ => {
                                         return Err(ExpansionError::InvalidSyntax(
                                             "axiom".to_string(),
-                                            "Axiom tags must be a symbol or list of symbols".to_string(),
-                                        ).into());
+                                            "Axiom tags must be a symbol or list of symbols"
+                                                .to_string(),
+                                        )
+                                        .into());
                                     }
                                 }
                             }
@@ -104,37 +320,72 @@ impl<'a> DeclarationParser<'a> {
                             let name = if let SyntaxKind::Symbol(n) = &name_syntax.kind {
                                 n.clone()
                             } else {
-                                return Err(ExpansionError::InvalidSyntax("axiom".to_string(), "Name must be a symbol".to_string()).into());
+                                return Err(ExpansionError::InvalidSyntax(
+                                    "axiom".to_string(),
+                                    "Name must be a symbol".to_string(),
+                                )
+                                .into());
                             };
-                            let ty = self
-                                .expander
-                                .expand(ty_syntax.clone())?
-                                .ok_or(ExpansionError::TransformationError("Type expanded to empty".to_string()))?;
+                            let ty = self.desugarer.desugar(ty_syntax.clone())?;
                             Ok(Some(Declaration::Axiom { name, ty, tags }))
                         }
+                        "import" => {
+                            if items.len() != 2 {
+                                return Err(ExpansionError::ArgumentCountMismatch(
+                                    "import".to_string(),
+                                    1,
+                                    items.len() - 1,
+                                )
+                                .into());
+                            }
+
+                            match &items[1].kind {
+                                SyntaxKind::Symbol(tag) if tag == "classical" => {
+                                    Ok(Some(Declaration::ImportClassical))
+                                }
+                                SyntaxKind::Symbol(module) => Ok(Some(Declaration::ImportModule {
+                                    module: module.clone(),
+                                })),
+                                _ => Err(ExpansionError::InvalidSyntax(
+                                    "import".to_string(),
+                                    "Expected 'classical' or a module name".to_string(),
+                                )
+                                .into()),
+                            }
+                        }
+                        "instance" => self.parse_instance_at(items, "instance", 1, false),
                         "inductive" => {
                             if items.len() < 3 {
-                                return Err(ExpansionError::ArgumentCountMismatch("inductive".to_string(), 2, items.len() - 1).into());
+                                return Err(ExpansionError::ArgumentCountMismatch(
+                                    "inductive".to_string(),
+                                    2,
+                                    items.len() - 1,
+                                )
+                                .into());
                             }
-                            let (is_copy, name_syntax, ty_syntax, ctor_slice) = match &items[1].kind {
-                                SyntaxKind::Symbol(s) if s == "copy" => {
-                                    if items.len() < 4 {
-                                        return Err(ExpansionError::ArgumentCountMismatch("inductive".to_string(), 3, items.len() - 1).into());
-                                    }
-                                    (true, &items[2], &items[3], items.iter().skip(4))
-                                }
-                                _ => (false, &items[1], &items[2], items.iter().skip(3)),
-                            };
+                            let (is_copy, attrs, name_index) = parse_inductive_attrs(items)?;
+                            if items.len() < name_index + 2 {
+                                return Err(ExpansionError::ArgumentCountMismatch(
+                                    "inductive".to_string(),
+                                    2,
+                                    items.len() - 1,
+                                )
+                                .into());
+                            }
+                            let name_syntax = &items[name_index];
+                            let ty_syntax = &items[name_index + 1];
+                            let ctor_slice = items.iter().skip(name_index + 2);
 
                             let name = if let SyntaxKind::Symbol(n) = &name_syntax.kind {
                                 n.clone()
                             } else {
-                                return Err(ExpansionError::InvalidSyntax("inductive".to_string(), "Name must be a symbol".to_string()).into());
+                                return Err(ExpansionError::InvalidSyntax(
+                                    "inductive".to_string(),
+                                    "Name must be a symbol".to_string(),
+                                )
+                                .into());
                             };
-                            let ty = self
-                                .expander
-                                .expand(ty_syntax.clone())?
-                                .ok_or(ExpansionError::TransformationError("Type expanded to empty".to_string()))?;
+                            let ty = self.desugarer.desugar(ty_syntax.clone())?;
 
                             let mut ctors = Vec::new();
                             for ctor_spec in ctor_slice {
@@ -142,71 +393,114 @@ impl<'a> DeclarationParser<'a> {
                                     if citems.len() == 2 {
                                         // (Name Type)
                                         if let SyntaxKind::Symbol(cname) = &citems[0].kind {
-                                            let cty = self.expander.expand(citems[1].clone())?.ok_or(ExpansionError::TransformationError("Constructor type expanded to empty".to_string()))?;
+                                            let cty = self.desugarer.desugar(citems[1].clone())?;
                                             ctors.push((cname.clone(), cty));
-                                        } else { return Err(ExpansionError::InvalidSyntax("inductive ctor".to_string(), "Expected (Name Type)".to_string()).into()); }
+                                        } else {
+                                            return Err(ExpansionError::InvalidSyntax(
+                                                "inductive ctor".to_string(),
+                                                "Expected (Name Type)".to_string(),
+                                            )
+                                            .into());
+                                        }
                                     } else if citems.len() == 3 {
                                         // (Name : Type)
                                         if let SyntaxKind::Symbol(s) = &citems[1].kind {
                                             if s == ":" {
                                                 if let SyntaxKind::Symbol(cname) = &citems[0].kind {
-                                                    let cty = self.expander.expand(citems[2].clone())?.ok_or(ExpansionError::TransformationError("Constructor type expanded to empty".to_string()))?;
+                                                    let cty = self
+                                                        .desugarer
+                                                        .desugar(citems[2].clone())?;
                                                     ctors.push((cname.clone(), cty));
-                                                } else { return Err(ExpansionError::InvalidSyntax("inductive ctor".to_string(), "Expected (Name : Type)".to_string()).into()); }
+                                                } else {
+                                                    return Err(ExpansionError::InvalidSyntax(
+                                                        "inductive ctor".to_string(),
+                                                        "Expected (Name : Type)".to_string(),
+                                                    )
+                                                    .into());
+                                                }
                                             } else {
-                                                 if let SyntaxKind::Symbol(cname) = &citems[1].kind {
-                                                    let cty = self.expander.expand(citems[2].clone())?.ok_or(ExpansionError::TransformationError("Constructor type expanded to empty".to_string()))?;
-                                                    ctors.push((cname.clone(), cty));
-                                                } else { return Err(ExpansionError::InvalidSyntax("inductive ctor".to_string(), "Expected (Name : Type)".to_string()).into()); }
+                                                // (ctor Name Type)
+                                                if let SyntaxKind::Symbol(head) = &citems[0].kind {
+                                                    if head == "ctor" {
+                                                        if let SyntaxKind::Symbol(cname) =
+                                                            &citems[1].kind
+                                                        {
+                                                            let cty = self
+                                                                .desugarer
+                                                                .desugar(citems[2].clone())?;
+                                                            ctors.push((cname.clone(), cty));
+                                                        } else {
+                                                            return Err(
+                                                                ExpansionError::InvalidSyntax(
+                                                                    "inductive ctor".to_string(),
+                                                                    "Expected (ctor Name Type)"
+                                                                        .to_string(),
+                                                                )
+                                                                .into(),
+                                                            );
+                                                        }
+                                                    } else {
+                                                        return Err(ExpansionError::InvalidSyntax(
+                                                            "inductive ctor".to_string(),
+                                                            "Expected (Name : Type) or (ctor Name Type)"
+                                                                .to_string(),
+                                                        )
+                                                        .into());
+                                                    }
+                                                } else {
+                                                    return Err(ExpansionError::InvalidSyntax(
+                                                        "inductive ctor".to_string(),
+                                                        "Expected (Name : Type) or (ctor Name Type)"
+                                                            .to_string(),
+                                                    )
+                                                    .into());
+                                                }
                                             }
-                                        } else { return Err(ExpansionError::InvalidSyntax("inductive ctor".to_string(), "Expected (Name : Type)".to_string()).into()); }
-                                    } else { return Err(ExpansionError::InvalidSyntax("inductive ctor".to_string(), "Expected (Name Type) or (Name : Type)".to_string()).into()); }
-                                } else { return Err(ExpansionError::InvalidSyntax("inductive ctor".to_string(), "Expected list".to_string()).into()) }
+                                        } else {
+                                            return Err(ExpansionError::InvalidSyntax(
+                                                "inductive ctor".to_string(),
+                                                "Expected (Name : Type) or (ctor Name Type)"
+                                                    .to_string(),
+                                            )
+                                            .into());
+                                        }
+                                    } else {
+                                        return Err(ExpansionError::InvalidSyntax(
+                                            "inductive ctor".to_string(),
+                                            "Expected (Name Type) or (Name : Type) or (ctor Name Type)"
+                                                .to_string(),
+                                        )
+                                        .into());
+                                    }
+                                } else {
+                                    return Err(ExpansionError::InvalidSyntax(
+                                        "inductive ctor".to_string(),
+                                        "Expected list".to_string(),
+                                    )
+                                    .into());
+                                }
                             }
-                            Ok(Some(Declaration::Inductive { name, ty, ctors, is_copy }))
-                        }
-                        "defmacro" => {
-                             if items.len() != 4 { return Err(ExpansionError::ArgumentCountMismatch("defmacro".to_string(), 3, items.len() - 1).into()); }
-                             let name = if let SyntaxKind::Symbol(n) = &items[1].kind { n.clone() } else { return Err(ExpansionError::InvalidSyntax("defmacro".to_string(), "Name must be a symbol".to_string()).into()) };
-                             
-                             let mut args = Vec::new();
-                             if let SyntaxKind::List(arg_list) = &items[2].kind {
-                                 for arg in arg_list {
-                                     if let SyntaxKind::Symbol(a) = &arg.kind {
-                                         args.push(a.clone());
-                                     } else { return Err(ExpansionError::InvalidSyntax("defmacro".to_string(), "Args must be symbols".to_string()).into()); }
-                                 }
-                             } else { return Err(ExpansionError::InvalidSyntax("defmacro".to_string(), "Arg list expected".to_string()).into()); }
-                             
-                             let body = items[3].clone();
-                             self.expander.add_macro(name.clone(), args.clone(), body.clone());
-                             Ok(Some(Declaration::DefMacro { name, args, body }))
+                            Ok(Some(Declaration::Inductive {
+                                name,
+                                ty,
+                                ctors,
+                                is_copy,
+                                attrs,
+                            }))
                         }
                         _ => {
-                             let expansion = self.expander.expand(syntax.clone())?;
-                             if let Some(term) = expansion {
-                                 Ok(Some(Declaration::Expr(term)))
-                             } else {
-                                 Ok(None)
-                             }
+                            let term = self.desugarer.desugar(syntax.clone())?;
+                            Ok(Some(Declaration::Expr(term)))
                         }
                     }
                 } else {
-                     let expansion = self.expander.expand(syntax.clone())?;
-                     if let Some(term) = expansion {
-                         Ok(Some(Declaration::Expr(term)))
-                     } else {
-                         Ok(None)
-                     }
+                    let term = self.desugarer.desugar(syntax.clone())?;
+                    Ok(Some(Declaration::Expr(term)))
                 }
-            },
-             _ => {
-                 let expansion = self.expander.expand(syntax.clone())?;
-                 if let Some(term) = expansion {
-                     Ok(Some(Declaration::Expr(term)))
-                 } else {
-                     Ok(None)
-                 }
+            }
+            _ => {
+                let term = self.desugarer.desugar(syntax.clone())?;
+                Ok(Some(Declaration::Expr(term)))
             }
         }
     }
@@ -216,6 +510,7 @@ impl<'a> DeclarationParser<'a> {
         items: &[Syntax],
         head: &str,
         totality: Totality,
+        noncomputable: bool,
     ) -> Result<Option<Declaration>, DeclarationParseError> {
         let (name_index, transparency) = match items.len() {
             4 => (1, Transparency::Reducible),
@@ -243,14 +538,23 @@ impl<'a> DeclarationParser<'a> {
                 }
             }
             _ => {
-                return Err(
-                    ExpansionError::ArgumentCountMismatch(head.to_string(), 3, items.len() - 1)
-                        .into(),
+                return Err(ExpansionError::ArgumentCountMismatch(
+                    head.to_string(),
+                    3,
+                    items.len() - 1,
                 )
+                .into())
             }
         };
 
-        self.parse_def_at(items, head, name_index, totality, transparency)
+        self.parse_def_at(
+            items,
+            head,
+            name_index,
+            totality,
+            transparency,
+            noncomputable,
+        )
     }
 
     fn parse_def_fixed_transparency(
@@ -259,14 +563,56 @@ impl<'a> DeclarationParser<'a> {
         head: &str,
         totality: Totality,
         transparency: Transparency,
+        noncomputable: bool,
     ) -> Result<Option<Declaration>, DeclarationParseError> {
         if items.len() != 4 {
+            return Err(ExpansionError::ArgumentCountMismatch(
+                head.to_string(),
+                3,
+                items.len() - 1,
+            )
+            .into());
+        }
+        self.parse_def_at(items, head, 1, totality, transparency, noncomputable)
+    }
+
+    fn parse_instance_at(
+        &mut self,
+        items: &[Syntax],
+        head: &str,
+        arg_start: usize,
+        is_unsafe: bool,
+    ) -> Result<Option<Declaration>, DeclarationParseError> {
+        let arg_count = items.len().saturating_sub(arg_start);
+        if arg_count < 2 {
             return Err(
-                ExpansionError::ArgumentCountMismatch(head.to_string(), 3, items.len() - 1)
-                    .into(),
+                ExpansionError::ArgumentCountMismatch(head.to_string(), 2, arg_count).into(),
             );
         }
-        self.parse_def_at(items, head, 1, totality, transparency)
+
+        let trait_name = match &items[arg_start].kind {
+            SyntaxKind::Symbol(name) => name.clone(),
+            _ => {
+                return Err(ExpansionError::InvalidSyntax(
+                    head.to_string(),
+                    "Trait name must be a symbol".to_string(),
+                )
+                .into())
+            }
+        };
+
+        let head_term = self.desugarer.desugar(items[arg_start + 1].clone())?;
+        let mut requirements = Vec::new();
+        for req in items.iter().skip(arg_start + 2) {
+            requirements.push(self.desugarer.desugar(req.clone())?);
+        }
+
+        Ok(Some(Declaration::Instance {
+            trait_name,
+            head: head_term,
+            requirements,
+            is_unsafe,
+        }))
     }
 
     fn parse_def_at(
@@ -276,28 +622,27 @@ impl<'a> DeclarationParser<'a> {
         name_index: usize,
         totality: Totality,
         transparency: Transparency,
+        noncomputable: bool,
     ) -> Result<Option<Declaration>, DeclarationParseError> {
         let name = if let SyntaxKind::Symbol(n) = &items[name_index].kind {
             n.clone()
         } else {
-            return Err(
-                ExpansionError::InvalidSyntax(head.to_string(), "Name must be a symbol".to_string())
-                    .into(),
-            );
+            return Err(ExpansionError::InvalidSyntax(
+                head.to_string(),
+                "Name must be a symbol".to_string(),
+            )
+            .into());
         };
 
-        let ty = self
-            .expander
-            .expand(items[name_index + 1].clone())?
-            .ok_or(ExpansionError::TransformationError(
-                "Type expanded to empty".to_string(),
-            ))?;
-        let val = self
-            .expander
-            .expand(items[name_index + 2].clone())?
-            .ok_or(ExpansionError::TransformationError(
-                "Value expanded to empty".to_string(),
-            ))?;
+        let ty = self.desugarer.desugar(items[name_index + 1].clone())?;
+        let val = self.desugarer.desugar(items[name_index + 2].clone())?;
+        if totality != Totality::Partial && val.contains_fix() {
+            return Err(ExpansionError::InvalidSyntax(
+                head.to_string(),
+                "fix is only allowed in partial definitions".to_string(),
+            )
+            .into());
+        }
 
         Ok(Some(Declaration::Def {
             name,
@@ -305,9 +650,10 @@ impl<'a> DeclarationParser<'a> {
             val,
             totality,
             transparency,
+            noncomputable,
         }))
     }
-    
+
     // Add context to error if possible?
     // No, I'll just print it for now.
     /*

@@ -1,0 +1,99 @@
+---
+source: cli/tests/golden_suite.rs
+expression: output
+---
+DefEqConfig
+  fuel: 100000
+  source: default
+  transparency: Reducible
+
+ElaboratedDef open
+  ty: Const("Dyn", [])
+  val: Const("dyn_code", [])
+
+ElaboratedDef secret
+  ty: Const("Dyn", [])
+  val: Const("dyn_code", [])
+
+ElaboratedDef uses_eval
+  ty: Const("Dyn", [])
+  val: App(App(Const("eval", []), Const("dyn_code", [])), Const("dyn_cap", []))
+
+MirBody open
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: GlobalDef("dyn_code"), ty: Opaque("const Dyn") })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Opaque("const Dyn"), name: Some("_0"), is_prop: true, is_copy: false }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(False, 6713900616313185601): AdtLayout { adt: AdtId(False, 6713900616313185601), variants: [] }} } }
+
+MirBody secret
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: GlobalDef("dyn_code"), ty: Opaque("const Dyn") })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Opaque("const Dyn"), name: Some("_0"), is_prop: true, is_copy: false }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(False, 6713900616313185601): AdtLayout { adt: AdtId(False, 6713900616313185601), variants: [] }} } }
+
+MirBody uses_eval
+  Body { basic_blocks: [BasicBlockData { statements: [StorageLive(Local(1)), Assign(Place { local: Local(1), projection: [] }, Use(Constant(Constant { literal: GlobalDef("eval"), ty: FnItem(DefId(5199059977391489948), [], [Opaque("const Dyn")], Fn([], [Opaque("const EvalCap")], Opaque("const Dyn"))) })))], terminator: Some(Goto { target: BasicBlock(2) }) }, BasicBlockData { statements: [StorageDead(Local(4)), StorageDead(Local(3)), StorageDead(Local(2)), StorageDead(Local(1))], terminator: Some(Return) }, BasicBlockData { statements: [StorageLive(Local(2)), Assign(Place { local: Local(2), projection: [] }, Use(Constant(Constant { literal: GlobalDef("dyn_code"), ty: Opaque("const Dyn") })))], terminator: Some(Goto { target: BasicBlock(3) }) }, BasicBlockData { statements: [StorageLive(Local(3))], terminator: Some(Call { func: Borrow(Shared, Place { local: Local(1), projection: [] }), args: [Move(Place { local: Local(2), projection: [] })], destination: Place { local: Local(3), projection: [] }, target: Some(BasicBlock(4)) }) }, BasicBlockData { statements: [StorageDead(Local(2)), StorageDead(Local(1)), StorageLive(Local(4)), Assign(Place { local: Local(4), projection: [] }, Use(Constant(Constant { literal: GlobalDef("dyn_cap"), ty: Opaque("const EvalCap") })))], terminator: Some(Goto { target: BasicBlock(5) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Borrow(Shared, Place { local: Local(3), projection: [] }), args: [Move(Place { local: Local(4), projection: [] })], destination: Place { local: Local(0), projection: [] }, target: Some(BasicBlock(6)) }) }, BasicBlockData { statements: [StorageDead(Local(4)), StorageDead(Local(3))], terminator: Some(Goto { target: BasicBlock(1) }) }], local_decls: [LocalDecl { ty: Opaque("const Dyn"), name: Some("_0"), is_prop: true, is_copy: false }, LocalDecl { ty: FnItem(DefId(5199059977391489948), [], [Opaque("const Dyn")], Fn([], [Opaque("const EvalCap")], Opaque("const Dyn"))), name: None, is_prop: true, is_copy: true }, LocalDecl { ty: Opaque("const Dyn"), name: None, is_prop: true, is_copy: false }, LocalDecl { ty: Fn([], [Opaque("const EvalCap")], Opaque("const Dyn")), name: None, is_prop: false, is_copy: false }, LocalDecl { ty: Opaque("const EvalCap"), name: None, is_prop: true, is_copy: false }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(False, 6713900616313185601): AdtLayout { adt: AdtId(False, 6713900616313185601), variants: [] }} } }
+
+BorrowCheck open
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+BorrowCheck secret
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+BorrowCheck uses_eval
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+AxiomDependencies Dyn
+  axioms: ["Dyn"]
+  classical: []
+
+AxiomDependencies EvalCap
+  axioms: ["EvalCap"]
+  classical: []
+
+AxiomDependencies classical_choice
+  axioms: ["classical_choice"]
+  classical: ["classical_choice"]
+
+AxiomDependencies classical_em
+  axioms: ["classical_em"]
+  classical: ["classical_em"]
+
+AxiomDependencies dyn_cap
+  axioms: ["EvalCap", "dyn_cap"]
+  classical: []
+
+AxiomDependencies dyn_code
+  axioms: ["Dyn", "dyn_code"]
+  classical: []
+
+AxiomDependencies eval
+  axioms: ["Dyn", "EvalCap", "eval"]
+  classical: []
+
+AxiomDependencies open
+  axioms: ["Dyn", "dyn_code"]
+  classical: []
+
+AxiomDependencies secret
+  axioms: ["Dyn", "dyn_code"]
+  classical: []
+
+AxiomDependencies uses_eval
+  axioms: ["Dyn", "EvalCap", "dyn_cap", "dyn_code", "eval"]
+  classical: []

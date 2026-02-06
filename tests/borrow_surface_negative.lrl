@@ -1,0 +1,12 @@
+(noncomputable use_shared (pi r (Ref #[r] Shared Nat) Nat)
+  (lam r (Ref #[r] Shared Nat) zero))
+
+(noncomputable use_mut (pi r (Ref #[r] Mut Nat) Nat)
+  (lam r (Ref #[r] Mut Nat) zero))
+
+;; Negative: shared borrow lives across a mutable borrow of the same place.
+(noncomputable borrow_then_mutate (pi x Nat Nat)
+  (lam x Nat
+    (let r (Ref #[r] Shared Nat) (& x)
+      (let m (Ref #[r] Mut Nat) (&mut x)
+        (use_shared r)))))

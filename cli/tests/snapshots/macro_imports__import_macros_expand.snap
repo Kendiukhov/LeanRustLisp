@@ -1,0 +1,6 @@
+---
+source: cli/tests/macro_imports.rs
+assertion_line: 125
+expression: output
+---
+(cons foo nil)

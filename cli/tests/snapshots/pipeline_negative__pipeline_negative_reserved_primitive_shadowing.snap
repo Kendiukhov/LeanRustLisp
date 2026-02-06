@@ -1,0 +1,7 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Error: [K0008] Environment error defining 'borrow_mut': Reserved primitive name 'borrow_mut' can only be declared in the prelude as an axiom (index_* requires unsafe)

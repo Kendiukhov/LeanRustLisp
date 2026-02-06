@@ -1,0 +1,13 @@
+(inductive Tree (sort 1)
+  (ctor leaf (pi n Nat Tree))
+  (ctor node (pi left Nat (pi right Nat Tree)))
+)
+
+(def pick_right
+  (pi t Tree Nat)
+  (lam t Tree
+    (match t Nat
+      (case (leaf n) n)
+      (case (node l r) r))))
+
+(pick_right (node (succ zero) (succ (succ zero))))

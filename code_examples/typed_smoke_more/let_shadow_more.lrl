@@ -1,0 +1,6 @@
+(def let_shadow Nat
+  (let x Nat (succ zero)
+    (let x Nat (succ (succ zero))
+      x)))
+
+let_shadow

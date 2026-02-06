@@ -1,0 +1,13 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Warning: Axiom 'interior_mutable' declared (unsafe: interior_mutable)
+- Warning: Axiom 'may_panic_on_borrow_violation' declared (unsafe: may_panic_on_borrow_violation)
+- Warning: Axiom 'concurrency_primitive' declared (unsafe: concurrency_primitive)
+- Warning: Axiom 'atomic_primitive' declared (unsafe: atomic_primitive)
+- Warning: Axiom 'indexable' declared (unsafe: indexable)
+- Warning: Inductive 'RefCell' depends on axioms: may_panic_on_borrow_violation (unsafe: may_panic_on_borrow_violation)
+- Error: [C0005] Interior mutability is gated: definition 'uses_refcell' depends on RefCell/Mutex/Atomic, but runtime checks are not implemented. Rerun with --allow-axioms to opt in to runtime stubs or mark it unsafe.

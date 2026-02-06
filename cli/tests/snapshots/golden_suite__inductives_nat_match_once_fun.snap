@@ -1,0 +1,76 @@
+---
+source: cli/tests/golden_suite.rs
+expression: output
+---
+DefEqConfig
+  fuel: 100000
+  source: default
+  transparency: Reducible
+
+ElaboratedDef five
+  ty: Ind("Nat", [])
+  val: App(App(Const("repeat_succ", []), Const("three", [])), Const("two", []))
+
+ElaboratedDef repeat_succ
+  ty: Pi(Ind("Nat", []), Pi(Ind("Nat", []), Ind("Nat", []), Default, FnOnce), Default, FnOnce)
+  val: Lam(Ind("Nat", []), App(App(App(App(Rec("Nat", [Succ(Zero)]), Lam(Ind("Nat", []), Pi(Ind("Nat", []), Ind("Nat", []), Default, FnOnce), Default, Fn)), Lam(Ind("Nat", []), Var(0), Default, FnOnce)), Lam(Ind("Nat", []), Lam(Pi(Ind("Nat", []), Ind("Nat", []), Default, FnOnce), Lam(Ind("Nat", []), App(Const("succ", []), App(Var(1), Var(0))), Default, FnOnce), Default, FnOnce), Default, FnOnce)), Var(0)), Default, FnOnce)
+
+ElaboratedDef three
+  ty: Ind("Nat", [])
+  val: App(Const("succ", []), App(Const("succ", []), App(Const("succ", []), Const("zero", []))))
+
+ElaboratedDef two
+  ty: Ind("Nat", [])
+  val: App(Const("succ", []), App(Const("succ", []), Const("zero", [])))
+
+MirBody five
+  Body { basic_blocks: [BasicBlockData { statements: [StorageLive(Local(1)), Assign(Place { local: Local(1), projection: [] }, Use(Constant(Constant { literal: GlobalDef("repeat_succ"), ty: FnItemOnce(DefId(5622556281388932476), [], [Nat], FnOnce([], [Nat], Nat)) })))], terminator: Some(Goto { target: BasicBlock(2) }) }, BasicBlockData { statements: [StorageDead(Local(4)), StorageDead(Local(3)), StorageDead(Local(2)), StorageDead(Local(1))], terminator: Some(Return) }, BasicBlockData { statements: [StorageLive(Local(2)), Assign(Place { local: Local(2), projection: [] }, Use(Constant(Constant { literal: GlobalDef("three"), ty: Nat })))], terminator: Some(Goto { target: BasicBlock(3) }) }, BasicBlockData { statements: [StorageLive(Local(3))], terminator: Some(Call { func: Operand(Move(Place { local: Local(1), projection: [] })), args: [Copy(Place { local: Local(2), projection: [] })], destination: Place { local: Local(3), projection: [] }, target: Some(BasicBlock(4)) }) }, BasicBlockData { statements: [StorageDead(Local(2)), StorageDead(Local(1)), StorageLive(Local(4)), Assign(Place { local: Local(4), projection: [] }, Use(Constant(Constant { literal: GlobalDef("two"), ty: Nat })))], terminator: Some(Goto { target: BasicBlock(5) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Operand(Move(Place { local: Local(3), projection: [] })), args: [Copy(Place { local: Local(4), projection: [] })], destination: Place { local: Local(0), projection: [] }, target: Some(BasicBlock(6)) }) }, BasicBlockData { statements: [StorageDead(Local(4)), StorageDead(Local(3))], terminator: Some(Goto { target: BasicBlock(1) }) }], local_decls: [LocalDecl { ty: Nat, name: Some("_0"), is_prop: false, is_copy: true }, LocalDecl { ty: FnItemOnce(DefId(5622556281388932476), [], [Nat], FnOnce([], [Nat], Nat)), name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Nat, name: None, is_prop: false, is_copy: true }, LocalDecl { ty: FnOnce([], [Nat], Nat), name: None, is_prop: false, is_copy: false }, LocalDecl { ty: Nat, name: None, is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }} } }
+
+MirBody repeat_succ
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(5, []), ty: ClosureOnce(Region(1), [], [Nat], FnOnce([], [Nat], Nat)) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: FnOnce([], [Nat], FnOnce([], [Nat], Nat)), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }} } }
+
+MirBody three
+  Body { basic_blocks: [BasicBlockData { statements: [StorageLive(Local(1)), Assign(Place { local: Local(1), projection: [] }, Use(Constant(Constant { literal: GlobalDef("succ"), ty: FnItem(DefId(13100098116540539280), [], [Nat], Nat) })))], terminator: Some(Goto { target: BasicBlock(2) }) }, BasicBlockData { statements: [StorageDead(Local(6)), StorageDead(Local(5)), StorageDead(Local(4)), StorageDead(Local(3)), StorageDead(Local(2)), StorageDead(Local(1))], terminator: Some(Return) }, BasicBlockData { statements: [StorageLive(Local(2)), StorageLive(Local(3)), Assign(Place { local: Local(3), projection: [] }, Use(Constant(Constant { literal: GlobalDef("succ"), ty: FnItem(DefId(13100098116540539280), [], [Nat], Nat) })))], terminator: Some(Goto { target: BasicBlock(4) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Borrow(Shared, Place { local: Local(1), projection: [] }), args: [Copy(Place { local: Local(2), projection: [] })], destination: Place { local: Local(0), projection: [] }, target: Some(BasicBlock(10)) }) }, BasicBlockData { statements: [StorageLive(Local(4)), StorageLive(Local(5)), Assign(Place { local: Local(5), projection: [] }, Use(Constant(Constant { literal: GlobalDef("succ"), ty: FnItem(DefId(13100098116540539280), [], [Nat], Nat) })))], terminator: Some(Goto { target: BasicBlock(6) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Borrow(Shared, Place { local: Local(3), projection: [] }), args: [Copy(Place { local: Local(4), projection: [] })], destination: Place { local: Local(2), projection: [] }, target: Some(BasicBlock(9)) }) }, BasicBlockData { statements: [StorageLive(Local(6)), Assign(Place { local: Local(6), projection: [] }, Use(Constant(Constant { literal: GlobalDef("zero"), ty: Nat })))], terminator: Some(Goto { target: BasicBlock(7) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Borrow(Shared, Place { local: Local(5), projection: [] }), args: [Copy(Place { local: Local(6), projection: [] })], destination: Place { local: Local(4), projection: [] }, target: Some(BasicBlock(8)) }) }, BasicBlockData { statements: [StorageDead(Local(6)), StorageDead(Local(5))], terminator: Some(Goto { target: BasicBlock(5) }) }, BasicBlockData { statements: [StorageDead(Local(4)), StorageDead(Local(3))], terminator: Some(Goto { target: BasicBlock(3) }) }, BasicBlockData { statements: [StorageDead(Local(2)), StorageDead(Local(1))], terminator: Some(Goto { target: BasicBlock(1) }) }], local_decls: [LocalDecl { ty: Nat, name: Some("_0"), is_prop: false, is_copy: true }, LocalDecl { ty: FnItem(DefId(13100098116540539280), [], [Nat], Nat), name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Nat, name: None, is_prop: false, is_copy: true }, LocalDecl { ty: FnItem(DefId(13100098116540539280), [], [Nat], Nat), name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Nat, name: None, is_prop: false, is_copy: true }, LocalDecl { ty: FnItem(DefId(13100098116540539280), [], [Nat], Nat), name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Nat, name: None, is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }} } }
+
+MirBody two
+  Body { basic_blocks: [BasicBlockData { statements: [StorageLive(Local(1)), Assign(Place { local: Local(1), projection: [] }, Use(Constant(Constant { literal: GlobalDef("succ"), ty: FnItem(DefId(13100098116540539280), [], [Nat], Nat) })))], terminator: Some(Goto { target: BasicBlock(2) }) }, BasicBlockData { statements: [StorageDead(Local(4)), StorageDead(Local(3)), StorageDead(Local(2)), StorageDead(Local(1))], terminator: Some(Return) }, BasicBlockData { statements: [StorageLive(Local(2)), StorageLive(Local(3)), Assign(Place { local: Local(3), projection: [] }, Use(Constant(Constant { literal: GlobalDef("succ"), ty: FnItem(DefId(13100098116540539280), [], [Nat], Nat) })))], terminator: Some(Goto { target: BasicBlock(4) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Borrow(Shared, Place { local: Local(1), projection: [] }), args: [Copy(Place { local: Local(2), projection: [] })], destination: Place { local: Local(0), projection: [] }, target: Some(BasicBlock(7)) }) }, BasicBlockData { statements: [StorageLive(Local(4)), Assign(Place { local: Local(4), projection: [] }, Use(Constant(Constant { literal: GlobalDef("zero"), ty: Nat })))], terminator: Some(Goto { target: BasicBlock(5) }) }, BasicBlockData { statements: [], terminator: Some(Call { func: Borrow(Shared, Place { local: Local(3), projection: [] }), args: [Copy(Place { local: Local(4), projection: [] })], destination: Place { local: Local(2), projection: [] }, target: Some(BasicBlock(6)) }) }, BasicBlockData { statements: [StorageDead(Local(4)), StorageDead(Local(3))], terminator: Some(Goto { target: BasicBlock(3) }) }, BasicBlockData { statements: [StorageDead(Local(2)), StorageDead(Local(1))], terminator: Some(Goto { target: BasicBlock(1) }) }], local_decls: [LocalDecl { ty: Nat, name: Some("_0"), is_prop: false, is_copy: true }, LocalDecl { ty: FnItem(DefId(13100098116540539280), [], [Nat], Nat), name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Nat, name: None, is_prop: false, is_copy: true }, LocalDecl { ty: FnItem(DefId(13100098116540539280), [], [Nat], Nat), name: None, is_prop: false, is_copy: true }, LocalDecl { ty: Nat, name: None, is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Nat, 9339613782935747081): AdtLayout { adt: AdtId(Nat, 9339613782935747081), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 0 }, fields: [] }, VariantLayout { ctor: CtorId { adt: AdtId(Nat, 9339613782935747081), index: 1 }, fields: [Nat] }] }} } }
+
+BorrowCheck five
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+BorrowCheck repeat_succ
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+BorrowCheck three
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+BorrowCheck two
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)

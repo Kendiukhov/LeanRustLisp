@@ -21,6 +21,7 @@ impl fmt::Display for Level {
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
     pub level: Level,
+    pub code: Option<&'static str>,
     pub message: String,
     pub span: Option<Span>,
     pub labels: Vec<(Span, String)>,
@@ -30,6 +31,7 @@ impl Diagnostic {
     pub fn new(level: Level, message: String) -> Self {
         Self {
             level,
+            code: None,
             message,
             span: None,
             labels: Vec::new(),
@@ -44,6 +46,11 @@ impl Diagnostic {
         Self::new(Level::Warning, message)
     }
 
+    pub fn with_code(mut self, code: &'static str) -> Self {
+        self.code = Some(code);
+        self
+    }
+
     pub fn with_span(mut self, span: Span) -> Self {
         self.span = Some(span);
         self
@@ -52,6 +59,13 @@ impl Diagnostic {
     pub fn with_label(mut self, span: Span, message: String) -> Self {
         self.labels.push((span, message));
         self
+    }
+
+    pub fn message_with_code(&self) -> String {
+        match self.code {
+            Some(code) => format!("[{}] {}", code, self.message),
+            None => self.message.clone(),
+        }
     }
 }
 
@@ -66,9 +80,11 @@ pub struct DiagnosticCollector {
 
 impl DiagnosticCollector {
     pub fn new() -> Self {
-        Self { diagnostics: Vec::new() }
+        Self {
+            diagnostics: Vec::new(),
+        }
     }
-    
+
     pub fn has_errors(&self) -> bool {
         self.diagnostics.iter().any(|d| d.level == Level::Error)
     }

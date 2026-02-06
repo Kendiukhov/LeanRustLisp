@@ -5,4 +5,4 @@ expression: output
 Status: Err
 DriverError: ParseValidations(["UnexpectedEof(Span { start: 9, end: 9, line: 1, col: 9 })"])
 Diagnostics:
-- Error: Parse error: UnexpectedEof(Span { start: 9, end: 9, line: 1, col: 9 })
+- Error: [F0001] Parse error: UnexpectedEof(Span { start: 9, end: 9, line: 1, col: 9 })

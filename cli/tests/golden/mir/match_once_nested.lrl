@@ -1,0 +1,24 @@
+(inductive copy Nat Type
+  (zero Nat)
+  (succ (pi n Nat Nat)))
+
+(inductive copy Bool Type
+  (true Bool)
+  (false Bool))
+
+(def if_once (pi #[once] b Bool (pi #[once] t Nat (pi #[once] f Nat Nat)))
+  (lam #[once] b Bool
+    (match b (pi #[once] t Nat (pi #[once] f Nat Nat))
+      (case (true) (lam #[once] t Nat (lam #[once] f Nat t)))
+      (case (false) (lam #[once] t Nat (lam #[once] f Nat f)))
+    )
+  )
+)
+
+(def choose_nat (pi #[once] b Bool (pi #[once] n Nat Nat))
+  (lam #[once] b Bool
+    (lam #[once] n Nat
+      (((if_once b) n) zero)
+    )
+  )
+)

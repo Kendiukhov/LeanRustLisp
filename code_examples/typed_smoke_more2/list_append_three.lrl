@@ -1,0 +1,9 @@
+(def append_three (pi a ListRc (pi b ListRc (pi c ListRc ListRc)))
+  (lam a ListRc
+    (lam b ListRc
+      (lam c ListRc
+        (append (append a b) c)))))
+
+(append_three (cons zero nil)
+              (cons (succ zero) nil)
+              (cons (succ (succ zero)) nil))

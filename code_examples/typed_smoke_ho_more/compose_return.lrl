@@ -1,0 +1,19 @@
+(def succ1 (pi n Nat Nat)
+  (lam n Nat (succ n)))
+
+(def double (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) zero)
+      (case (succ m ih) (succ (succ ih))))))
+
+(def make_compose
+  (pi #[fn] f (pi #[fn] x Nat Nat)
+    (pi #[fn] g (pi #[fn] x Nat Nat)
+      (pi #[fn] x Nat Nat)))
+  (lam #[fn] f (pi #[fn] x Nat Nat)
+    (lam #[fn] g (pi #[fn] x Nat Nat)
+      (lam #[fn] x Nat
+        (f (g x))))))
+
+((make_compose succ1 double) (succ zero))

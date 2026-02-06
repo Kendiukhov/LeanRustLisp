@@ -1,0 +1,12 @@
+(def succ1 (pi n Nat Nat)
+  (lam n Nat (succ n)))
+
+(def apply_let
+  (pi #[fn] f (pi #[fn] x Nat Nat)
+    (pi #[once] n Nat Nat))
+  (lam #[fn] f (pi #[fn] x Nat Nat)
+    (lam #[once] n Nat
+      (let g (pi #[fn] x Nat Nat) f
+        (g n)))))
+
+(apply_let succ1 (succ zero))

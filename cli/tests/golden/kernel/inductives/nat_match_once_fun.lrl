@@ -1,0 +1,17 @@
+(inductive copy Nat (sort 1)
+  (ctor zero Nat)
+  (ctor succ (pi n Nat Nat))
+)
+
+(def repeat_succ (pi #[once] n Nat (pi #[once] m Nat Nat))
+  (lam #[once] n Nat
+    (match n (pi #[once] m Nat Nat)
+      (case (zero) (lam #[once] m Nat m))
+      (case (succ k ih) (lam #[once] m Nat (succ (ih m))))
+    )
+  )
+)
+
+(def two Nat (succ (succ zero)))
+(def three Nat (succ (succ (succ zero))))
+(def five Nat ((repeat_succ three) two))

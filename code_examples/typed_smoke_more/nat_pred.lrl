@@ -1,0 +1,8 @@
+(def pred
+  (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) zero)
+      (case (succ m ih) m))))
+
+(pred (succ (succ zero)))

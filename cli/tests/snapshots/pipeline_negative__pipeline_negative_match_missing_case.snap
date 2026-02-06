@@ -1,0 +1,7 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Error: [F0200] Elaboration error (Type) in 'bad': Unbound variable: Nat

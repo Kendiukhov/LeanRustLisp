@@ -1,0 +1,8 @@
+(def choose
+  (pi b Bool (pi #[fn] x Nat Nat))
+  (lam b Bool
+    (match b (pi #[fn] x Nat Nat)
+      (case (true) (lam #[fn] x Nat (succ x)))
+      (case (false) (lam #[fn] x Nat x)))))
+
+((choose false) (succ zero))

@@ -1,0 +1,9 @@
+(def add
+  (pi n Nat (pi m Nat Nat))
+  (lam n Nat
+    (lam m Nat
+      (match m Nat
+        (case (zero) n)
+        (case (succ k ih) (succ ih))))))
+
+(add (succ (succ zero)) (succ zero))

@@ -11,7 +11,9 @@ fn build_def_chain(env: &mut Env, depth: usize) -> (Rc<Term>, Rc<Term>) {
     let mut current = Rc::new(Term::Const("base".to_string(), vec![]));
     for i in 0..depth {
         let name = format!("d{}", i);
-        env.add_definition(Definition::total(name.clone(), ty.clone(), current.clone()))
+        let mut def = Definition::total(name.clone(), ty.clone(), current.clone());
+        def.noncomputable = true;
+        env.add_definition(def)
             .expect("Failed to add chained definition");
         current = Rc::new(Term::Const(name, vec![]));
     }

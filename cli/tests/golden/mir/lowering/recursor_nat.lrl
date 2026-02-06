@@ -1,0 +1,15 @@
+(inductive copy Nat (sort 1)
+  (ctor zero Nat)
+  (ctor succ (pi n Nat Nat))
+)
+
+(def add (pi n Nat (pi m Nat Nat))
+  (lam n Nat
+    (lam m Nat
+      (match n Nat
+        (case (zero) m)
+        (case (succ k ih) (succ ih))
+      ))))
+
+(def two Nat (succ (succ zero)))
+(def four Nat (add two two))

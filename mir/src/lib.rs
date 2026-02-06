@@ -1,41 +1,49 @@
-use std::rc::Rc;
-use kernel::ast::Term; // Still needed for Literal::Term escape hatch if kept
+use std::fmt;
 
-pub mod types;
-pub mod lower;
 pub mod analysis;
 pub mod codegen;
-pub mod transform;
 pub mod errors;
 pub mod lints;
+pub mod lower;
 pub mod pretty;
+pub mod transform;
+pub mod typed_codegen;
+pub mod types;
 
 #[cfg(test)]
 mod snapshots;
 
-use crate::types::{MirType, Mutability};
+use crate::types::{AdtLayoutRegistry, CtorId, MirType, Mutability};
 
 // Id types for type safety
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BasicBlock(pub u32);
 
 impl BasicBlock {
-    pub fn index(&self) -> usize { self.0 as usize }
+    pub fn index(&self) -> usize {
+        self.0 as usize
+    }
 }
 
 impl From<usize> for BasicBlock {
-    fn from(idx: usize) -> Self { BasicBlock(idx as u32) }
+    fn from(idx: usize) -> Self {
+        BasicBlock(idx as u32)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Local(pub u32);
 
 impl Local {
-    pub fn index(&self) -> usize { self.0 as usize }
+    pub fn index(&self) -> usize {
+        self.0 as usize
+    }
 }
 
 impl From<usize> for Local {
-    fn from(idx: usize) -> Self { Local(idx as u32) }
+    fn from(idx: usize) -> Self {
+        Local(idx as u32)
+    }
 }
 
 // A function body in MIR
@@ -44,6 +52,7 @@ pub struct Body {
     pub basic_blocks: Vec<BasicBlockData>,
     pub local_decls: Vec<LocalDecl>,
     pub arg_count: usize,
+    pub adt_layouts: AdtLayoutRegistry,
 }
 
 impl Body {
@@ -52,25 +61,44 @@ impl Body {
             basic_blocks: Vec::new(),
             local_decls: Vec::new(),
             arg_count,
+            adt_layouts: AdtLayoutRegistry::default(),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LocalDecl {
     pub ty: MirType, // Use MirType instead of Term
     pub name: Option<String>,
     pub is_prop: bool, // Optimization: Pre-computed universe level check
     pub is_copy: bool, // Whether this type has Copy semantics
+    pub closure_captures: Vec<MirType>, // Types captured by a closure value in this local
 }
 
 impl LocalDecl {
     pub fn new(ty: MirType, name: Option<String>) -> Self {
         let is_copy = ty.is_copy();
-        LocalDecl { ty, name, is_prop: false, is_copy }
+        LocalDecl {
+            ty,
+            name,
+            is_prop: false,
+            is_copy,
+            closure_captures: Vec::new(),
+        }
     }
-    
+
     // Deprecated helpers if needed, or updated
+}
+
+impl fmt::Debug for LocalDecl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalDecl")
+            .field("ty", &self.ty)
+            .field("name", &self.name)
+            .field("is_prop", &self.is_prop)
+            .field("is_copy", &self.is_copy)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -81,16 +109,9 @@ pub struct BasicBlockData {
 
 #[derive(Debug, Clone)]
 pub enum RuntimeCheckKind {
-    RefCellBorrow {
-        local: Local,
-    },
-    MutexLock {
-        local: Local,
-    },
-    BoundsCheck {
-        local: Local,
-        index: Local,
-    },
+    RefCellBorrow { local: Local },
+    MutexLock { local: Local },
+    BoundsCheck { local: Local, index: Local },
 }
 
 #[derive(Debug, Clone)]
@@ -105,13 +126,15 @@ pub enum Statement {
 #[derive(Debug, Clone)]
 pub enum Terminator {
     Return,
-    Goto { target: BasicBlock },
+    Goto {
+        target: BasicBlock,
+    },
     SwitchInt {
         discr: Operand,
         targets: SwitchTargets,
     },
     Call {
-        func: Operand,
+        func: CallOperand,
         args: Vec<Operand>,
         destination: Place,
         target: Option<BasicBlock>,
@@ -137,11 +160,15 @@ pub enum PlaceElem {
     Deref,
     Field(usize),
     Downcast(usize), // Variant index
+    Index(Local),
 }
 
 impl From<Local> for Place {
     fn from(local: Local) -> Self {
-        Place { local, projection: Vec::new() }
+        Place {
+            local,
+            projection: Vec::new(),
+        }
     }
 }
 
@@ -176,6 +203,18 @@ pub enum Operand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CallOperand {
+    Operand(Operand),
+    Borrow(BorrowKind, Place),
+}
+
+impl From<Operand> for CallOperand {
+    fn from(operand: Operand) -> Self {
+        CallOperand::Operand(operand)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Constant {
     pub literal: Literal,
     pub ty: MirType, // Use MirType
@@ -183,12 +222,25 @@ pub struct Constant {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Literal {
-    Unit, // Unit value
+    Unit,     // Unit value
     Nat(u64), // For simplified constants
     Bool(bool),
-    // Raw Term literal (e.g. for non-primitive constants not yet lowered to Mir values)
-    Term(Rc<Term>),
+    /// Reference to a top-level definition by name.
+    GlobalDef(String),
+    /// Entry-point recursor function for an inductive.
+    Recursor(String),
+    /// Unsupported constant payload. Backends must reject this explicitly.
+    OpaqueConst(String),
     Closure(usize, Vec<Operand>), // Index into bodies, captured environment
-    Fix(usize, Vec<Operand>), // Recursive closure with self in env[0]
-    InductiveCtor(String, usize, usize), // Name, Index, Arity
+    Fix(usize, Vec<Operand>),     // Recursive closure with self in env[0]
+    InductiveCtor(CtorId, usize), // CtorId, Arity
+}
+
+impl Literal {
+    pub fn capture_operands(&self) -> Option<&[Operand]> {
+        match self {
+            Literal::Closure(_, captures) | Literal::Fix(_, captures) => Some(captures),
+            _ => None,
+        }
+    }
 }

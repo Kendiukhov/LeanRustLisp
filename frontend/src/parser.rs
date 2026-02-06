@@ -9,12 +9,29 @@ pub enum ParseError {
     UnexpectedEof(Span),
     #[error("Unexpected character: {0}")]
     UnexpectedChar(char, Span),
-     #[error("Unmatched parenthesis")]
+    #[error("Unmatched parenthesis")]
     UnmatchedParen(Span),
 }
 
+impl ParseError {
+    pub fn span(&self) -> Span {
+        match self {
+            ParseError::UnexpectedEof(span)
+            | ParseError::UnexpectedChar(_, span)
+            | ParseError::UnmatchedParen(span) => *span,
+        }
+    }
+
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            ParseError::UnexpectedEof(_) => "F0001",
+            ParseError::UnexpectedChar(_, _) => "F0002",
+            ParseError::UnmatchedParen(_) => "F0003",
+        }
+    }
+}
+
 struct Lexer<'a> {
-    input: &'a str,
     chars: Peekable<Chars<'a>>,
     pos: usize,
     line: usize,
@@ -24,7 +41,6 @@ struct Lexer<'a> {
 impl<'a> Lexer<'a> {
     fn new(input: &'a str) -> Self {
         Lexer {
-            input,
             chars: input.chars().peekable(),
             pos: 0,
             line: 1,
@@ -56,7 +72,7 @@ impl<'a> Lexer<'a> {
             col: self.col,
         }
     }
-    
+
     // Simplistic skipping with comments
     fn skip_whitespace(&mut self) {
         while let Some(c) = self.peek() {
@@ -66,7 +82,7 @@ impl<'a> Lexer<'a> {
                 // Comment: skip until newline
                 while let Some(nc) = self.peek() {
                     if nc == '\n' {
-                         break; 
+                        break;
                     }
                     self.next();
                 }
@@ -99,10 +115,84 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> Result<Syntax, ParseError> {
+        let mut expr = self.parse_primary()?;
+
+        loop {
+            self.lexer.skip_whitespace();
+            if self.lexer.peek() != Some('[') {
+                break;
+            }
+
+            let start_span = expr.span;
+            self.lexer.next(); // eat '['
+            self.lexer.skip_whitespace();
+            let index_expr = self.parse_expr()?;
+            self.lexer.skip_whitespace();
+            match self.lexer.peek() {
+                Some(']') => {
+                    self.lexer.next(); // eat ']'
+                }
+                Some(c) => {
+                    return Err(ParseError::UnexpectedChar(c, self.lexer.current_span()));
+                }
+                None => return Err(ParseError::UnexpectedEof(self.lexer.current_span())),
+            }
+            let end_span = self.lexer.current_span();
+            expr = Syntax {
+                kind: SyntaxKind::Index(Box::new(expr), Box::new(index_expr)),
+                span: Span {
+                    start: start_span.start,
+                    end: end_span.end,
+                    line: start_span.line,
+                    col: start_span.col,
+                },
+                scopes: Vec::new(),
+            };
+        }
+
+        Ok(expr)
+    }
+
+    fn parse_primary(&mut self) -> Result<Syntax, ParseError> {
         self.lexer.skip_whitespace();
         let start_span = self.lexer.current_span();
-        
+
         match self.lexer.peek() {
+            Some(')') => Err(ParseError::UnmatchedParen(start_span)),
+            Some('"') => {
+                self.lexer.next(); // eat opening quote
+                let mut s = String::new();
+                loop {
+                    match self.lexer.next() {
+                        Some('"') => break,
+                        Some('\\') => match self.lexer.next() {
+                            Some('n') => s.push('\n'),
+                            Some('r') => s.push('\r'),
+                            Some('t') => s.push('\t'),
+                            Some('"') => s.push('"'),
+                            Some('\\') => s.push('\\'),
+                            Some(other) => {
+                                s.push('\\');
+                                s.push(other);
+                            }
+                            None => return Err(ParseError::UnexpectedEof(start_span)),
+                        },
+                        Some(c) => s.push(c),
+                        None => return Err(ParseError::UnexpectedEof(start_span)),
+                    }
+                }
+                let end_span = self.lexer.current_span();
+                Ok(Syntax {
+                    kind: SyntaxKind::String(s),
+                    span: Span {
+                        start: start_span.start,
+                        end: end_span.end,
+                        line: start_span.line,
+                        col: start_span.col,
+                    },
+                    scopes: Vec::new(),
+                })
+            }
             Some('(') => {
                 self.lexer.next(); // eat '('
                 let mut list = Vec::new();
@@ -110,13 +200,18 @@ impl<'a> Parser<'a> {
                     self.lexer.skip_whitespace();
                     match self.lexer.peek() {
                         Some(')') => {
-                             self.lexer.next(); // eat ')'
-                             let end_span = self.lexer.current_span();
-                             return Ok(Syntax {
-                                 kind: SyntaxKind::List(list),
-                                 span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
-                                 scopes: Vec::new(),
-                             });
+                            self.lexer.next(); // eat ')'
+                            let end_span = self.lexer.current_span();
+                            return Ok(Syntax {
+                                kind: SyntaxKind::List(list),
+                                span: Span {
+                                    start: start_span.start,
+                                    end: end_span.end,
+                                    line: start_span.line,
+                                    col: start_span.col,
+                                },
+                                scopes: Vec::new(),
+                            });
                         }
                         None => return Err(ParseError::UnexpectedEof(self.lexer.current_span())),
                         _ => {
@@ -132,13 +227,18 @@ impl<'a> Parser<'a> {
                     self.lexer.skip_whitespace();
                     match self.lexer.peek() {
                         Some('}') => {
-                             self.lexer.next(); // eat '}'
-                             let end_span = self.lexer.current_span();
-                             return Ok(Syntax {
-                                 kind: SyntaxKind::BracedList(list),
-                                 span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
-                                 scopes: Vec::new(),
-                             });
+                            self.lexer.next(); // eat '}'
+                            let end_span = self.lexer.current_span();
+                            return Ok(Syntax {
+                                kind: SyntaxKind::BracedList(list),
+                                span: Span {
+                                    start: start_span.start,
+                                    end: end_span.end,
+                                    line: start_span.line,
+                                    col: start_span.col,
+                                },
+                                scopes: Vec::new(),
+                            });
                         }
                         None => return Err(ParseError::UnexpectedEof(self.lexer.current_span())),
                         _ => {
@@ -153,10 +253,19 @@ impl<'a> Parser<'a> {
                 let end_span = inner.span;
                 Ok(Syntax {
                     kind: SyntaxKind::List(vec![
-                        Syntax { kind: SyntaxKind::Symbol("quote".to_string()), span: start_span, scopes: vec![] },
-                        inner
+                        Syntax {
+                            kind: SyntaxKind::Symbol("quote".to_string()),
+                            span: start_span,
+                            scopes: vec![],
+                        },
+                        inner,
                     ]),
-                    span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                    span: Span {
+                        start: start_span.start,
+                        end: end_span.end,
+                        line: start_span.line,
+                        col: start_span.col,
+                    },
                     scopes: Vec::new(),
                 })
             }
@@ -166,10 +275,19 @@ impl<'a> Parser<'a> {
                 let end_span = inner.span;
                 Ok(Syntax {
                     kind: SyntaxKind::List(vec![
-                        Syntax { kind: SyntaxKind::Symbol("quasiquote".to_string()), span: start_span, scopes: vec![] },
-                        inner
+                        Syntax {
+                            kind: SyntaxKind::Symbol("quasiquote".to_string()),
+                            span: start_span,
+                            scopes: vec![],
+                        },
+                        inner,
                     ]),
-                    span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                    span: Span {
+                        start: start_span.start,
+                        end: end_span.end,
+                        line: start_span.line,
+                        col: start_span.col,
+                    },
                     scopes: Vec::new(),
                 })
             }
@@ -181,10 +299,19 @@ impl<'a> Parser<'a> {
                     let end_span = inner.span;
                     Ok(Syntax {
                         kind: SyntaxKind::List(vec![
-                            Syntax { kind: SyntaxKind::Symbol("unquote-splicing".to_string()), span: start_span, scopes: vec![] },
-                            inner
+                            Syntax {
+                                kind: SyntaxKind::Symbol("unquote-splicing".to_string()),
+                                span: start_span,
+                                scopes: vec![],
+                            },
+                            inner,
                         ]),
-                        span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                        span: Span {
+                            start: start_span.start,
+                            end: end_span.end,
+                            line: start_span.line,
+                            col: start_span.col,
+                        },
                         scopes: Vec::new(),
                     })
                 } else {
@@ -192,10 +319,19 @@ impl<'a> Parser<'a> {
                     let end_span = inner.span;
                     Ok(Syntax {
                         kind: SyntaxKind::List(vec![
-                            Syntax { kind: SyntaxKind::Symbol("unquote".to_string()), span: start_span, scopes: vec![] },
-                            inner
+                            Syntax {
+                                kind: SyntaxKind::Symbol("unquote".to_string()),
+                                span: start_span,
+                                scopes: vec![],
+                            },
+                            inner,
                         ]),
-                        span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                        span: Span {
+                            start: start_span.start,
+                            end: end_span.end,
+                            line: start_span.line,
+                            col: start_span.col,
+                        },
                         scopes: Vec::new(),
                     })
                 }
@@ -212,14 +348,26 @@ impl<'a> Parser<'a> {
                 let end_span = self.lexer.current_span();
                 Ok(Syntax {
                     kind: SyntaxKind::Int(s.parse().unwrap()),
-                    span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                    span: Span {
+                        start: start_span.start,
+                        end: end_span.end,
+                        line: start_span.line,
+                        col: start_span.col,
+                    },
                     scopes: Vec::new(),
                 })
             }
             Some(_) => {
                 let mut s = String::new();
                 while let Some(c) = self.lexer.peek() {
-                    if !c.is_whitespace() && c != '(' && c != ')' && c != '{' && c != '}' {
+                    if !c.is_whitespace()
+                        && c != '('
+                        && c != ')'
+                        && c != '{'
+                        && c != '}'
+                        && c != '['
+                        && c != ']'
+                    {
                         s.push(self.lexer.next().unwrap());
                     } else {
                         break;
@@ -227,18 +375,31 @@ impl<'a> Parser<'a> {
                 }
                 let end_span = self.lexer.current_span();
                 if s.is_empty() {
-                     return Err(ParseError::UnexpectedChar(self.lexer.peek().unwrap_or('\0'), start_span));
+                    return Err(ParseError::UnexpectedChar(
+                        self.lexer.peek().unwrap_or('\0'),
+                        start_span,
+                    ));
                 }
                 if s == "_" {
                     Ok(Syntax {
                         kind: SyntaxKind::Hole,
-                        span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                        span: Span {
+                            start: start_span.start,
+                            end: end_span.end,
+                            line: start_span.line,
+                            col: start_span.col,
+                        },
                         scopes: Vec::new(),
                     })
                 } else {
                     Ok(Syntax {
                         kind: SyntaxKind::Symbol(s),
-                        span: Span { start: start_span.start, end: end_span.end, line: start_span.line, col: start_span.col },
+                        span: Span {
+                            start: start_span.start,
+                            end: end_span.end,
+                            line: start_span.line,
+                            col: start_span.col,
+                        },
                         scopes: Vec::new(),
                     })
                 }

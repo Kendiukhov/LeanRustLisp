@@ -1,0 +1,7 @@
+(def is_zero (pi n Nat Bool)
+  (lam n Nat
+    (match n Bool
+      (case (zero) true)
+      (case (succ x) false))))
+
+(is_zero (succ zero))

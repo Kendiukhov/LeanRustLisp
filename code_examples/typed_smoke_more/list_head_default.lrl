@@ -1,0 +1,9 @@
+(def head_or
+  (pi l ListRc (pi default Nat Nat))
+  (lam l ListRc
+    (lam default Nat
+      (match l Nat
+        (case (nil) default)
+        (case (cons h t ih) h)))))
+
+(head_or (cons (succ zero) nil) zero)

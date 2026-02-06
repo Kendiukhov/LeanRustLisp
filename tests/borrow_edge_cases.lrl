@@ -1,0 +1,32 @@
+(noncomputable use_shared (pi r (Ref #[r] Shared Nat) Nat)
+  (lam r (Ref #[r] Shared Nat) zero))
+
+(noncomputable use_mut (pi r (Ref #[r] Mut Nat) Nat)
+  (lam r (Ref #[r] Mut Nat) zero))
+
+;; Edge-case: branch-local borrows should not conflict across match joins.
+(noncomputable branch_borrow_ok (pi x Nat (pi n Nat Nat))
+  (lam x Nat
+    (lam n Nat
+      (match n Nat
+        (case (zero)
+          (let r (Ref #[r] Shared Nat) (& x)
+            (use_shared r)))
+        (case (succ k)
+          (let m (Ref #[r] Mut Nat) (&mut x)
+            (use_mut m)))))))
+
+;; Edge-case: nested match keeps borrows local to inner branch.
+(noncomputable nested_branch_borrow_ok (pi x Nat (pi n Nat Nat))
+  (lam x Nat
+    (lam n Nat
+      (match n Nat
+        (case (zero)
+          (match n Nat
+            (case (zero)
+              (let r (Ref #[r] Shared Nat) (& x)
+                (use_shared r)))
+            (case (succ k) x)))
+        (case (succ k)
+          (let m (Ref #[r] Mut Nat) (&mut x)
+            (use_mut m)))))))

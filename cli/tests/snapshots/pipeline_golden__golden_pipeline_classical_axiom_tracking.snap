@@ -8,6 +8,45 @@ Diagnostics:
 - Warning: Definition 'uses_classical' depends on axioms: classical_choice (classical: classical_choice)
 - Warning: Definition 'uses_postulate' depends on axioms: postulate
 
+DefEqConfig
+  fuel: 100000
+  source: default
+  transparency: Reducible
+
+ElaboratedDef uses_classical
+  ty: Sort(Zero)
+  val: Const("classical_choice", [])
+
+ElaboratedDef uses_postulate
+  ty: Sort(Zero)
+  val: Const("postulate", [])
+
+MirBody uses_classical
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: GlobalDef("classical_choice"), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Unit, name: Some("_0"), is_prop: true, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {} } }
+
+MirBody uses_postulate
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: GlobalDef("postulate"), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Unit, name: Some("_0"), is_prop: true, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {} } }
+
+BorrowCheck uses_classical
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
+BorrowCheck uses_postulate
+  ok
+  evidence:
+    regions:
+      (none)
+    loans:
+      (none)
+    runtime_checks:
+      (none)
+
 AxiomDependencies classical_choice
   axioms: ["classical_choice"]
   classical: ["classical_choice"]
@@ -16,30 +55,10 @@ AxiomDependencies postulate
   axioms: ["postulate"]
   classical: []
 
-ElaboratedDef uses_classical
-  ty: Sort(Zero)
-  val: Const("classical_choice", [])
-
 AxiomDependencies uses_classical
   axioms: ["classical_choice"]
   classical: ["classical_choice"]
 
-MirBody uses_classical
-  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Term(Const("classical_choice", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Unit, name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0 }
-
-BorrowCheck uses_classical
-  ok
-
-ElaboratedDef uses_postulate
-  ty: Sort(Zero)
-  val: Const("postulate", [])
-
 AxiomDependencies uses_postulate
   axioms: ["postulate"]
   classical: []
-
-MirBody uses_postulate
-  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Term(Const("postulate", [])), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Unit, name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0 }
-
-BorrowCheck uses_postulate
-  ok

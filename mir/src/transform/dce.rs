@@ -5,8 +5,10 @@
 //! 2. Unused local variables
 //! 3. Storage statements for unused locals
 
-use crate::{Body, BasicBlock, Statement, Terminator, Operand, Rvalue, RuntimeCheckKind};
-use std::collections::{HashSet, HashMap};
+use crate::{
+    BasicBlock, Body, CallOperand, Operand, RuntimeCheckKind, Rvalue, Statement, Terminator,
+};
+use std::collections::{HashMap, HashSet};
 
 /// Remove unreachable basic blocks and unused locals from a MIR body.
 pub fn eliminate_dead_code(body: &mut Body) {
@@ -145,20 +147,18 @@ fn find_used_locals(body: &Body) -> HashSet<usize> {
                     // Collect uses from rvalue
                     collect_rvalue_uses(rvalue, &mut used);
                 }
-                Statement::RuntimeCheck(check) => {
-                    match check {
-                        RuntimeCheckKind::RefCellBorrow { local } => {
-                            used.insert(local.index());
-                        }
-                        RuntimeCheckKind::MutexLock { local } => {
-                            used.insert(local.index());
-                        }
-                        RuntimeCheckKind::BoundsCheck { local, index } => {
-                            used.insert(local.index());
-                            used.insert(index.index());
-                        }
+                Statement::RuntimeCheck(check) => match check {
+                    RuntimeCheckKind::RefCellBorrow { local } => {
+                        used.insert(local.index());
                     }
-                }
+                    RuntimeCheckKind::MutexLock { local } => {
+                        used.insert(local.index());
+                    }
+                    RuntimeCheckKind::BoundsCheck { local, index } => {
+                        used.insert(local.index());
+                        used.insert(index.index());
+                    }
+                },
                 Statement::StorageLive(_) | Statement::StorageDead(_) | Statement::Nop => {}
             }
         }
@@ -169,8 +169,13 @@ fn find_used_locals(body: &Body) -> HashSet<usize> {
                 Terminator::SwitchInt { discr, .. } => {
                     collect_operand_uses(discr, &mut used);
                 }
-                Terminator::Call { func, args, destination, .. } => {
-                    collect_operand_uses(func, &mut used);
+                Terminator::Call {
+                    func,
+                    args,
+                    destination,
+                    ..
+                } => {
+                    collect_call_operand_uses(func, &mut used);
                     for arg in args {
                         collect_operand_uses(arg, &mut used);
                     }
@@ -204,20 +209,33 @@ fn collect_operand_uses(op: &Operand, used: &mut HashSet<usize>) {
         Operand::Copy(place) | Operand::Move(place) => {
             used.insert(place.local.index());
         }
-        Operand::Constant(_) => {}
+        Operand::Constant(c) => {
+            if let Some(captures) = c.literal.capture_operands() {
+                for cap in captures {
+                    collect_operand_uses(cap, used);
+                }
+            }
+        }
+    }
+}
+
+fn collect_call_operand_uses(op: &CallOperand, used: &mut HashSet<usize>) {
+    match op {
+        CallOperand::Borrow(_, place) => {
+            used.insert(place.local.index());
+        }
+        CallOperand::Operand(op) => collect_operand_uses(op, used),
     }
 }
 
 /// Remove StorageLive/StorageDead statements for unused locals.
 fn remove_unused_storage(body: &mut Body, used: &HashSet<usize>) {
     for block in &mut body.basic_blocks {
-        block.statements.retain(|stmt| {
-            match stmt {
-                Statement::StorageLive(local) | Statement::StorageDead(local) => {
-                    used.contains(&local.index())
-                }
-                _ => true,
+        block.statements.retain(|stmt| match stmt {
+            Statement::StorageLive(local) | Statement::StorageDead(local) => {
+                used.contains(&local.index())
             }
+            _ => true,
         });
     }
 }
@@ -256,7 +274,8 @@ fn simplify_cfg_once(body: &mut Body) -> bool {
     }
 
     // Resolve bypass chains (A -> B -> C becomes A -> C)
-    let resolved_bypass: HashMap<usize, usize> = bypass_map.keys()
+    let resolved_bypass: HashMap<usize, usize> = bypass_map
+        .keys()
         .map(|&start| {
             let mut current = start;
             let mut visited = HashSet::new();
@@ -328,7 +347,8 @@ fn simplify_cfg_once(body: &mut Body) -> bool {
                         if preds.len() == 1 && preds.contains(&idx) {
                             // Only merge if target has statements (non-empty blocks)
                             if !body.basic_blocks[target_idx].statements.is_empty() {
-                                let target_stmts = std::mem::take(&mut body.basic_blocks[target_idx].statements);
+                                let target_stmts =
+                                    std::mem::take(&mut body.basic_blocks[target_idx].statements);
                                 let target_term = body.basic_blocks[target_idx].terminator.take();
 
                                 body.basic_blocks[idx].statements.extend(target_stmts);
@@ -364,8 +384,8 @@ fn build_predecessor_map(body: &Body) -> HashMap<usize, HashSet<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BasicBlockData, LocalDecl, SwitchTargets, Place, Local};
     use crate::types::MirType;
+    use crate::{BasicBlockData, Local, LocalDecl, Place, SwitchTargets};
 
     fn dummy_ty() -> MirType {
         MirType::Unit
@@ -378,7 +398,9 @@ mod tests {
         // Block 0: goto 1
         body.basic_blocks.push(BasicBlockData {
             statements: vec![],
-            terminator: Some(Terminator::Goto { target: BasicBlock(1) }),
+            terminator: Some(Terminator::Goto {
+                target: BasicBlock(1),
+            }),
         });
 
         // Block 1: return (reachable)
@@ -393,11 +415,16 @@ mod tests {
             terminator: Some(Terminator::Return),
         });
 
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
 
         eliminate_dead_code(&mut body);
 
-        assert_eq!(body.basic_blocks.len(), 2, "Unreachable block should be removed");
+        assert_eq!(
+            body.basic_blocks.len(),
+            2,
+            "Unreachable block should be removed"
+        );
     }
 
     #[test]
@@ -405,9 +432,12 @@ mod tests {
         let mut body = Body::new(0);
 
         // Create locals
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_0".to_string()))); // Return
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_1".to_string()))); // Used
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_2".to_string()))); // Unused
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_0".to_string()))); // Return
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_1".to_string()))); // Used
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_2".to_string()))); // Unused
 
         // Block with storage statements for both used and unused locals
         body.basic_blocks.push(BasicBlockData {
@@ -427,10 +457,20 @@ mod tests {
         eliminate_dead_code(&mut body);
 
         // StorageLive/Dead for Local(2) should be removed
-        let storage_count = body.basic_blocks[0].statements.iter()
-            .filter(|s| matches!(s, Statement::StorageLive(Local(2)) | Statement::StorageDead(Local(2))))
+        let storage_count = body.basic_blocks[0]
+            .statements
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s,
+                    Statement::StorageLive(Local(2)) | Statement::StorageDead(Local(2))
+                )
+            })
             .count();
-        assert_eq!(storage_count, 0, "Unused storage statements should be removed");
+        assert_eq!(
+            storage_count, 0,
+            "Unused storage statements should be removed"
+        );
     }
 
     #[test]
@@ -470,7 +510,8 @@ mod tests {
             terminator: Some(Terminator::Return),
         });
 
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
 
         let reachable = find_reachable_blocks(&body);
 
@@ -487,13 +528,17 @@ mod tests {
         // Block 0: goto 1
         body.basic_blocks.push(BasicBlockData {
             statements: vec![],
-            terminator: Some(Terminator::Goto { target: BasicBlock(1) }),
+            terminator: Some(Terminator::Goto {
+                target: BasicBlock(1),
+            }),
         });
 
         // Block 1: empty, goto 2 (should be bypassed)
         body.basic_blocks.push(BasicBlockData {
             statements: vec![],
-            terminator: Some(Terminator::Goto { target: BasicBlock(2) }),
+            terminator: Some(Terminator::Goto {
+                target: BasicBlock(2),
+            }),
         });
 
         // Block 2: return
@@ -502,13 +547,18 @@ mod tests {
             terminator: Some(Terminator::Return),
         });
 
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
 
         simplify_cfg(&mut body);
 
         // Block 0 should now goto 2 directly
         if let Some(Terminator::Goto { target }) = &body.basic_blocks[0].terminator {
-            assert_eq!(target.index(), 2, "Block 0 should bypass block 1 and go to block 2");
+            assert_eq!(
+                target.index(),
+                2,
+                "Block 0 should bypass block 1 and go to block 2"
+            );
         } else {
             panic!("Expected Goto terminator");
         }
@@ -521,7 +571,9 @@ mod tests {
         // Block 0: has statements, goto 1
         body.basic_blocks.push(BasicBlockData {
             statements: vec![Statement::Nop],
-            terminator: Some(Terminator::Goto { target: BasicBlock(1) }),
+            terminator: Some(Terminator::Goto {
+                target: BasicBlock(1),
+            }),
         });
 
         // Block 1: has statements, return (only predecessor is block 0)
@@ -530,13 +582,21 @@ mod tests {
             terminator: Some(Terminator::Return),
         });
 
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
 
         simplify_cfg(&mut body);
 
         // Block 0 should now have all statements and return
-        assert_eq!(body.basic_blocks[0].statements.len(), 3, "Block 0 should have merged statements");
-        assert!(matches!(body.basic_blocks[0].terminator, Some(Terminator::Return)));
+        assert_eq!(
+            body.basic_blocks[0].statements.len(),
+            3,
+            "Block 0 should have merged statements"
+        );
+        assert!(matches!(
+            body.basic_blocks[0].terminator,
+            Some(Terminator::Return)
+        ));
     }
 
     #[test]
@@ -546,22 +606,29 @@ mod tests {
         // Chain: 0 -> 1 -> 2 -> 3 (all empty except 3)
         body.basic_blocks.push(BasicBlockData {
             statements: vec![],
-            terminator: Some(Terminator::Goto { target: BasicBlock(1) }),
+            terminator: Some(Terminator::Goto {
+                target: BasicBlock(1),
+            }),
         });
         body.basic_blocks.push(BasicBlockData {
             statements: vec![],
-            terminator: Some(Terminator::Goto { target: BasicBlock(2) }),
+            terminator: Some(Terminator::Goto {
+                target: BasicBlock(2),
+            }),
         });
         body.basic_blocks.push(BasicBlockData {
             statements: vec![],
-            terminator: Some(Terminator::Goto { target: BasicBlock(3) }),
+            terminator: Some(Terminator::Goto {
+                target: BasicBlock(3),
+            }),
         });
         body.basic_blocks.push(BasicBlockData {
             statements: vec![],
             terminator: Some(Terminator::Return),
         });
 
-        body.local_decls.push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(dummy_ty(), Some("_0".to_string())));
 
         simplify_cfg(&mut body);
 

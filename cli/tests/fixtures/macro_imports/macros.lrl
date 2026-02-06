@@ -1,0 +1,2 @@
+(defmacro wrap (x)
+  (cons x nil))

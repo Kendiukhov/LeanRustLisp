@@ -1,0 +1,15 @@
+(inductive copy PairNat (sort 1)
+  (ctor pair (pi a Nat (pi b Nat PairNat)))
+)
+
+(def succ1 (pi n Nat Nat)
+  (lam n Nat (succ n)))
+
+(def apply_pair
+  (pi #[fn] f (pi #[fn] x Nat Nat)
+    (pi #[fn] n Nat PairNat))
+  (lam #[fn] f (pi #[fn] x Nat Nat)
+    (lam #[fn] n Nat
+      (pair (f n) (f n)))))
+
+(apply_pair succ1 zero)

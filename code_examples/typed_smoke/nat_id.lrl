@@ -1,0 +1,4 @@
+(def id_nat (pi n Nat Nat)
+  (lam n Nat n))
+
+(id_nat (succ zero))

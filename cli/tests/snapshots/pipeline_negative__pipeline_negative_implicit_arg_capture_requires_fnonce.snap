@@ -1,0 +1,14 @@
+---
+source: cli/tests/pipeline_negative.rs
+expression: output
+---
+Status: Ok
+Diagnostics:
+- Warning: Axiom 'interior_mutable' declared (unsafe: interior_mutable)
+- Warning: Axiom 'may_panic_on_borrow_violation' declared (unsafe: may_panic_on_borrow_violation)
+- Warning: Axiom 'concurrency_primitive' declared (unsafe: concurrency_primitive)
+- Warning: Axiom 'atomic_primitive' declared (unsafe: atomic_primitive)
+- Warning: Axiom 'indexable' declared (unsafe: indexable)
+- Warning: Inductive 'LinBox' depends on axioms: may_panic_on_borrow_violation (unsafe: may_panic_on_borrow_violation)
+- Warning: Axiom 'consume_imp' declared (unsafe: may_panic_on_borrow_violation)
+- Error: [F0207] Elaboration error (Value) in 'make': Annotated function kind Fn is too small; requires FnOnce

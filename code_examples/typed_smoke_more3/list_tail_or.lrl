@@ -1,0 +1,7 @@
+(def tail_or (pi xs ListRc ListRc)
+  (lam xs ListRc
+    (match xs ListRc
+      (case (nil) nil)
+      (case (cons h t ih) t))))
+
+(tail_or (cons zero (cons (succ zero) nil)))

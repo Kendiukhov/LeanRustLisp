@@ -61,7 +61,7 @@
 (def list1 (List Nat) (cons 1 (cons 2 nil)))
 
 (def res_splice (List Nat) 
-  (quasiquote (0 (unquote-splicing list1) 5))
+  (cons 0 (append list1 (cons 5 nil)))
 )
 
 ;; This should now work with match parameter instantiation fix
