@@ -440,8 +440,27 @@ fn lower_type_template(
     ids: &IdRegistry,
     errors: &mut Vec<IdRegistryError>,
 ) -> MirType {
-    let term_norm =
-        whnf(env, term.clone(), Transparency::Reducible).unwrap_or_else(|_| term.clone());
+    let term_norm = match whnf(env, term.clone(), Transparency::Reducible) {
+        Ok(norm) => norm,
+        Err(err) => {
+            let error = IdRegistryError::new(
+                format!(
+                    "Failed to normalize type while building MIR layout template: {}",
+                    err
+                ),
+                None,
+            );
+            if !errors
+                .iter()
+                .any(|existing| existing.message == error.message)
+            {
+                errors.push(error);
+            }
+            return MirType::Opaque {
+                reason: opaque_reason(term),
+            };
+        }
+    };
 
     if let Some((mutability, inner)) = parse_ref_type(&term_norm, ids) {
         let inner_ty = lower_type_template(&inner, num_params, non_param_binders, env, ids, errors);

@@ -2,7 +2,7 @@
   (pi l ListRc Nat)
   (lam l ListRc
     (match l Nat
-      (case (nil) zero)
-      (case (cons h t ih) (succ ih)))))
+      (case (nil_rc) zero)
+      (case (cons_rc h t ih) (succ ih)))))
 
-(len (cons zero (cons (succ zero) nil)))
+(len (cons_rc zero (cons_rc (succ zero) nil_rc)))

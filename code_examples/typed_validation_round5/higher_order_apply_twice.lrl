@@ -1,0 +1,12 @@
+(def inc (pi n Nat Nat)
+  (lam n Nat (succ n)))
+
+(def apply_twice
+  (pi #[fn] f (pi #[fn] x Nat Nat)
+    (pi n Nat Nat))
+  (lam #[fn] f (pi #[fn] x Nat Nat)
+    (lam n Nat
+      (f (f n)))))
+
+(def entry Nat
+  (print_nat (apply_twice inc (succ zero))))

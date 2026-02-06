@@ -1,4 +1,4 @@
-# Typed Backend (Stage 1 + Phase 2 Subset)
+# Typed Backend (Stage 1 + Phase 2 + Phase 3 Scaffolding)
 
 This document defines the **Stage 1** supported subset for the typed MIR → Rust backend. The pipeline already enforces kernel/MIR typing/ownership/NLL; this document only constrains what the typed backend will accept and emit.
 
@@ -9,26 +9,45 @@ This document defines the **Stage 1** supported subset for the typed MIR → Rus
 - Deterministic output and stable naming.
 - Support typed higher-order calls in the current subset.
 
-## Stage 1 Supported Subset
+## Current Supported Subset
 
 ### Types
 - `Unit`, `Bool`, `Nat`
-- Non-parameterized ADTs (`MirType::Adt` with zero type args)
+- ADTs (`MirType::Adt`) including parameterized forms (`Adt<T...>`)
   - Field types must themselves be Stage‑1 supported.
   - Direct self-recursion is allowed via `Box<...>` in Rust; mutual recursion is not supported yet.
+- Prop inductives are runtime-erased:
+  - any `MirType::Adt` whose inductive result sort is `Prop` lowers to `()`,
+  - typed backend does not emit Rust enum definitions for these proof-only ADTs,
+  - proof constructors lower to curried callables returning `()`.
+- Type parameters (`MirType::Param`) lowered to deterministic Rust generic names (`T0`, `T1`, ...).
+- References (`MirType::Ref`) lowered via typed wrappers:
+  - `LrlRefShared<T>`
+  - `LrlRefMut<T>`
+- Raw pointers (`MirType::RawPtr`) lowered to `*const T` / `*mut T`.
+- Interior mutability wrappers (`MirType::InteriorMutable`) lowered to:
+  - `LrlRefCell<T>`
+  - `LrlMutex<T>`
+  - `LrlAtomic<T>`
+- Index terms (`MirType::IndexTerm`) are accepted for typed codegen identity paths.
+- Opaque MIR types (`MirType::Opaque`) are lowered to a typed placeholder wrapper (`LrlOpaque`).
 - Functions of kind `Fn` and `FnOnce`:
   - Represented as `Rc<dyn LrlCallable<Arg, Ret>>` (curried, unary MIR functions).
 
 ### MIR Constructs
 - Locals/temps with Stage‑1 types.
-- `Rvalue::Use`, `Rvalue::Discriminant`.
-- `Statement::Assign`, `StorageLive/Dead`, `Nop`.
+- `Rvalue::Use`, `Rvalue::Discriminant`, `Rvalue::Ref`.
+- `Statement::Assign`, `RuntimeCheck`, `StorageLive/Dead`, `Nop`.
 - `Terminator::Return`, `Goto`, `SwitchInt`, `Call`, `Unreachable`.
 - Constructors as values (curried) for supported ADTs and builtins (`Nat`, `Bool`).
-- Recursors (`Term::Rec`) for non‑parametric, non‑indexed inductives (used by `match` lowering).
+- Recursors (`Term::Rec`) with typed specialization entries.
 
 ### Control Flow
 - Straight-line code and `SwitchInt` on discriminants (ADT/Bool/Nat).
+- Place projections include `Field`, `Downcast`, `Deref`, and `Index` lowering.
+- Executable typed indexing is supported for:
+  - indexable ADTs with a singleton payload shape (`index == 0`),
+  - indexable ADTs wrapping `List<T>` (delegates to typed list traversal).
 
 ### Functions & Closures
 - Higher-order typed calls are supported in the current subset:
@@ -41,20 +60,19 @@ This document defines the **Stage 1** supported subset for the typed MIR → Rus
 - `FnMut` is not supported in typed backend.
 
 ## Explicitly Unsupported (Stage 1)
-- Parametric ADTs / generics (`List<A>`, `Option<A>`).
-- `Ref`, `RawPtr`, `InteriorMutable` types or `Rvalue::Ref`.
-- Runtime checks (`RuntimeCheckKind`) including bounds checks (indexing).
 - Higher-order effects requiring mutable function state (`FnMut`).
-- Indexed inductives (recursors requiring indices).
-- MIR places with `Deref` or `Index` projections.
+- Executing polymorphic function values through the closure adapter path when the instantiated
+  type arguments are not concretized in monomorphic local declarations.
+- Executable indexing semantics for arbitrary custom container shapes.
 
 ## Backend Selection Behavior
 - `--backend typed`: hard error on unsupported constructs with a clear diagnostic.
 - `--backend auto`: try typed; on unsupported constructs, fall back to dynamic with a warning.
 - `--backend dynamic`: always use dynamic backend.
+- CLI defaults for `compile` and `compile-mir` use `--backend auto`.
 
 ## No Tag-Check Panics
-For supported programs, emitted Rust must **not** include tag-check panics (e.g. “Expected Func”, “wrong tag”). Any remaining panic must be an intentional runtime check; Stage 1 currently emits none.
+For supported programs, emitted Rust must **not** include tag-check panics (e.g. “Expected Func”, “wrong tag”). Any remaining panic must be an intentional runtime check/helper path.
 
 ## Determinism
 - Stable ordering of items (defs, ADTs, ctors).

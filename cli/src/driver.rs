@@ -321,6 +321,55 @@ fn extract_macro_imports(
     (retained, imports)
 }
 
+fn emit_syntax_compat_warnings(syntax_nodes: &[Syntax], diagnostics: &mut DiagnosticCollector) {
+    for node in syntax_nodes {
+        if let SyntaxKind::List(items) = &node.kind {
+            if let Some(head) = items.first() {
+                if let SyntaxKind::Symbol(symbol) = &head.kind {
+                    if (symbol == "opaque" || symbol == "transparent") && items.len() == 4 {
+                        diagnostics.handle(
+                            Diagnostic::warning(format!(
+                                "'({} ...)' is compatibility syntax; prefer '(def {} ...)'",
+                                symbol, symbol
+                            ))
+                            .with_span(node.span),
+                        );
+                    }
+                }
+            }
+        }
+        emit_match_list_warnings(node, diagnostics);
+    }
+}
+
+fn emit_match_list_warnings(syntax: &Syntax, diagnostics: &mut DiagnosticCollector) {
+    match &syntax.kind {
+        SyntaxKind::List(items) | SyntaxKind::BracedList(items) => {
+            if let Some(head) = items.first() {
+                if let SyntaxKind::Symbol(symbol) = &head.kind {
+                    if symbol == "match_list" {
+                        diagnostics.handle(
+                            Diagnostic::warning(
+                                "'match_list' is deprecated core syntax; prefer stdlib sugar/macros over generic 'match'"
+                                    .to_string(),
+                            )
+                            .with_span(syntax.span),
+                        );
+                    }
+                }
+            }
+            for item in items {
+                emit_match_list_warnings(item, diagnostics);
+            }
+        }
+        SyntaxKind::Index(base, index) => {
+            emit_match_list_warnings(base, diagnostics);
+            emit_match_list_warnings(index, diagnostics);
+        }
+        _ => {}
+    }
+}
+
 fn parse_defmacro_syntax(
     syntax: &Syntax,
 ) -> Result<Option<(String, Vec<String>, Syntax)>, ExpansionError> {
@@ -625,6 +674,16 @@ fn sort_artifacts(artifacts: &mut Vec<Artifact>) {
     });
 }
 
+fn current_defeq_config_artifact() -> Artifact {
+    let policy = kernel::nbe::defeq_fuel_policy();
+    Artifact::DefEqConfig {
+        fuel: policy.fuel,
+        source: policy.source.label().to_string(),
+        // Defeq checks in the checker/elaborator pipeline run with Reducible transparency.
+        transparency: Transparency::Reducible,
+    }
+}
+
 fn rollback_failed_definition(
     env: &mut Env,
     env_snapshot: &Env,
@@ -646,9 +705,82 @@ fn rollback_failed_definition(
     }
 }
 
-fn new_elaborator_with_imports<'a>(env: &'a Env, import_scopes: &[String]) -> Elaborator<'a> {
+#[derive(Debug, Clone)]
+struct ImportedModule {
+    module: String,
+    alias: String,
+}
+
+#[derive(Debug, Default, Clone)]
+struct NameResolutionState {
+    current_module: Option<String>,
+    imported_modules: Vec<ImportedModule>,
+    opened_modules: Vec<String>,
+    saw_non_module_decl: bool,
+}
+
+impl NameResolutionState {
+    fn imported_alias_pairs(&self) -> Vec<(String, String)> {
+        self.imported_modules
+            .iter()
+            .map(|entry| (entry.alias.clone(), entry.module.clone()))
+            .collect()
+    }
+
+    fn open_target_candidates(&self, target: &str) -> Vec<String> {
+        let mut candidates = Vec::new();
+        for import in &self.imported_modules {
+            if import.alias == target || import.module == target {
+                if !candidates.contains(&import.module) {
+                    candidates.push(import.module.clone());
+                }
+                continue;
+            }
+            if let Some(last_segment) = import.module.rsplit('.').next() {
+                if last_segment == target && !candidates.contains(&import.module) {
+                    candidates.push(import.module.clone());
+                }
+            }
+        }
+        candidates
+    }
+}
+
+fn module_exists_in_env(env: &Env, module: &str) -> bool {
+    if module.is_empty() {
+        return false;
+    }
+
+    let prefix = format!("{}.", module);
+    env.definitions()
+        .keys()
+        .any(|name| name == module || name.starts_with(&prefix))
+        || env
+            .inductives
+            .keys()
+            .any(|name| name == module || name.starts_with(&prefix))
+}
+
+fn qualify_decl_name(current_module: Option<&str>, name: &str) -> String {
+    if name.contains('.') {
+        return name.to_string();
+    }
+    match current_module {
+        Some(module) if !module.is_empty() => format!("{}.{}", module, name),
+        _ => name.to_string(),
+    }
+}
+
+fn new_elaborator_with_resolution<'a>(
+    env: &'a Env,
+    resolution: &NameResolutionState,
+) -> Elaborator<'a> {
     let mut elab = Elaborator::new(env);
-    elab.set_import_scopes(import_scopes.iter().cloned());
+    elab.set_name_resolution(
+        resolution.current_module.clone(),
+        resolution.opened_modules.clone(),
+        resolution.imported_alias_pairs(),
+    );
     elab
 }
 
@@ -675,6 +807,8 @@ pub fn process_code(
 
     let syntax_nodes = apply_macro_imports(expander, &module_id, syntax_nodes, diagnostics)?;
 
+    emit_syntax_compat_warnings(&syntax_nodes, diagnostics);
+
     let mut decl_parser = DeclarationParser::new(expander);
     let parse_result = decl_parser.parse(syntax_nodes);
     drop(decl_parser); // Release borrow of expander
@@ -696,18 +830,129 @@ pub fn process_code(
     };
 
     if options.collect_artifacts {
-        let policy = kernel::nbe::defeq_fuel_policy();
-        processed.artifacts.push(Artifact::DefEqConfig {
-            fuel: policy.fuel,
-            source: policy.source.label().to_string(),
-            transparency: Transparency::Reducible,
-        });
+        processed.artifacts.push(current_defeq_config_artifact());
     }
 
-    let mut import_scopes: Vec<String> = Vec::new();
+    let mut resolution = NameResolutionState::default();
 
     for decl in decls {
+        if !matches!(&decl, Declaration::Module { .. }) {
+            resolution.saw_non_module_decl = true;
+        }
+
         match decl {
+            Declaration::Module { name } => {
+                if resolution.saw_non_module_decl {
+                    handle_diagnostic(
+                        diagnostics,
+                        expander,
+                        Diagnostic::error(
+                            "module declaration must appear before all other declarations"
+                                .to_string(),
+                        ),
+                    );
+                    continue;
+                }
+                if resolution.current_module.is_some() {
+                    handle_diagnostic(
+                        diagnostics,
+                        expander,
+                        Diagnostic::error(
+                            "only one module declaration is allowed per file".to_string(),
+                        ),
+                    );
+                    continue;
+                }
+                resolution.current_module = Some(name);
+            }
+
+            Declaration::ImportModule { module, alias } => {
+                if resolution.current_module.is_none() {
+                    handle_diagnostic(
+                        diagnostics,
+                        expander,
+                        Diagnostic::error(
+                            "import requires an explicit module declaration in the same file"
+                                .to_string(),
+                        ),
+                    );
+                    continue;
+                }
+
+                if !module_exists_in_env(env, &module) {
+                    handle_diagnostic(
+                        diagnostics,
+                        expander,
+                        Diagnostic::error(format!("Unknown module '{}'", module)),
+                    );
+                    continue;
+                }
+
+                let alias = alias.unwrap_or_else(|| {
+                    module
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or(module.as_str())
+                        .to_string()
+                });
+
+                // Keep duplicate aliases so `open`/qualified use can diagnose ambiguity.
+                // Skip only exact duplicate import entries.
+                let already_imported = resolution
+                    .imported_modules
+                    .iter()
+                    .any(|entry| entry.alias == alias && entry.module == module);
+                if !already_imported {
+                    resolution
+                        .imported_modules
+                        .push(ImportedModule { module, alias });
+                }
+            }
+
+            Declaration::OpenModule { target } => {
+                if resolution.current_module.is_none() {
+                    handle_diagnostic(
+                        diagnostics,
+                        expander,
+                        Diagnostic::error(
+                            "open requires an explicit module declaration in the same file"
+                                .to_string(),
+                        ),
+                    );
+                    continue;
+                }
+
+                let candidates = resolution.open_target_candidates(&target);
+                if candidates.is_empty() {
+                    handle_diagnostic(
+                        diagnostics,
+                        expander,
+                        Diagnostic::error(format!(
+                            "open target '{}' is not imported; use import first",
+                            target
+                        )),
+                    );
+                    continue;
+                }
+                if candidates.len() > 1 {
+                    handle_diagnostic(
+                        diagnostics,
+                        expander,
+                        Diagnostic::error(format!(
+                            "open target '{}' is ambiguous; candidates: {}",
+                            target,
+                            candidates.join(", ")
+                        )),
+                    );
+                    continue;
+                }
+
+                let module = candidates[0].clone();
+                if !resolution.opened_modules.contains(&module) {
+                    resolution.opened_modules.push(module);
+                }
+            }
+
             Declaration::Def {
                 name,
                 ty,
@@ -716,6 +961,7 @@ pub fn process_code(
                 transparency,
                 noncomputable,
             } => {
+                let name = qualify_decl_name(resolution.current_module.as_deref(), &name);
                 let ty_span = ty.span;
                 let val_span = val.span;
                 if reject_reserved_primitive_name(env, &name, expander, diagnostics) {
@@ -739,7 +985,7 @@ pub fn process_code(
                         continue;
                     }
                 }
-                let mut elab = new_elaborator_with_imports(env, &import_scopes);
+                let mut elab = new_elaborator_with_resolution(env, &resolution);
 
                 // Infer Type
                 let mut ty_core = match elab.infer_type(ty.clone()) {
@@ -1027,7 +1273,7 @@ pub fn process_code(
                                     );
                                     continue;
                                 }
-                                let mut ctx = mir::lower::LoweringContext::new_with_metadata(
+                                let mut ctx = match mir::lower::LoweringContext::new_with_metadata(
                                     vec![],
                                     d.ty.clone(),
                                     &env,
@@ -1035,7 +1281,30 @@ pub fn process_code(
                                     Some(term_span_map.clone()),
                                     Some(name.clone()),
                                     Some(Rc::new(d.capture_modes.clone())),
-                                );
+                                ) {
+                                    Ok(ctx) => ctx,
+                                    Err(e) => {
+                                        let mut diagnostic = Diagnostic::error(format!(
+                                            "Lowering error in {}: {}",
+                                            name, e
+                                        ));
+                                        if let Some(span) = e.span() {
+                                            diagnostic =
+                                                diagnostic.with_span(to_frontend_span(span));
+                                        }
+                                        handle_diagnostic(diagnostics, expander, diagnostic);
+                                        rollback_failed_definition(
+                                            env,
+                                            &env_snapshot,
+                                            &mut processed,
+                                            deployed_len_checkpoint,
+                                            artifacts_len_checkpoint,
+                                            &name,
+                                            previous_term_span_map.as_ref(),
+                                        );
+                                        continue;
+                                    }
+                                };
                                 let dest = mir::Place::from(mir::Local(0));
                                 let target = mir::BasicBlock(1);
                                 ctx.body.basic_blocks.push(mir::BasicBlockData {
@@ -1043,14 +1312,14 @@ pub fn process_code(
                                     terminator: None,
                                 });
                                 if let Err(e) = ctx.lower_term(val, dest, target) {
-                                    handle_diagnostic(
-                                        diagnostics,
-                                        expander,
-                                        Diagnostic::error(format!(
-                                            "Lowering error in {}: {}",
-                                            name, e
-                                        )),
-                                    );
+                                    let mut diagnostic = Diagnostic::error(format!(
+                                        "Lowering error in {}: {}",
+                                        name, e
+                                    ));
+                                    if let Some(span) = e.span() {
+                                        diagnostic = diagnostic.with_span(to_frontend_span(span));
+                                    }
+                                    handle_diagnostic(diagnostics, expander, diagnostic);
                                     rollback_failed_definition(
                                         env,
                                         &env_snapshot,
@@ -1347,6 +1616,7 @@ pub fn process_code(
             }
 
             Declaration::Axiom { name, ty, tags } => {
+                let name = qualify_decl_name(resolution.current_module.as_deref(), &name);
                 let ty_span = ty.span;
                 if reject_reserved_primitive_name(env, &name, expander, diagnostics) {
                     continue;
@@ -1366,7 +1636,7 @@ pub fn process_code(
                     );
                     continue;
                 }
-                let mut elab = new_elaborator_with_imports(env, &import_scopes);
+                let mut elab = new_elaborator_with_resolution(env, &resolution);
                 let ty_core = match elab.infer_type(ty) {
                     Ok((t, s)) => {
                         if !matches!(*s, Term::Sort(_)) {
@@ -1433,6 +1703,7 @@ pub fn process_code(
                 is_copy,
                 attrs,
             } => {
+                let name = qualify_decl_name(resolution.current_module.as_deref(), &name);
                 if reject_reserved_primitive_inductive(&name, expander, diagnostics) {
                     continue;
                 }
@@ -1442,8 +1713,10 @@ pub fn process_code(
                 if options.prelude_frozen && !options.allow_redefine {
                     let mut has_conflict = false;
                     for (ctor_name, _) in &ctors {
-                        if env.get_definition(ctor_name).is_some()
-                            || env.get_inductive(ctor_name).is_some()
+                        let ctor_alias =
+                            qualify_decl_name(resolution.current_module.as_deref(), ctor_name);
+                        if env.get_definition(&ctor_alias).is_some()
+                            || env.get_inductive(&ctor_alias).is_some()
                         {
                             has_conflict = true;
                             handle_diagnostic(
@@ -1451,7 +1724,7 @@ pub fn process_code(
                                 expander,
                                 Diagnostic::error(format!(
                                     "Constructor '{}' for inductive '{}' conflicts with an existing name (prelude is frozen; use --allow-redefine to override)",
-                                    ctor_name, name
+                                    ctor_alias, name
                                 )),
                             );
                         }
@@ -1460,7 +1733,7 @@ pub fn process_code(
                         continue;
                     }
                 }
-                let mut elab = new_elaborator_with_imports(env, &import_scopes);
+                let mut elab = new_elaborator_with_resolution(env, &resolution);
                 let ty_span = ty.span;
                 let (ty_core, _) = match elab.infer_type(ty) {
                     Ok((t, s)) => (elab.instantiate_metas(&t), s),
@@ -1510,7 +1783,7 @@ pub fn process_code(
                 let mut ctor_spans = Vec::new();
                 for (cname, cty) in ctors {
                     let ctor_span = cty.span;
-                    let mut elab_c = new_elaborator_with_imports(env, &import_scopes);
+                    let mut elab_c = new_elaborator_with_resolution(env, &resolution);
                     let (cty_core, _) = match elab_c.infer_type(cty) {
                         Ok((t, _)) => (elab_c.instantiate_metas(&t), ()),
                         Err(e) => {
@@ -1565,25 +1838,34 @@ pub fn process_code(
                     report_inductive_axiom_dependencies(env, decl, expander, diagnostics);
                 }
 
-                // Register constructors as definitions (for backend visibility)
+                // Register constructors as definitions (for backend visibility).
+                // If multiple inductives share a constructor name, skip duplicate alias
+                // registration so elaboration can surface deterministic ambiguity diagnostics.
                 let constructor_is_axiom_dependent = env
                     .get_inductive(&name)
                     .map(|decl| !decl.axioms.is_empty())
                     .unwrap_or(false);
                 for (i, ctor) in kernel_ctors.iter().enumerate() {
                     let val = Rc::new(Term::Ctor(name.clone(), i, vec![]));
+                    let ctor_alias =
+                        qualify_decl_name(resolution.current_module.as_deref(), &ctor.name);
                     let mut def =
-                        Definition::total(ctor.name.clone(), ctor.ty.clone(), val.clone());
+                        Definition::total(ctor_alias.clone(), ctor.ty.clone(), val.clone());
                     if constructor_is_axiom_dependent {
                         def.noncomputable = true;
                     }
                     if let Err(e) = env.add_definition(def) {
+                        if matches!(&e, kernel::checker::TypeError::DefinitionAlreadyExists(existing) if existing == &ctor_alias)
+                            && env.constructor_candidates(&ctor.name).len() > 1
+                        {
+                            continue;
+                        }
                         let span = ctor_spans.get(i).copied();
                         handle_diagnostic(
                             diagnostics,
                             expander,
                             diagnostic_from_kernel_error(
-                                &format!("Error registering constructor '{}'", ctor.name),
+                                &format!("Error registering constructor '{}'", ctor_alias),
                                 &e,
                                 span,
                             ),
@@ -1630,16 +1912,11 @@ pub fn process_code(
 
                 let (binders, _head_body) = peel_surface_pi_binders(head.clone());
 
-                let head_core = match elaborate_instance_type(
-                    env,
-                    expander,
-                    diagnostics,
-                    &head,
-                    &import_scopes,
-                ) {
-                    Some(term) => term,
-                    None => continue,
-                };
+                let head_core =
+                    match elaborate_instance_type(env, expander, diagnostics, &head, &resolution) {
+                        Some(term) => term,
+                        None => continue,
+                    };
 
                 let (binder_count, head_body_core) = peel_core_pi_binders(&head_core);
                 let (head_term, head_args) = collect_core_app_spine(&head_body_core);
@@ -1726,7 +2003,7 @@ pub fn process_code(
                         expander,
                         diagnostics,
                         &wrapped_req,
-                        &import_scopes,
+                        &resolution,
                     ) {
                         Some(term) => term,
                         None => {
@@ -1836,18 +2113,9 @@ pub fn process_code(
                     }
                 }
             }
-
-            Declaration::ImportModule { module } => {
-                if !import_scopes.contains(&module) {
-                    import_scopes.push(module);
-                    import_scopes.sort();
-                    import_scopes.dedup();
-                }
-            }
-
             Declaration::Expr(term) => {
                 let expr_span = term.span;
-                let mut elab = new_elaborator_with_imports(env, &import_scopes);
+                let mut elab = new_elaborator_with_resolution(env, &resolution);
                 match elab.infer(term) {
                     Ok((core_term, ty)) => {
                         let mut valid = true;
@@ -2107,9 +2375,9 @@ fn elaborate_instance_type(
     expander: &mut Expander,
     diagnostics: &mut DiagnosticCollector,
     term: &SurfaceTerm,
-    import_scopes: &[String],
+    resolution: &NameResolutionState,
 ) -> Option<Rc<Term>> {
-    let mut elab = new_elaborator_with_imports(env, import_scopes);
+    let mut elab = new_elaborator_with_resolution(env, resolution);
     let (t, s) = match elab.infer_type(term.clone()) {
         Ok(pair) => pair,
         Err(e) => {

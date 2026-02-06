@@ -398,7 +398,9 @@ pub struct Elaborator<'a> {
     elided_label_counter: usize,
     elided_labels: HashSet<String>,
     label_subst: HashMap<String, String>,
-    import_scopes: Vec<String>,
+    current_module: Option<String>,
+    opened_modules: Vec<String>,
+    import_aliases: Vec<(String, String)>,
 }
 
 impl<'a> Elaborator<'a> {
@@ -418,23 +420,59 @@ impl<'a> Elaborator<'a> {
             elided_label_counter: 0,
             elided_labels: HashSet::new(),
             label_subst: HashMap::new(),
-            import_scopes: Vec::new(),
+            current_module: None,
+            opened_modules: Vec::new(),
+            import_aliases: Vec::new(),
         }
     }
 
+    pub fn set_name_resolution(
+        &mut self,
+        current_module: Option<String>,
+        opened_modules: Vec<String>,
+        import_aliases: Vec<(String, String)>,
+    ) {
+        self.current_module = current_module.filter(|module| !module.is_empty());
+
+        let mut normalized_opened: Vec<String> = Vec::new();
+        for module in opened_modules {
+            if module.is_empty() || normalized_opened.contains(&module) {
+                continue;
+            }
+            normalized_opened.push(module);
+        }
+        self.opened_modules = normalized_opened;
+
+        let mut normalized_aliases: Vec<(String, String)> = Vec::new();
+        for (alias, module) in import_aliases {
+            if alias.is_empty() || module.is_empty() {
+                continue;
+            }
+            if normalized_aliases
+                .iter()
+                .any(|(existing_alias, existing_module)| {
+                    existing_alias == &alias && existing_module == &module
+                })
+            {
+                continue;
+            }
+            normalized_aliases.push((alias, module));
+        }
+        self.import_aliases = normalized_aliases;
+    }
+
+    /// Backward-compatible helper used by older tests; equivalent to opening modules.
     pub fn set_import_scopes<I, S>(&mut self, scopes: I)
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let mut normalized: Vec<String> = scopes
+        let opened_modules: Vec<String> = scopes
             .into_iter()
             .map(Into::into)
             .filter(|scope| !scope.is_empty() && scope != "classical")
             .collect();
-        normalized.sort();
-        normalized.dedup();
-        self.import_scopes = normalized;
+        self.set_name_resolution(None, opened_modules, Vec::new());
     }
 
     pub fn span_map(&self) -> &HashMap<TermId, Span> {
@@ -846,61 +884,53 @@ impl<'a> Elaborator<'a> {
         })
     }
 
-    fn is_inductive_visible_from_imports(&self, ind_name: &str) -> bool {
-        if self.import_scopes.is_empty() || !ind_name.contains('.') {
-            return true;
-        }
-        self.import_scopes
-            .iter()
-            .any(|scope| ind_name == scope || ind_name.starts_with(&format!("{}.", scope)))
+    fn module_matches_scope(ind_name: &str, scope: &str) -> bool {
+        ind_name == scope || ind_name.starts_with(&format!("{}.", scope))
     }
 
-    fn imported_name_candidates(&self, name: &str) -> Vec<String> {
-        let mut candidates = Vec::new();
-        for scope in &self.import_scopes {
-            let qualified = format!("{}.{}", scope, name);
-            if self.env.get_inductive(&qualified).is_some()
-                || self.env.get_definition(&qualified).is_some()
-            {
-                candidates.push(qualified);
+    fn alias_targets(&self, alias: &str) -> Vec<String> {
+        let mut targets = Vec::new();
+        for (candidate_alias, module) in &self.import_aliases {
+            if candidate_alias == alias && !targets.contains(module) {
+                targets.push(module.clone());
             }
         }
-        candidates.sort();
-        candidates.dedup();
-        candidates
+        targets
     }
 
-    fn constructor_candidates_for_name(&self, name: &str) -> Vec<kernel::checker::ConstructorRef> {
-        let mut candidates = self.env.constructor_candidates(name).to_vec();
-        candidates.sort_by(|lhs, rhs| {
-            lhs.ind_name
-                .cmp(&rhs.ind_name)
-                .then(lhs.index.cmp(&rhs.index))
-        });
-        if self.import_scopes.is_empty() {
-            return candidates;
+    fn rewrite_qualified_name(&self, name: &str, span: Span) -> Result<String, ElabError> {
+        if let Some((head, tail)) = name.split_once('.') {
+            let mut targets = self.alias_targets(head);
+            if targets.len() == 1 {
+                return Ok(format!("{}.{}", targets[0], tail));
+            }
+            if targets.len() > 1 {
+                targets.sort();
+                targets.dedup();
+                let candidates = targets
+                    .into_iter()
+                    .map(|module| format!("{}.{}", module, tail))
+                    .collect();
+                return Err(ElabError::AmbiguousName {
+                    name: name.to_string(),
+                    candidates,
+                    span,
+                });
+            }
         }
-        candidates
-            .into_iter()
-            .filter(|candidate| self.is_inductive_visible_from_imports(&candidate.ind_name))
-            .collect()
+        Ok(name.to_string())
     }
 
-    fn resolve_qualified_constructor(
+    fn constructor_candidates_in_scope(
         &self,
-        qualified_name: &str,
-        span: Span,
-    ) -> Result<Option<Rc<Term>>, ElabError> {
-        let (ind_name, ctor_name) = match qualified_name.rsplit_once('.') {
-            Some(parts) => parts,
-            None => return Ok(None),
-        };
-
+        ctor_name: &str,
+        scope: &str,
+    ) -> Vec<kernel::checker::ConstructorRef> {
         let mut candidates: Vec<_> = self
             .env
             .constructor_candidates(ctor_name)
             .iter()
-            .filter(|candidate| candidate.ind_name == ind_name)
+            .filter(|candidate| Self::module_matches_scope(&candidate.ind_name, scope))
             .cloned()
             .collect();
         candidates.sort_by(|lhs, rhs| {
@@ -908,6 +938,20 @@ impl<'a> Elaborator<'a> {
                 .cmp(&rhs.ind_name)
                 .then(lhs.index.cmp(&rhs.index))
         });
+        candidates
+    }
+
+    fn resolve_qualified_constructor(
+        &self,
+        qualified_name: &str,
+        span: Span,
+    ) -> Result<Option<Rc<Term>>, ElabError> {
+        let (scope, ctor_name) = match qualified_name.rsplit_once('.') {
+            Some(parts) => parts,
+            None => return Ok(None),
+        };
+
+        let candidates = self.constructor_candidates_in_scope(ctor_name, scope);
 
         if candidates.is_empty() {
             return Ok(None);
@@ -935,7 +979,144 @@ impl<'a> Elaborator<'a> {
         })
     }
 
+    fn collect_module_candidates(&self, name: &str, module: &str) -> Vec<(String, Rc<Term>, bool)> {
+        let mut candidates = Vec::new();
+        let qualified = format!("{}.{}", module, name);
+
+        if self.env.get_inductive(&qualified).is_some() {
+            candidates.push((
+                qualified.clone(),
+                Rc::new(Term::Ind(qualified.clone(), vec![])),
+                false,
+            ));
+        }
+
+        if let Some(def) = self.env.get_definition(&qualified) {
+            let is_constructor_alias = def
+                .value
+                .as_ref()
+                .is_some_and(|value| matches!(&**value, Term::Ctor(_, _, _)));
+            if !is_constructor_alias {
+                candidates.push((
+                    qualified.clone(),
+                    Rc::new(Term::Const(qualified.clone(), vec![])),
+                    false,
+                ));
+            }
+        }
+
+        for ctor in self.constructor_candidates_in_scope(name, module) {
+            candidates.push((
+                format!("{}.{}", ctor.ind_name, name),
+                Rc::new(Term::Ctor(ctor.ind_name, ctor.index, vec![])),
+                true,
+            ));
+        }
+
+        candidates
+    }
+
+    fn dedup_candidates(
+        &self,
+        mut candidates: Vec<(String, Rc<Term>, bool)>,
+    ) -> Vec<(String, Rc<Term>, bool)> {
+        candidates.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+        candidates.dedup_by(|lhs, rhs| lhs.0 == rhs.0);
+        candidates
+    }
+
+    fn resolve_candidates(
+        &self,
+        name: &str,
+        span: Span,
+        candidates: Vec<(String, Rc<Term>, bool)>,
+    ) -> Result<Option<Rc<Term>>, ElabError> {
+        let candidates = self.dedup_candidates(candidates);
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+        if candidates.len() == 1 {
+            return Ok(Some(candidates[0].1.clone()));
+        }
+
+        // Constructor collisions must fail closed, even if there are mixed candidates.
+        // This preserves the "require qualification for ctor collisions" contract.
+        let mut ctor_labels: Vec<String> = candidates
+            .iter()
+            .filter(|(_, _, is_ctor)| *is_ctor)
+            .map(|(label, _, _)| label.clone())
+            .collect();
+        ctor_labels.sort();
+        ctor_labels.dedup();
+        if ctor_labels.len() > 1 {
+            return Err(ElabError::AmbiguousConstructor {
+                name: name.to_string(),
+                candidates: ctor_labels,
+                span,
+            });
+        }
+
+        let mut labels: Vec<String> = candidates.into_iter().map(|(label, _, _)| label).collect();
+        labels.sort();
+        labels.dedup();
+
+        Err(ElabError::AmbiguousName {
+            name: name.to_string(),
+            candidates: labels,
+            span,
+        })
+    }
+
+    fn prelude_candidates(&self, name: &str) -> Vec<(String, Rc<Term>, bool)> {
+        let mut candidates = Vec::new();
+        if self.env.get_inductive(name).is_some() {
+            candidates.push((
+                name.to_string(),
+                Rc::new(Term::Ind(name.to_string(), vec![])),
+                false,
+            ));
+        }
+        if let Some(def) = self.env.get_definition(name) {
+            let is_constructor_alias = def
+                .value
+                .as_ref()
+                .is_some_and(|value| matches!(&**value, Term::Ctor(_, _, _)));
+            if !is_constructor_alias {
+                candidates.push((
+                    name.to_string(),
+                    Rc::new(Term::Const(name.to_string(), vec![])),
+                    false,
+                ));
+            }
+        }
+        for ctor in self.env.constructor_candidates(name).iter() {
+            if ctor.ind_name.contains('.') {
+                continue;
+            }
+            candidates.push((
+                format!("{}.{}", ctor.ind_name, name),
+                Rc::new(Term::Ctor(ctor.ind_name.clone(), ctor.index, vec![])),
+                true,
+            ));
+        }
+        candidates
+    }
+
     fn resolve_name(&self, name: &str, span: Span) -> Result<Option<Rc<Term>>, ElabError> {
+        if name.contains('.') {
+            let rewritten = self.rewrite_qualified_name(name, span)?;
+            if self.env.get_inductive(&rewritten).is_some() {
+                return Ok(Some(Rc::new(Term::Ind(rewritten, vec![]))));
+            }
+            if self.env.get_definition(&rewritten).is_some() {
+                return Ok(Some(Rc::new(Term::Const(rewritten, vec![]))));
+            }
+            if let Some(ctor) = self.resolve_qualified_constructor(&rewritten, span)? {
+                return Ok(Some(ctor));
+            }
+            return Ok(None);
+        }
+
         for (i, (local_name, _)) in self.locals.iter().rev().enumerate() {
             if local_name == name {
                 return Ok(Some(Rc::new(Term::Var(i))));
@@ -943,73 +1124,32 @@ impl<'a> Elaborator<'a> {
         }
 
         if name == "Type" {
-            // "Type" in surface syntax is elaborated to kernel's Sort(Succ(Zero)) = Type 0
             return Ok(Some(Rc::new(Term::Sort(Level::Succ(Box::new(
                 Level::Zero,
             ))))));
         }
 
-        if name.contains('.') {
-            if self.env.get_inductive(name).is_some() {
-                return Ok(Some(Rc::new(Term::Ind(name.to_string(), vec![]))));
-            }
-            if self.env.get_definition(name).is_some() {
-                return Ok(Some(Rc::new(Term::Const(name.to_string(), vec![]))));
-            }
-            if let Some(ctor) = self.resolve_qualified_constructor(name, span)? {
-                return Ok(Some(ctor));
-            }
-            return Ok(None);
-        }
-
-        if self.env.get_inductive(name).is_some() {
-            return Ok(Some(Rc::new(Term::Ind(name.to_string(), vec![]))));
-        }
-
-        if self.env.get_definition(name).is_some() {
-            return Ok(Some(Rc::new(Term::Const(name.to_string(), vec![]))));
-        }
-
-        let imported_candidates = self.imported_name_candidates(name);
-        if imported_candidates.len() > 1 {
-            return Err(ElabError::AmbiguousName {
-                name: name.to_string(),
-                candidates: imported_candidates,
-                span,
-            });
-        }
-        if let Some(qualified) = imported_candidates.first() {
-            if self.env.get_inductive(qualified).is_some() {
-                return Ok(Some(Rc::new(Term::Ind(qualified.clone(), vec![]))));
-            }
-            if self.env.get_definition(qualified).is_some() {
-                return Ok(Some(Rc::new(Term::Const(qualified.clone(), vec![]))));
+        if let Some(module) = &self.current_module {
+            if let Some(term) =
+                self.resolve_candidates(name, span, self.collect_module_candidates(name, module))?
+            {
+                return Ok(Some(term));
             }
         }
 
-        let ctor_candidates = self.constructor_candidates_for_name(name);
-        if ctor_candidates.is_empty() {
-            return Ok(None);
+        let mut opened_candidates = Vec::new();
+        for module in &self.opened_modules {
+            opened_candidates.extend(self.collect_module_candidates(name, module));
         }
-        if ctor_candidates.len() == 1 {
-            let ctor = &ctor_candidates[0];
-            return Ok(Some(Rc::new(Term::Ctor(
-                ctor.ind_name.clone(),
-                ctor.index,
-                vec![],
-            ))));
+        if let Some(term) = self.resolve_candidates(name, span, opened_candidates)? {
+            return Ok(Some(term));
         }
-        let mut candidates: Vec<String> = ctor_candidates
-            .iter()
-            .map(|entry| format!("{}.{}", entry.ind_name, name))
-            .collect();
-        candidates.sort();
-        candidates.dedup();
-        Err(ElabError::AmbiguousConstructor {
-            name: name.to_string(),
-            candidates,
-            span,
-        })
+
+        if let Some(term) = self.resolve_candidates(name, span, self.prelude_candidates(name))? {
+            return Ok(Some(term));
+        }
+
+        Ok(None)
     }
 
     pub fn resolve_type_markers(
@@ -1743,16 +1883,25 @@ impl<'a> Elaborator<'a> {
     }
 
     fn coerce_fn_to_kind(
-        &self,
+        &mut self,
         term: Rc<Term>,
         arg_ty: Rc<Term>,
         info: kernel::ast::BinderInfo,
         kind: FunctionKind,
     ) -> Rc<Term> {
+        if let Term::Lam(_, body, lam_info, _) = &*term {
+            if *lam_info == info {
+                let coerced = Rc::new(Term::Lam(arg_ty, body.clone(), info, kind));
+                self.copy_metadata_if_any(&term, &coerced);
+                return coerced;
+            }
+        }
         let shifted_term = term.shift(0, 1);
         let arg = Term::var(0);
         let body = Term::app(shifted_term, arg);
-        Term::lam_with_kind(arg_ty, body, info, kind)
+        let coerced = Term::lam_with_kind(arg_ty, body, info, kind);
+        self.copy_metadata_if_any(&term, &coerced);
+        coerced
     }
 
     fn try_coerce_fn_to_kind(
@@ -2594,24 +2743,26 @@ impl<'a> Elaborator<'a> {
         }
 
         // Build motive as lambdas over indices then major.
-        // Lift the return type into the index-binder context, then add major,
-        // then wrap index binders without shifting (they're already accounted for).
+        // We attach capture/span metadata here because this motive is synthesized
+        // and may still capture surrounding locals in dependent matches.
         let index_count = index_types.len();
-        let mut motive = ret_type_elab.shift(0, index_count);
-        motive = Rc::new(Term::Lam(
-            major_ty.clone(),
-            motive.shift(0, 1),
-            kernel::ast::BinderInfo::Default,
-            FunctionKind::Fn,
-        ));
-        for ty in index_types.iter().rev() {
-            motive = Rc::new(Term::Lam(
+        let mut motive_binders = Vec::with_capacity(index_count + 1);
+        for (idx, ty) in index_types.iter().enumerate() {
+            motive_binders.push((
+                format!("_match_idx{}", idx),
                 ty.clone(),
-                motive,
                 kernel::ast::BinderInfo::Default,
                 FunctionKind::Fn,
             ));
         }
+        motive_binders.push((
+            "_match_major".to_string(),
+            major_ty.clone(),
+            kernel::ast::BinderInfo::Default,
+            FunctionKind::Fn,
+        ));
+        let motive =
+            self.wrap_synthesized_lambdas(&motive_binders, ret_type_elab.shift(0, index_count + 1), span)?;
 
         // Determine universe level from motive type
         let motive_ty = infer_type(self.env, &self.build_context(), motive.clone())
@@ -2662,7 +2813,7 @@ impl<'a> Elaborator<'a> {
                     let expected_binders = ctor_arg_count + recursive_args.len();
                     let (binders, result_ty) =
                         self.split_minor_premise(&minor_ty, expected_binders);
-                    self.elaborate_case(bindings, body, &binders, &result_ty)?
+                    self.elaborate_case(bindings, body, &binders, &result_ty, span)?
                 }
                 None => {
                     // Missing case - this is an error in a proper implementation
@@ -2726,12 +2877,43 @@ impl<'a> Elaborator<'a> {
     }
 
     /// Elaborate a single case branch against an expected minor premise type.
+    fn wrap_synthesized_lambdas(
+        &mut self,
+        binders: &[(String, Rc<Term>, kernel::ast::BinderInfo, FunctionKind)],
+        body: Rc<Term>,
+        span: Span,
+    ) -> Result<Rc<Term>, ElabError> {
+        let base_locals = self.locals.len();
+        for (name, ty, _, _) in binders.iter() {
+            self.locals.push((name.clone(), ty.clone()));
+        }
+
+        let wrapped = (|| -> Result<Rc<Term>, ElabError> {
+            let mut result = body;
+            for (_name, ty, info, kind) in binders.iter().rev() {
+                let ctx = self.build_context();
+                let (_, capture_modes) = self.analyze_closure_captures(&result, &ctx, false)?;
+                self.locals.pop();
+                let lam = Rc::new(Term::Lam(ty.clone(), result, *info, *kind));
+                self.record_capture_modes(&lam, capture_modes);
+                self.record_span(&lam, span);
+                result = lam;
+            }
+            Ok(result)
+        })();
+
+        self.locals.truncate(base_locals);
+        wrapped
+    }
+
+    /// Elaborate a single case branch against an expected minor premise type.
     fn elaborate_case(
         &mut self,
         bindings: &[String],
         body: &SurfaceTerm,
         binders: &[(Rc<Term>, kernel::ast::BinderInfo, FunctionKind)],
         result_ty: &Rc<Term>,
+        span: Span,
     ) -> Result<Rc<Term>, ElabError> {
         let explicit_arg_count = binders
             .iter()
@@ -2748,7 +2930,7 @@ impl<'a> Elaborator<'a> {
             bindings[..explicit_arg_count.min(bindings.len())].to_vec()
         };
 
-        let mut locals_added = 0;
+        let mut binder_names = Vec::with_capacity(binders.len());
         let mut binding_idx = 0;
         for (i, (arg_ty, info, _)) in binders.iter().enumerate() {
             let name = if *info == kernel::ast::BinderInfo::Default {
@@ -2761,23 +2943,24 @@ impl<'a> Elaborator<'a> {
             } else {
                 format!("_implicit{}", i)
             };
-            self.locals.push((name, arg_ty.clone()));
-            locals_added += 1;
+            self.locals.push((name.clone(), arg_ty.clone()));
+            binder_names.push(name);
         }
 
         let result_ty = self.whnf(result_ty.clone())?;
         let body_elab = self.check(body.clone(), &result_ty)?;
 
-        for _ in 0..locals_added {
+        for _ in 0..binders.len() {
             self.locals.pop();
         }
 
-        let mut result = body_elab;
-        for (arg_ty, info, kind) in binders.iter().rev() {
-            result = Rc::new(Term::Lam(arg_ty.clone(), result, *info, *kind));
-        }
+        let binder_specs: Vec<(String, Rc<Term>, kernel::ast::BinderInfo, FunctionKind)> = binders
+            .iter()
+            .zip(binder_names.iter())
+            .map(|((arg_ty, info, kind), name)| (name.clone(), arg_ty.clone(), *info, *kind))
+            .collect();
 
-        Ok(result)
+        self.wrap_synthesized_lambdas(&binder_specs, body_elab, span)
     }
 
     fn split_minor_premise(
@@ -3697,8 +3880,8 @@ mod tests {
         match &*coerced {
             Term::Lam(_, body, _, FunctionKind::FnOnce) => {
                 assert!(
-                    matches!(&**body, Term::App(_, _, _)),
-                    "coerced lambda should apply the original function"
+                    matches!(&**body, Term::Var(0) | Term::App(_, _, _)),
+                    "coerced lambda should preserve the original callable body"
                 );
             }
             other => panic!("expected FnOnce lambda, got {:?}", other),
@@ -3736,8 +3919,8 @@ mod tests {
         match &*coerced {
             Term::Lam(_, body, _, FunctionKind::FnMut) => {
                 assert!(
-                    matches!(&**body, Term::App(_, _, _)),
-                    "coerced lambda should apply the original function"
+                    matches!(&**body, Term::Var(0) | Term::App(_, _, _)),
+                    "coerced lambda should preserve the original callable body"
                 );
             }
             other => panic!("expected FnMut lambda, got {:?}", other),
@@ -3780,8 +3963,8 @@ mod tests {
         match &*coerced {
             Term::Lam(_, body, _, FunctionKind::FnOnce) => {
                 assert!(
-                    matches!(&**body, Term::App(_, _, _)),
-                    "coerced lambda should apply the original function"
+                    matches!(&**body, Term::Var(0) | Term::App(_, _, _)),
+                    "coerced lambda should preserve the original callable body"
                 );
             }
             other => panic!("expected FnOnce lambda, got {:?}", other),

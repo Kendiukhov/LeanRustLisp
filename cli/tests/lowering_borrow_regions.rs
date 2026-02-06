@@ -84,7 +84,8 @@ fn borrow_lowering_assigns_distinct_regions() {
     };
 
     let ids = IdRegistry::from_env(&env);
-    let mut ctx = LoweringContext::new(vec![("x".to_string(), arg_ty)], ret_ty, &env, &ids);
+    let mut ctx = LoweringContext::new(vec![("x".to_string(), arg_ty)], ret_ty, &env, &ids)
+        .expect("context init should succeed");
     let return_block = ctx.new_block();
     ctx.body.basic_blocks[return_block.index()].terminator = Some(Terminator::Return);
     ctx.lower_term(&body, Place::from(Local(0)), return_block)

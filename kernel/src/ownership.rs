@@ -257,4 +257,16 @@ mod tests {
         );
         assert!(check_ownership(&t, &mut ctx, UsageMode::Consuming).is_ok());
     }
+
+    #[test]
+    fn test_map_capture_modes_to_closures_ignores_orphan_pointer_metadata() {
+        let closure_ids = HashMap::new();
+        let mut pointer_modes = HashMap::new();
+        let mut modes = HashMap::new();
+        modes.insert(0usize, UsageMode::Consuming);
+        pointer_modes.insert(42usize, modes);
+
+        let mapped = map_capture_modes_to_closures(&closure_ids, &pointer_modes);
+        assert!(mapped.is_empty());
+    }
 }

@@ -1,0 +1,12 @@
+(def len (pi l ListRc Nat)
+  (lam l ListRc
+    (match l Nat
+      (case (nil_rc) zero)
+      (case (cons_rc h t ih) (succ ih)))))
+
+(def entry Nat
+  (print_nat
+    (len
+      (append
+        (cons_rc zero (cons_rc (succ zero) nil_rc))
+        (cons_rc (succ (succ zero)) nil_rc)))))

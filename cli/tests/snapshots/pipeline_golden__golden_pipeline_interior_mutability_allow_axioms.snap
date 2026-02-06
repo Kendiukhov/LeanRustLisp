@@ -18,7 +18,7 @@ DefEqConfig
 
 ElaboratedDef uses_refcell
   ty: Pi(App(Ind("RefCell", []), Ind("Foo", [])), Ind("Foo", []), Default, Fn)
-  val: Lam(App(Ind("RefCell", []), Ind("Foo", [])), Const("mk_foo", []), Default, Fn)
+  val: Lam(App(Ind("RefCell", []), Ind("Foo", [])), Ctor("Foo", 0, []), Default, Fn)
 
 MirBody uses_refcell
   Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Closure(0, []), ty: Closure(Region(1), [], [InteriorMutable(Adt(AdtId(Foo, 14277314895250841674), []), RefCell)], Adt(AdtId(Foo, 14277314895250841674), [])) })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Fn([], [InteriorMutable(Adt(AdtId(Foo, 14277314895250841674), []), RefCell)], Adt(AdtId(Foo, 14277314895250841674), [])), name: Some("_0"), is_prop: false, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {AdtId(Foo, 14277314895250841674): AdtLayout { adt: AdtId(Foo, 14277314895250841674), variants: [VariantLayout { ctor: CtorId { adt: AdtId(Foo, 14277314895250841674), index: 0 }, fields: [] }] }, AdtId(RefCell, 16116052685739653519): AdtLayout { adt: AdtId(RefCell, 16116052685739653519), variants: [VariantLayout { ctor: CtorId { adt: AdtId(RefCell, 16116052685739653519), index: 0 }, fields: [Param(0)] }] }} } }

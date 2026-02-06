@@ -4,7 +4,7 @@ use crate::{
     BasicBlock, Body, BorrowKind, CallOperand, Operand, Place, PlaceElem, RuntimeCheckKind, Rvalue,
     Statement, SwitchTargets, Terminator,
 };
-use kernel::ast::FunctionKind;
+use kernel::ast::{FunctionKind, Term};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -164,7 +164,7 @@ impl<'a> TypingChecker<'a> {
 
             let param_ty = &param_tys[0];
             let arg_ty = self.operand_type(arg);
-            if !self.types_compatible_call(param_ty, &arg_ty, &mut param_subst) {
+            if !self.types_compatible_call(param_ty, &arg_ty, &mut param_subst, false) {
                 self.errors.push(TypingError::new(
                     format!(
                         "Call argument type mismatch: expected {:?}, got {:?}",
@@ -188,7 +188,7 @@ impl<'a> TypingChecker<'a> {
 
         let expected_ret = self.substitute_type_params(&current_ty, &param_subst);
         let dest_ty = self.place_type(destination);
-        if !self.types_compatible_call(&expected_ret, &dest_ty, &mut param_subst) {
+        if !self.types_compatible_call(&expected_ret, &dest_ty, &mut param_subst, false) {
             let arg_types: Vec<MirType> = args.iter().map(|arg| self.operand_type(arg)).collect();
             let has_erased_arg = arg_types.iter().any(|ty| matches!(ty, MirType::Unit));
             if has_erased_arg && matches!(expected_ret, MirType::Fn(_, _, _, _)) {
@@ -686,6 +686,7 @@ impl<'a> TypingChecker<'a> {
         expected: &MirType,
         actual: &MirType,
         map: &mut HashMap<usize, MirType>,
+        in_ref: bool,
     ) -> bool {
         let expected = self.substitute_type_params(expected, map);
         let actual = self.substitute_type_params(actual, map);
@@ -698,7 +699,7 @@ impl<'a> TypingChecker<'a> {
                 if matches!(bound, MirType::Param(other) if other == idx) {
                     return true;
                 }
-                return self.types_compatible_call(&bound, &actual, map);
+                return self.types_compatible_call(&bound, &actual, map, in_ref);
             }
             map.insert(idx, actual);
             return true;
@@ -713,8 +714,11 @@ impl<'a> TypingChecker<'a> {
             {
                 return false;
             }
-            return !matches!(expected, MirType::Opaque { .. })
-                && !matches!(actual, MirType::Opaque { .. });
+            return matches!(
+                (&expected, &actual),
+                (MirType::Unit, MirType::Opaque { .. }) | (MirType::Opaque { .. }, MirType::Unit)
+            ) || (!matches!(expected, MirType::Opaque { .. })
+                && !matches!(actual, MirType::Opaque { .. }));
         }
 
         if matches!(expected, MirType::Opaque { .. }) || matches!(actual, MirType::Opaque { .. }) {
@@ -727,16 +731,18 @@ impl<'a> TypingChecker<'a> {
         match (&expected, &actual) {
             (MirType::Bool, MirType::Bool) | (MirType::Nat, MirType::Nat) => true,
             (MirType::Ref(_, e_inner, e_mut), MirType::Ref(_, a_inner, a_mut)) => {
-                e_mut == a_mut && self.types_compatible_call(e_inner, a_inner, map)
+                e_mut == a_mut && self.types_compatible_call(e_inner, a_inner, map, true)
             }
             (MirType::RawPtr(e_inner, e_mut), MirType::RawPtr(a_inner, a_mut)) => {
-                e_mut == a_mut && self.types_compatible_call(e_inner, a_inner, map)
+                e_mut == a_mut && self.types_compatible_call(e_inner, a_inner, map, false)
             }
             (
                 MirType::InteriorMutable(e_inner, e_kind),
                 MirType::InteriorMutable(a_inner, a_kind),
-            ) => e_kind == a_kind && self.types_compatible_call(e_inner, a_inner, map),
-            (MirType::IndexTerm(e_term), MirType::IndexTerm(a_term)) => e_term == a_term,
+            ) => e_kind == a_kind && self.types_compatible_call(e_inner, a_inner, map, false),
+            (MirType::IndexTerm(e_term), MirType::IndexTerm(a_term)) => {
+                self.call_index_terms_compatible(e_term, a_term)
+            }
             (MirType::IndexTerm(_), _) | (_, MirType::IndexTerm(_)) => false,
             (MirType::Adt(e_id, e_args), MirType::Adt(a_id, a_args)) => {
                 e_id == a_id
@@ -744,7 +750,7 @@ impl<'a> TypingChecker<'a> {
                     && e_args
                         .iter()
                         .zip(a_args.iter())
-                        .all(|(e, a)| self.types_compatible_call(e, a, map))
+                        .all(|(e, a)| self.types_compatible_call(e, a, map, false))
             }
             _ => {
                 if let (Some((e_kind, e_args, e_ret)), Some((a_kind, a_args, a_ret))) =
@@ -755,13 +761,21 @@ impl<'a> TypingChecker<'a> {
                         && e_args
                             .iter()
                             .zip(a_args.iter())
-                            .all(|(e, a)| self.types_compatible_call(e, a, map))
-                        && self.types_compatible_call(e_ret, a_ret, map)
+                            .all(|(e, a)| self.types_compatible_call(e, a, map, false))
+                        && self.types_compatible_call(e_ret, a_ret, map, false)
                 } else {
                     false
                 }
             }
         }
+    }
+
+    fn call_index_terms_compatible(
+        &self,
+        expected: &std::rc::Rc<Term>,
+        actual: &std::rc::Rc<Term>,
+    ) -> bool {
+        expected == actual || matches!(&**expected, Term::Var(_))
     }
 
     fn types_compatible(&self, expected: &MirType, actual: &MirType) -> bool {
@@ -934,7 +948,7 @@ mod tests {
             statements: vec![],
             terminator: Some(Terminator::Call {
                 func: CallOperand::Borrow(BorrowKind::Shared, Place::from(Local(1))),
-                args: vec![Operand::Copy(Place::from(Local(2)))],
+                args: vec![Operand::Move(Place::from(Local(2)))],
                 destination: Place::from(Local(0)),
                 target: Some(BasicBlock(1)),
             }),
@@ -976,7 +990,7 @@ mod tests {
             )],
             terminator: Some(Terminator::Call {
                 func: CallOperand::Borrow(BorrowKind::Shared, Place::from(Local(1))),
-                args: vec![Operand::Copy(Place::from(Local(2)))],
+                args: vec![Operand::Move(Place::from(Local(2)))],
                 destination: Place::from(Local(0)),
                 target: Some(BasicBlock(1)),
             }),
@@ -1112,6 +1126,331 @@ mod tests {
         assert!(
             checker.errors().is_empty(),
             "Expected type-param call to type-check after specialization, got {:?}",
+            checker.errors()
+        );
+    }
+
+    #[test]
+    fn typing_accepts_multi_arg_type_param_specialization() {
+        let mut body = body_with_locals(vec![
+            MirType::Nat, // _0: destination
+            MirType::Fn(
+                FunctionKind::Fn,
+                Vec::new(),
+                vec![MirType::Param(0), MirType::Param(0)],
+                Box::new(MirType::Param(0)),
+            ), // _1: fn(T, T) -> T
+            MirType::Nat, // _2: first argument
+            MirType::Nat, // _3: second argument
+        ]);
+
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![
+                Statement::Assign(Place::from(Local(2)), Rvalue::Use(nat_const(1))),
+                Statement::Assign(Place::from(Local(3)), Rvalue::Use(nat_const(2))),
+            ],
+            terminator: Some(Terminator::Call {
+                func: CallOperand::Borrow(BorrowKind::Shared, Place::from(Local(1))),
+                args: vec![
+                    Operand::Copy(Place::from(Local(2))),
+                    Operand::Copy(Place::from(Local(3))),
+                ],
+                destination: Place::from(Local(0)),
+                target: Some(BasicBlock(1)),
+            }),
+        });
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Return),
+        });
+
+        let mut checker = TypingChecker::new(&body);
+        checker.check();
+        assert!(
+            checker.errors().is_empty(),
+            "Expected multi-arg Param specialization to type-check, got {:?}",
+            checker.errors()
+        );
+    }
+
+    #[test]
+    fn typing_rejects_multi_arg_type_param_inconsistent_binding() {
+        let mut body = body_with_locals(vec![
+            MirType::Nat, // _0: destination
+            MirType::Fn(
+                FunctionKind::Fn,
+                Vec::new(),
+                vec![MirType::Param(0), MirType::Param(0)],
+                Box::new(MirType::Param(0)),
+            ), // _1: fn(T, T) -> T
+            MirType::Nat, // _2: first argument
+            MirType::Bool, // _3: second argument (mismatch)
+        ]);
+
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![
+                Statement::Assign(Place::from(Local(2)), Rvalue::Use(nat_const(1))),
+                Statement::Assign(
+                    Place::from(Local(3)),
+                    Rvalue::Use(Operand::Constant(Box::new(Constant {
+                        literal: Literal::Bool(true),
+                        ty: MirType::Bool,
+                    }))),
+                ),
+            ],
+            terminator: Some(Terminator::Call {
+                func: CallOperand::Borrow(BorrowKind::Shared, Place::from(Local(1))),
+                args: vec![
+                    Operand::Copy(Place::from(Local(2))),
+                    Operand::Copy(Place::from(Local(3))),
+                ],
+                destination: Place::from(Local(0)),
+                target: Some(BasicBlock(1)),
+            }),
+        });
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Return),
+        });
+
+        let mut checker = TypingChecker::new(&body);
+        checker.check();
+        assert!(
+            checker
+                .errors()
+                .iter()
+                .any(|e| e.to_string().contains("Call argument type mismatch")),
+            "Expected multi-arg Param binding mismatch error, got {:?}",
+            checker.errors()
+        );
+    }
+
+    #[test]
+    fn typing_accepts_call_with_index_var_and_erased_opaque_arg() {
+        let eq_id = AdtId::new("Eq");
+        let unit_id = AdtId::new("Unit");
+        let unit_ctor = Term::ctor("Unit".to_string(), 0);
+        let mut body = body_with_locals(vec![
+            MirType::Adt(
+                eq_id.clone(),
+                vec![
+                    MirType::Adt(unit_id.clone(), vec![]),
+                    MirType::Opaque {
+                        reason: "ctor Unit".to_string(),
+                    },
+                    MirType::IndexTerm(unit_ctor.clone()),
+                ],
+            ), // _0: destination Eq Unit unit unit
+            MirType::Fn(
+                FunctionKind::Fn,
+                Vec::new(),
+                vec![MirType::Param(0)],
+                Box::new(MirType::Adt(
+                    eq_id,
+                    vec![
+                        MirType::Param(0),
+                        MirType::Unit,
+                        MirType::IndexTerm(Term::var(0)),
+                    ],
+                )),
+            ), // _1: fn(T) -> Eq T unit v0
+            MirType::Adt(unit_id, vec![]), // _2: argument Unit
+        ]);
+
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Call {
+                func: CallOperand::Borrow(BorrowKind::Shared, Place::from(Local(1))),
+                args: vec![Operand::Move(Place::from(Local(2)))],
+                destination: Place::from(Local(0)),
+                target: Some(BasicBlock(1)),
+            }),
+        });
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Return),
+        });
+
+        let mut checker = TypingChecker::new(&body);
+        checker.check();
+        assert!(
+            checker.errors().is_empty(),
+            "Expected call typing to accept index var + erased opaque compatibility, got {:?}",
+            checker.errors()
+        );
+    }
+
+    #[test]
+    fn typing_accepts_type_param_specialized_adt_call() {
+        let list_id = AdtId::new("List");
+        let mut body = body_with_locals(vec![
+            MirType::Adt(list_id.clone(), vec![MirType::Nat]), // _0: destination
+            MirType::Fn(
+                FunctionKind::Fn,
+                Vec::new(),
+                vec![MirType::Adt(list_id.clone(), vec![MirType::Param(0)])],
+                Box::new(MirType::Adt(list_id, vec![MirType::Param(0)])),
+            ), // _1: fn(List<T>) -> List<T>
+            MirType::Adt(AdtId::new("List"), vec![MirType::Nat]), // _2: argument
+        ]);
+
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Call {
+                func: CallOperand::Borrow(BorrowKind::Shared, Place::from(Local(1))),
+                args: vec![Operand::Move(Place::from(Local(2)))],
+                destination: Place::from(Local(0)),
+                target: Some(BasicBlock(1)),
+            }),
+        });
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Return),
+        });
+
+        let mut checker = TypingChecker::new(&body);
+        checker.check();
+        assert!(
+            checker.errors().is_empty(),
+            "Expected ADT type-param call to type-check, got {:?}",
+            checker.errors()
+        );
+    }
+
+    #[test]
+    fn typing_accepts_append_style_generic_adt_call() {
+        let list_id = AdtId::new("List2");
+        let mut body = body_with_locals(vec![
+            MirType::Adt(list_id.clone(), vec![MirType::Nat]), // _0: destination
+            MirType::Fn(
+                FunctionKind::Fn,
+                Vec::new(),
+                vec![
+                    MirType::Adt(list_id.clone(), vec![MirType::Param(0)]),
+                    MirType::Adt(list_id.clone(), vec![MirType::Param(0)]),
+                ],
+                Box::new(MirType::Adt(list_id, vec![MirType::Param(0)])),
+            ), // _1: fn(List2<T>, List2<T>) -> List2<T>
+            MirType::Adt(AdtId::new("List2"), vec![MirType::Nat]), // _2: first argument
+            MirType::Adt(AdtId::new("List2"), vec![MirType::Nat]), // _3: second argument
+        ]);
+
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Call {
+                func: CallOperand::Borrow(BorrowKind::Shared, Place::from(Local(1))),
+                args: vec![
+                    Operand::Move(Place::from(Local(2))),
+                    Operand::Move(Place::from(Local(3))),
+                ],
+                destination: Place::from(Local(0)),
+                target: Some(BasicBlock(1)),
+            }),
+        });
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Return),
+        });
+
+        let mut checker = TypingChecker::new(&body);
+        checker.check();
+        assert!(
+            checker.errors().is_empty(),
+            "Expected append-style generic ADT call to type-check, got {:?}",
+            checker.errors()
+        );
+    }
+
+    #[test]
+    fn typing_accepts_type_param_specialization_through_ref_payload() {
+        let mut body = body_with_locals(vec![
+            MirType::Ref(Region(3), Box::new(MirType::Nat), Mutability::Not), // _0: destination
+            MirType::Fn(
+                FunctionKind::Fn,
+                Vec::new(),
+                vec![MirType::Ref(
+                    Region(9),
+                    Box::new(MirType::Param(0)),
+                    Mutability::Not,
+                )],
+                Box::new(MirType::Ref(
+                    Region(9),
+                    Box::new(MirType::Param(0)),
+                    Mutability::Not,
+                )),
+            ), // _1: fn(&T) -> &T
+            MirType::Ref(Region(4), Box::new(MirType::Nat), Mutability::Not), // _2: argument
+        ]);
+
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Call {
+                func: CallOperand::Borrow(BorrowKind::Shared, Place::from(Local(1))),
+                args: vec![Operand::Copy(Place::from(Local(2)))],
+                destination: Place::from(Local(0)),
+                target: Some(BasicBlock(1)),
+            }),
+        });
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Return),
+        });
+
+        let mut checker = TypingChecker::new(&body);
+        checker.check();
+        assert!(
+            checker.errors().is_empty(),
+            "Expected reference payload specialization to type-check, got {:?}",
+            checker.errors()
+        );
+    }
+
+    #[test]
+    fn typing_rejects_inconsistent_type_param_binding_through_ref_payload() {
+        let mut body = body_with_locals(vec![
+            MirType::Ref(Region(3), Box::new(MirType::Nat), Mutability::Not), // _0: destination
+            MirType::Fn(
+                FunctionKind::Fn,
+                Vec::new(),
+                vec![
+                    MirType::Ref(Region(9), Box::new(MirType::Param(0)), Mutability::Not),
+                    MirType::Ref(Region(9), Box::new(MirType::Param(0)), Mutability::Not),
+                ],
+                Box::new(MirType::Ref(
+                    Region(9),
+                    Box::new(MirType::Param(0)),
+                    Mutability::Not,
+                )),
+            ), // _1: fn(&T, &T) -> &T
+            MirType::Ref(Region(4), Box::new(MirType::Nat), Mutability::Not), // _2: first argument
+            MirType::Ref(Region(5), Box::new(MirType::Bool), Mutability::Not), // _3: second argument mismatch
+        ]);
+
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Call {
+                func: CallOperand::Borrow(BorrowKind::Shared, Place::from(Local(1))),
+                args: vec![
+                    Operand::Copy(Place::from(Local(2))),
+                    Operand::Copy(Place::from(Local(3))),
+                ],
+                destination: Place::from(Local(0)),
+                target: Some(BasicBlock(1)),
+            }),
+        });
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Return),
+        });
+
+        let mut checker = TypingChecker::new(&body);
+        checker.check();
+        assert!(
+            checker
+                .errors()
+                .iter()
+                .any(|e| e.to_string().contains("Call argument type mismatch")),
+            "Expected inconsistent ref payload binding to be rejected, got {:?}",
             checker.errors()
         );
     }

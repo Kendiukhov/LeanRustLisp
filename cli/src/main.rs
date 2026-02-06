@@ -70,7 +70,7 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
         /// Select codegen backend
-        #[arg(long, value_enum, default_value_t = compiler::BackendMode::Dynamic)]
+        #[arg(long, value_enum, default_value_t = compiler::BackendMode::Auto)]
         backend: compiler::BackendMode,
     },
     /// Compile a file to Rust using the typed-backend prelude only
@@ -84,7 +84,7 @@ enum Commands {
     CompileMir {
         file: String,
         /// Select codegen backend
-        #[arg(long, value_enum, default_value_t = compiler::BackendMode::Dynamic)]
+        #[arg(long, value_enum, default_value_t = compiler::BackendMode::Auto)]
         backend: compiler::BackendMode,
     },
 }

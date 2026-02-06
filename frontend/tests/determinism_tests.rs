@@ -546,7 +546,67 @@ fn test_import_module_declaration() {
 
     assert_eq!(decls.len(), 1);
     match &decls[0] {
-        Declaration::ImportModule { module } => assert_eq!(module, "Alpha"),
+        Declaration::ImportModule { module, alias } => {
+            assert_eq!(module, "Alpha");
+            assert_eq!(alias, &None);
+        }
         other => panic!("Expected ImportModule, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_import_module_alias_declaration() {
+    let input = "(import std.list as List)";
+
+    let mut expander = Expander::new();
+    let mut parser = Parser::new(input);
+    let syntax_nodes = parser.parse().expect("Parse");
+
+    let mut decl_parser = DeclarationParser::new(&mut expander);
+    let decls = decl_parser.parse(syntax_nodes).expect("Parse decls");
+
+    assert_eq!(decls.len(), 1);
+    match &decls[0] {
+        Declaration::ImportModule { module, alias } => {
+            assert_eq!(module, "std.list");
+            assert_eq!(alias.as_deref(), Some("List"));
+        }
+        other => panic!("Expected ImportModule, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_module_declaration() {
+    let input = "(module std.list)";
+
+    let mut expander = Expander::new();
+    let mut parser = Parser::new(input);
+    let syntax_nodes = parser.parse().expect("Parse");
+
+    let mut decl_parser = DeclarationParser::new(&mut expander);
+    let decls = decl_parser.parse(syntax_nodes).expect("Parse decls");
+
+    assert_eq!(decls.len(), 1);
+    match &decls[0] {
+        Declaration::Module { name } => assert_eq!(name, "std.list"),
+        other => panic!("Expected Module, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_open_module_declaration() {
+    let input = "(open List)";
+
+    let mut expander = Expander::new();
+    let mut parser = Parser::new(input);
+    let syntax_nodes = parser.parse().expect("Parse");
+
+    let mut decl_parser = DeclarationParser::new(&mut expander);
+    let decls = decl_parser.parse(syntax_nodes).expect("Parse decls");
+
+    assert_eq!(decls.len(), 1);
+    match &decls[0] {
+        Declaration::OpenModule { target } => assert_eq!(target, "List"),
+        other => panic!("Expected OpenModule, got {:?}", other),
     }
 }

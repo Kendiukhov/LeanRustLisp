@@ -1,0 +1,15 @@
+(def not_b (pi b Bool Bool)
+  (lam b Bool
+    (match b Bool
+      (case (true) false)
+      (case (false) true))))
+
+(def and_b (pi a Bool (pi b Bool Bool))
+  (lam a Bool
+    (lam b Bool
+      (match a Bool
+        (case (true) b)
+        (case (false) false)))))
+
+(def entry Bool
+  (print_bool (and_b true (not_b false))))

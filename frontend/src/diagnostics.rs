@@ -1,6 +1,10 @@
 use crate::surface::Span;
 use std::fmt;
 
+fn is_unknown_span(span: Span) -> bool {
+    span.start == 0 && span.end == 0 && span.line == 0 && span.col == 0
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
     Error,
@@ -52,12 +56,16 @@ impl Diagnostic {
     }
 
     pub fn with_span(mut self, span: Span) -> Self {
-        self.span = Some(span);
+        if !is_unknown_span(span) {
+            self.span = Some(span);
+        }
         self
     }
 
     pub fn with_label(mut self, span: Span, message: String) -> Self {
-        self.labels.push((span, message));
+        if !is_unknown_span(span) {
+            self.labels.push((span, message));
+        }
         self
     }
 
@@ -93,5 +101,33 @@ impl DiagnosticCollector {
 impl DiagnosticHandler for DiagnosticCollector {
     fn handle(&mut self, diagnostic: Diagnostic) {
         self.diagnostics.push(diagnostic);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_span_ignores_unknown_sentinel_span() {
+        let diagnostic = Diagnostic::error("test".to_string()).with_span(Span {
+            start: 0,
+            end: 0,
+            line: 0,
+            col: 0,
+        });
+        assert!(diagnostic.span.is_none());
+    }
+
+    #[test]
+    fn with_span_keeps_real_zero_offset_span() {
+        let span = Span {
+            start: 0,
+            end: 0,
+            line: 1,
+            col: 0,
+        };
+        let diagnostic = Diagnostic::error("test".to_string()).with_span(span);
+        assert_eq!(diagnostic.span, Some(span));
     }
 }

@@ -115,7 +115,7 @@ If you add or change a code, update this file and keep the mapping stable.
 - `M204`: `BorrowError::EscapingReference`
 - `M205`: `BorrowError::MutateSharedRef`
 - `M206`: `BorrowError::AssignWhileBorrowed`
-- `M207`: `BorrowError::MissingSyntheticRegion`
+- `M207`: `BorrowError::InternalInvariant`
 - `M300`: MIR typing errors (`TypingChecker`)
 
 ## CLI Driver (`C000x`)

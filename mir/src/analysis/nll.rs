@@ -1009,8 +1009,12 @@ impl<'a> NllChecker<'a> {
         if let Some(region) = self.synthetic_borrow_regions.get(&dest.local).copied() {
             return Some(region);
         }
-        self.errors.push(BorrowError::MissingSyntheticRegion {
-            local: dest.local,
+        self.errors.push(BorrowError::InternalInvariant {
+            invariant: "synthetic borrow region exists for reference assignment destination",
+            evidence: format!(
+                "destination local _{} has type {:?} but no synthetic borrow region mapping",
+                dest.local.0, dest_ty
+            ),
             location: Some(MirSpan {
                 block: loc.block,
                 statement_index: loc.statement_index,
@@ -2367,7 +2371,7 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_synthetic_region_reports_error() {
+    fn test_missing_synthetic_region_reports_internal_invariant() {
         let mut body = Body::new(1);
         body.local_decls.push(LocalDecl::new(MirType::Nat, None));
         body.local_decls.push(LocalDecl::new(MirType::Nat, None));
@@ -2387,12 +2391,33 @@ mod tests {
         checker.synthetic_borrow_regions.clear();
         checker.check_with_assigned_regions();
 
+        let invariant_error = checker.errors.iter().find_map(|e| match e {
+            BorrowError::InternalInvariant {
+                invariant,
+                evidence,
+                location,
+                ..
+            } => Some((invariant, evidence, location)),
+            _ => None,
+        });
+
+        let (invariant, evidence, location) = invariant_error
+            .expect("expected internal invariant diagnostic for missing synthetic region");
+        assert_eq!(
+            *invariant,
+            "synthetic borrow region exists for reference assignment destination"
+        );
         assert!(
-            checker
-                .errors
-                .iter()
-                .any(|e| matches!(e, BorrowError::MissingSyntheticRegion { .. })),
-            "Expected missing synthetic region diagnostic"
+            evidence.contains("destination local _2"),
+            "expected evidence to mention destination local, got: {}",
+            evidence
+        );
+        assert_eq!(
+            *location,
+            Some(MirSpan {
+                block: BasicBlock(0),
+                statement_index: 0,
+            })
         );
     }
 

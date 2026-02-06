@@ -1,0 +1,11 @@
+(def dyn_to_nat (pi d Dyn Nat)
+  (lam d Dyn
+    (match d Nat
+      (case (dyn_nat n) n)
+      (case (dyn_bool b) zero)
+      (case (dyn_unit) zero))))
+
+(unsafe entry Nat
+  (print_nat
+    (dyn_to_nat
+      (eval (dyn_nat (succ (succ zero))) eval_cap))))

@@ -162,6 +162,8 @@ const RESERVED_MACRO_NAMES: &[&str] = &[
     "import-macros",
     "inductive",
     "instance",
+    "module",
+    "open",
     "opaque",
     "partial",
     "noncomputable",
@@ -211,7 +213,6 @@ pub struct Expander {
     modules: BTreeMap<String, MacroModule>, // module -> macros/imports
     current_module: String,
     default_imports: BTreeSet<String>,
-    env_version: u64,
     last_env_version: Option<u64>,
     pub expansion_trace: Vec<(String, Span)>,
     pending_diagnostics: Vec<Diagnostic>,
@@ -221,7 +222,7 @@ pub struct Expander {
     expansion_step_limit: usize,
     expansion_depth_limit: usize,
     expansion_cache: HashMap<String, Syntax>,
-    expansion_cache_env_version: Option<u64>,
+    expansion_cache_env_fingerprint: Option<String>,
     active_macro_keys: BTreeSet<String>,
     macro_call_stack: Vec<MacroCallFrame>,
     pub verbose: bool,
@@ -235,7 +236,6 @@ impl Expander {
             modules: BTreeMap::new(),
             current_module: "repl".to_string(),
             default_imports: BTreeSet::new(),
-            env_version: 0,
             last_env_version: None,
             expansion_trace: Vec::new(),
             pending_diagnostics: Vec::new(),
@@ -245,7 +245,7 @@ impl Expander {
             expansion_step_limit: DEFAULT_EXPANSION_STEP_LIMIT,
             expansion_depth_limit: DEFAULT_EXPANSION_DEPTH_LIMIT,
             expansion_cache: HashMap::new(),
-            expansion_cache_env_version: None,
+            expansion_cache_env_fingerprint: None,
             active_macro_keys: BTreeSet::new(),
             macro_call_stack: Vec::new(),
             verbose: false,
@@ -329,7 +329,6 @@ impl Expander {
         I: IntoIterator<Item = String>,
     {
         self.default_imports = imports.into_iter().collect();
-        let mut version_bumps = 0u64;
         for (module, env) in self.modules.iter_mut() {
             let mut changed = false;
             for import in &self.default_imports {
@@ -342,11 +341,7 @@ impl Expander {
             }
             if changed {
                 env.version = env.version.saturating_add(1);
-                version_bumps = version_bumps.saturating_add(1);
             }
-        }
-        if version_bumps > 0 {
-            self.env_version = self.env_version.saturating_add(version_bumps);
         }
     }
 
@@ -358,21 +353,81 @@ impl Expander {
         let env = self.ensure_module(&self.current_module.clone());
         if env.imports.insert(module.clone()) {
             env.version = env.version.saturating_add(1);
-            self.env_version = self.env_version.saturating_add(1);
         }
     }
 
-    pub fn macro_env_version(&self) -> u64 {
-        let mut version = 0u64;
-        if let Some(env) = self.modules.get(&self.current_module) {
-            version = version.wrapping_add(env.version);
-            for import in &env.imports {
-                if let Some(import_env) = self.modules.get(import) {
-                    version = version.wrapping_add(import_env.version);
+    fn stable_fingerprint_hash(fingerprint: &str) -> u64 {
+        const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x00000100000001B3;
+
+        let mut hash = FNV_OFFSET_BASIS;
+        for byte in fingerprint.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        hash
+    }
+
+    fn collect_transitive_module_ids(&self, root_module: &str) -> BTreeSet<String> {
+        // Use a stable set to ensure deterministic ordering independent of
+        // module insertion order in the current process.
+        let mut reachable = BTreeSet::new();
+        let mut pending = vec![root_module.to_string()];
+
+        while let Some(module_id) = pending.pop() {
+            if !reachable.insert(module_id.clone()) {
+                continue;
+            }
+
+            if let Some(env) = self.modules.get(&module_id) {
+                for import in env.imports.iter().rev() {
+                    if !reachable.contains(import) {
+                        pending.push(import.clone());
+                    }
                 }
             }
         }
-        version
+
+        reachable
+    }
+
+    fn macro_env_fingerprint(&self) -> String {
+        // Cache invalidation is keyed by the full transitive macro environment,
+        // not only direct imports, so downstream import changes are observed.
+        let transitive_modules = self.collect_transitive_module_ids(&self.current_module);
+        let mut fingerprint = String::new();
+
+        fingerprint.push_str("macro-env-v2|");
+        Self::append_text_key(&mut fingerprint, &self.current_module);
+        fingerprint.push('|');
+        fingerprint.push_str(&transitive_modules.len().to_string());
+        fingerprint.push('|');
+
+        for module_id in transitive_modules {
+            Self::append_text_key(&mut fingerprint, &module_id);
+            fingerprint.push('#');
+
+            if let Some(env) = self.modules.get(&module_id) {
+                fingerprint.push_str(&env.version.to_string());
+                fingerprint.push('#');
+                fingerprint.push_str(&env.imports.len().to_string());
+                fingerprint.push('#');
+                for import in &env.imports {
+                    Self::append_text_key(&mut fingerprint, import);
+                    fingerprint.push(',');
+                }
+            } else {
+                fingerprint.push_str("missing");
+            }
+
+            fingerprint.push('|');
+        }
+
+        fingerprint
+    }
+
+    pub fn macro_env_version(&self) -> u64 {
+        Self::stable_fingerprint_hash(&self.macro_env_fingerprint())
     }
 
     pub fn last_expansion_env_version(&self) -> Option<u64> {
@@ -511,7 +566,6 @@ impl Expander {
             },
         );
         env.version = env.version.saturating_add(1);
-        self.env_version = self.env_version.saturating_add(1);
     }
 
     pub fn take_expansion_trace(&mut self) -> Vec<MacroTraceEntry> {
@@ -575,16 +629,18 @@ impl Expander {
         self.pending_diagnostics.push(diagnostic);
     }
 
-    fn ensure_expansion_cache_version(&mut self) {
-        let version = self.macro_env_version();
-        if self.expansion_cache_env_version != Some(version) {
+    fn ensure_expansion_cache_fingerprint(&mut self) {
+        let fingerprint = self.macro_env_fingerprint();
+        // A changed fingerprint means at least one transitive module dependency
+        // changed, so cached expansions are no longer valid.
+        if self.expansion_cache_env_fingerprint.as_ref() != Some(&fingerprint) {
             self.expansion_cache.clear();
-            self.expansion_cache_env_version = Some(version);
+            self.expansion_cache_env_fingerprint = Some(fingerprint);
         }
     }
 
     fn begin_expansion_session(&mut self) {
-        self.ensure_expansion_cache_version();
+        self.ensure_expansion_cache_fingerprint();
         self.expansion_trace.clear();
         self.active_macro_keys.clear();
         self.macro_call_stack.clear();
@@ -1680,5 +1736,114 @@ impl Expander {
             span,
             scopes: syntax.scopes.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::Parser;
+
+    fn parse_single(input: &str) -> Syntax {
+        let mut parser = Parser::new(input);
+        let mut nodes = parser.parse().expect("parse should succeed");
+        assert_eq!(nodes.len(), 1, "expected a single syntax node");
+        nodes.remove(0)
+    }
+
+    #[test]
+    fn transitive_import_change_invalidates_expansion_cache() {
+        let mut expander = Expander::new();
+
+        expander.enter_module("c");
+        expander.add_macro("leaf".to_string(), vec![], parse_single("1"));
+
+        expander.enter_module("b");
+        expander.import_module("c".to_string());
+
+        expander.enter_module("a");
+        expander.import_module("b".to_string());
+        expander.add_macro("id".to_string(), vec!["x".to_string()], parse_single("x"));
+
+        let call = parse_single("(id 0)");
+        let _ = expander
+            .expand_all_macros(call)
+            .expect("macro expansion should succeed")
+            .expect("macro call should produce syntax");
+        assert!(
+            !expander.expansion_cache.is_empty(),
+            "expansion cache should be populated after macro expansion"
+        );
+
+        expander
+            .expansion_cache
+            .insert("sentinel".to_string(), parse_single("999"));
+        let before = expander.macro_env_fingerprint();
+
+        expander.enter_module("c");
+        expander.add_macro("leaf".to_string(), vec![], parse_single("2"));
+
+        expander.enter_module("a");
+        let after = expander.macro_env_fingerprint();
+        assert_ne!(
+            before, after,
+            "changing module C must change A's transitive env fingerprint"
+        );
+
+        expander.begin_expansion_session();
+        assert!(
+            !expander.expansion_cache.contains_key("sentinel"),
+            "cache entries must be cleared when transitive fingerprint changes"
+        );
+        assert_eq!(
+            expander.expansion_cache_env_fingerprint.as_deref(),
+            Some(after.as_str())
+        );
+    }
+
+    fn build_equivalent_graph_order_a() -> Expander {
+        let mut expander = Expander::new();
+
+        expander.enter_module("c");
+        expander.add_macro("leaf".to_string(), vec![], parse_single("1"));
+
+        expander.enter_module("b");
+        expander.import_module("c".to_string());
+
+        expander.enter_module("a");
+        expander.import_module("b".to_string());
+
+        expander
+    }
+
+    fn build_equivalent_graph_order_b() -> Expander {
+        let mut expander = Expander::new();
+
+        expander.enter_module("b");
+        expander.import_module("c".to_string());
+
+        expander.enter_module("a");
+        expander.import_module("b".to_string());
+
+        expander.enter_module("c");
+        expander.add_macro("leaf".to_string(), vec![], parse_single("1"));
+
+        expander
+    }
+
+    #[test]
+    fn macro_env_fingerprint_is_deterministic_for_equivalent_graphs() {
+        let mut first = build_equivalent_graph_order_a();
+        first.enter_module("a");
+        let first_fingerprint = first.macro_env_fingerprint();
+
+        let mut second = build_equivalent_graph_order_b();
+        second.enter_module("a");
+        let second_fingerprint = second.macro_env_fingerprint();
+
+        assert_eq!(
+            first_fingerprint, second_fingerprint,
+            "equivalent module graphs must produce identical fingerprints"
+        );
     }
 }

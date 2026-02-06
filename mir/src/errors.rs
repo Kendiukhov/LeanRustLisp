@@ -235,9 +235,10 @@ pub enum BorrowError {
         location: Option<MirSpan>,
         context: BorrowErrorContext,
     },
-    /// Internal error: synthetic region missing during NLL
-    MissingSyntheticRegion {
-        local: Local,
+    /// Internal invariant violation during borrow checking
+    InternalInvariant {
+        invariant: &'static str,
+        evidence: String,
         location: Option<MirSpan>,
         context: BorrowErrorContext,
     },
@@ -253,7 +254,7 @@ impl BorrowError {
             BorrowError::EscapingReference { .. } => "M204",
             BorrowError::MutateSharedRef { .. } => "M205",
             BorrowError::AssignWhileBorrowed { .. } => "M206",
-            BorrowError::MissingSyntheticRegion { .. } => "M207",
+            BorrowError::InternalInvariant { .. } => "M207",
         }
     }
 }
@@ -382,18 +383,18 @@ impl fmt::Display for BorrowError {
                 )?;
                 append_borrow_context(f, context)
             }
-            BorrowError::MissingSyntheticRegion {
-                local,
+            BorrowError::InternalInvariant {
+                invariant,
+                evidence,
                 location,
                 context,
             } => {
-                write!(
-                    f,
-                    "internal NLL error: missing synthetic borrow region for local _{}",
-                    local.0
-                )?;
+                write!(f, "internal NLL invariant violated: {}", invariant)?;
                 if let Some(loc) = location {
                     write!(f, " at {}", loc)?;
+                }
+                if !evidence.is_empty() {
+                    write!(f, "\n  note: evidence: {}", evidence)?;
                 }
                 write!(
                     f,
@@ -415,7 +416,7 @@ impl BorrowError {
             | BorrowError::EscapingReference { location, .. }
             | BorrowError::MutateSharedRef { location, .. }
             | BorrowError::AssignWhileBorrowed { location, .. }
-            | BorrowError::MissingSyntheticRegion { location, .. } => *location,
+            | BorrowError::InternalInvariant { location, .. } => *location,
         }
     }
 }

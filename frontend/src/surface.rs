@@ -238,9 +238,16 @@ pub enum Declaration {
         args: Vec<String>,
         body: Syntax,
     },
+    Module {
+        name: String,
+    },
     ImportClassical,
     ImportModule {
         module: String,
+        alias: Option<String>,
+    },
+    OpenModule {
+        target: String,
     },
     Expr(SurfaceTerm),
 }

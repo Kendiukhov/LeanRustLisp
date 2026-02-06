@@ -6413,6 +6413,20 @@ mod tests {
             .expect("Failed to init marker registry");
     }
 
+    fn add_nullary_constructor_inductive(env: &mut Env, ind_name: &str, ctor_name: &str) {
+        let type0 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
+        let ind = Rc::new(Term::Ind(ind_name.to_string(), vec![]));
+        env.add_inductive(InductiveDecl::new_copy(
+            ind_name.to_string(),
+            type0,
+            vec![Constructor {
+                name: ctor_name.to_string(),
+                ty: ind,
+            }],
+        ))
+        .expect("Failed to add test inductive");
+    }
+
     #[test]
     fn test_effect_boundaries() {
         let mut env = Env::new();
@@ -6982,5 +6996,33 @@ mod tests {
 
         let stored = env.get_definition("use_ab").unwrap();
         assert_eq!(stored.axioms, vec!["A".to_string(), "B".to_string()]);
+    }
+
+    #[test]
+    fn test_constructor_candidates_deterministic_across_decl_order() {
+        let mut first = Env::new();
+        add_nullary_constructor_inductive(&mut first, "Foo", "mk");
+        add_nullary_constructor_inductive(&mut first, "Bar", "mk");
+
+        let mut second = Env::new();
+        add_nullary_constructor_inductive(&mut second, "Bar", "mk");
+        add_nullary_constructor_inductive(&mut second, "Foo", "mk");
+
+        let first_candidates: Vec<(String, usize)> = first
+            .constructor_candidates("mk")
+            .iter()
+            .map(|candidate| (candidate.ind_name.clone(), candidate.index))
+            .collect();
+        let second_candidates: Vec<(String, usize)> = second
+            .constructor_candidates("mk")
+            .iter()
+            .map(|candidate| (candidate.ind_name.clone(), candidate.index))
+            .collect();
+
+        assert_eq!(
+            first_candidates,
+            vec![("Bar".to_string(), 0), ("Foo".to_string(), 0)]
+        );
+        assert_eq!(first_candidates, second_candidates);
     }
 }

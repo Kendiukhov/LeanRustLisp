@@ -895,8 +895,8 @@ fn pipeline_negative_labeled_lifetime_tied_through_polymorphic_call() {
 
     let (output, has_errors, _is_err) = run_pipeline_with_reserved(source);
     assert!(
-        has_errors,
-        "Expected diagnostics for labeled lifetime tied through polymorphic call"
+        !has_errors,
+        "Expected no diagnostics: polymorphic Ref type parameters should specialize through labels"
     );
     assert_snapshot!(output);
 }

@@ -3,7 +3,7 @@
   (lam l ListRc
     (lam default Nat
       (match l Nat
-        (case (nil) default)
-        (case (cons h t ih) h)))))
+        (case (nil_rc) default)
+        (case (cons_rc h t ih) h)))))
 
-(head_or (cons (succ zero) nil) zero)
+(head_or (cons_rc (succ zero) nil_rc) zero)

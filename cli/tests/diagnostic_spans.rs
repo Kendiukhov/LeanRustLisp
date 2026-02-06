@@ -220,3 +220,56 @@ fn borrow_error_reports_source_span() {
         "borrow diagnostics should include source spans"
     );
 }
+
+#[test]
+fn ambiguous_constructor_reports_deterministic_candidates_with_span() {
+    let source = r#"
+        (inductive copy Foo Type
+          (mk Foo))
+
+        (inductive copy Bar Type
+          (mk Bar))
+
+        (def use_mk Foo mk)
+    "#;
+
+    let mut env = Env::new();
+    let mut expander = Expander::new();
+    expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
+    let mut diagnostics = DiagnosticCollector::new();
+    let options = PipelineOptions::default();
+    let result = process_code(
+        source,
+        "ambiguous_ctor_span_test",
+        &mut env,
+        &mut expander,
+        &options,
+        &mut diagnostics,
+    );
+
+    assert!(result.is_ok(), "expected source to parse");
+    let diag = first_error_with_code_prefix(&diagnostics, "F0202").unwrap_or_else(|| {
+        panic!(
+            "expected ambiguous-constructor diagnostic:\n{}",
+            diagnostic_summary(&diagnostics)
+        )
+    });
+
+    assert!(
+        diag.span.is_some(),
+        "ambiguous constructor diagnostics should include source spans"
+    );
+    let bar_idx = diag
+        .message
+        .find("Bar.mk")
+        .unwrap_or_else(|| panic!("expected Bar.mk in diagnostic message: {}", diag.message));
+    let foo_idx = diag
+        .message
+        .find("Foo.mk")
+        .unwrap_or_else(|| panic!("expected Foo.mk in diagnostic message: {}", diag.message));
+    assert!(
+        bar_idx < foo_idx,
+        "constructor candidates should have deterministic ordering in diagnostics: {}",
+        diag.message
+    );
+}

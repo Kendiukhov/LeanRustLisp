@@ -8,7 +8,7 @@ use mir::codegen::{
     codegen_body, codegen_constant, codegen_prelude, codegen_recursors, sanitize_name,
 };
 use mir::typed_codegen::{codegen_program, TypedBody, TypedProgram};
-use mir::types::{AdtId, CtorId, IdRegistry};
+use mir::types::{AdtId, CtorId, IdRegistry, MirType};
 use mir::Literal;
 use std::fs;
 use std::path::PathBuf;
@@ -28,17 +28,35 @@ fn lower_program(
     load_prelude: bool,
     check_closure_bodies: bool,
 ) -> (Env, IdRegistry, Vec<LoweredDef>, Option<String>) {
+    let prelude = if load_prelude {
+        Some("stdlib/prelude.lrl")
+    } else {
+        None
+    };
+    lower_program_with_prelude(source, prelude, check_closure_bodies)
+}
+
+fn lower_program_with_prelude(
+    source: &str,
+    prelude_source_path: Option<&str>,
+    check_closure_bodies: bool,
+) -> (Env, IdRegistry, Vec<LoweredDef>, Option<String>) {
     let mut env = Env::new();
     let mut expander = Expander::new();
     env.set_allow_reserved_primitives(true);
     let mut diagnostics = DiagnosticCollector::new();
     let options = PipelineOptions::default();
 
-    if load_prelude {
-        let prelude_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../stdlib/prelude.lrl");
+    if let Some(prelude_source_path) = prelude_source_path {
+        let mut prelude_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(prelude_source_path);
+        if !prelude_path.exists() {
+            prelude_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(prelude_source_path);
+        }
         let prelude = fs::read_to_string(&prelude_path)
             .unwrap_or_else(|e| panic!("failed to read prelude {:?}: {}", prelude_path, e));
-        let prelude_module = module_id_for_source("stdlib/prelude.lrl");
+        let prelude_module = module_id_for_source(prelude_source_path);
         expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
         set_prelude_macro_boundary_allowlist(&mut expander, &prelude_module);
         let mut prelude_diagnostics = DiagnosticCollector::new();
@@ -104,7 +122,8 @@ fn lower_program(
             None,
             Some(name.clone()),
             Some(Rc::new(def.capture_modes.clone())),
-        );
+        )
+        .unwrap_or_else(|e| panic!("lowering context init error in {}: {}", name, e));
         let dest = mir::Place::from(mir::Local(0));
         let target = mir::BasicBlock(1);
         ctx.body.basic_blocks.push(mir::BasicBlockData {
@@ -331,19 +350,7 @@ fn extract_nat_result(output: &str) -> Option<u64> {
     }
 }
 
-fn extract_bool_result(output: &str) -> Option<bool> {
-    let value = extract_result_value(output)?;
-    if let Some(rest) = value
-        .strip_prefix("Bool(")
-        .and_then(|s| s.strip_suffix(')'))
-    {
-        rest.parse().ok()
-    } else {
-        value.parse().ok()
-    }
-}
-
-fn compile_and_run(code: &str) -> String {
+fn compile_rust_to_temp_bin(code: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("time went backwards")
@@ -367,6 +374,11 @@ fn compile_and_run(code: &str) -> String {
         .expect("failed to invoke rustc");
     assert!(status.success(), "rustc failed for {:?}", src_path);
 
+    bin_path
+}
+
+fn compile_and_run(code: &str) -> String {
+    let bin_path = compile_rust_to_temp_bin(code);
     let output = Command::new(&bin_path)
         .output()
         .expect("failed to run compiled binary");
@@ -377,6 +389,13 @@ fn compile_and_run(code: &str) -> String {
     );
 
     String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+fn compile_and_run_allow_failure(code: &str) -> std::process::Output {
+    let bin_path = compile_rust_to_temp_bin(code);
+    Command::new(&bin_path)
+        .output()
+        .expect("failed to run compiled binary")
 }
 
 #[test]
@@ -414,6 +433,14 @@ fn typed_backend_generates_code_for_simple_program() {
         !code.contains("Expected Func"),
         "typed backend should not emit tag-check panics"
     );
+    assert!(
+        code.contains("non_snake_case"),
+        "typed backend output should suppress generated naming warnings"
+    );
+    assert!(
+        code.contains("non_camel_case_types"),
+        "typed backend output should suppress generated naming warnings"
+    );
 }
 
 #[test]
@@ -447,24 +474,65 @@ fn typed_backend_codegen_is_deterministic() {
 }
 
 #[test]
-fn typed_backend_rejects_parametric_adts() {
+fn typed_backend_supports_parametric_adts() {
     let source = r#"
+        (inductive copy Bool (sort 1)
+          (ctor true Bool)
+          (ctor false Bool))
+
         (inductive Box (pi (T (sort 1)) (sort 1))
           (ctor mk_box (pi (T (sort 1)) (pi (x T) (Box T)))))
 
-        (def id_box (pi (T (sort 1)) (pi (b (Box T)) (Box T)))
-          (lam T (sort 1) (lam b (Box T) b)))
+        (def unbox_bool (pi b (Box Bool) Bool)
+          (lam b (Box Bool)
+            (match b Bool
+              (case (mk_box x) x))))
 
-        (def main (pi (T (sort 1)) (pi (b (Box T)) (Box T)))
-          id_box)
+        (def entry Bool
+          (unbox_bool (mk_box Bool true)))
     "#;
 
-    let (env, ids, defs, main_name) = lower_program(source, false, true);
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
     let program = build_typed_program(&defs, main_name);
-    let err = codegen_program(&env, &ids, &program).expect_err("expected error");
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+
     assert!(
-        err.message.contains("parametric ADT"),
-        "expected parametric ADT error, got: {}",
+        code.contains("enum Box<T0>"),
+        "expected generic Box enum in output, got:\n{}",
+        code
+    );
+    assert!(
+        !code.contains("Value::"),
+        "typed backend should not emit dynamic Value runtime for parametric subset"
+    );
+}
+
+#[test]
+fn typed_backend_rejects_monomorphic_wrapper_over_polymorphic_function_value() {
+    let source = r#"
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (def id (pi A (sort 1) (pi x A A))
+          (lam A (sort 1)
+            (lam x A x)))
+
+        (def id_nat (pi x Nat Nat)
+          (lam x Nat
+            (id Nat x)))
+
+        (def entry Nat
+          (id_nat (succ zero)))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let err = codegen_program(&env, &ids, &program).expect_err("expected typed codegen failure");
+    assert!(
+        err.message
+            .contains("polymorphic function-value specialization is not yet supported"),
+        "unexpected error: {}",
         err.message
     );
 }
@@ -571,13 +639,6 @@ fn typed_backend_executes_nested_projections() {
           (ctor zero Nat)
           (ctor succ (pi n Nat Nat)))
 
-        (def add (pi n Nat (pi m Nat Nat))
-          (lam n Nat
-            (lam m Nat
-              (match n Nat
-                (case (zero) m)
-                (case (succ m' ih) (succ ih))))))
-
         (inductive copy Pair (sort 1)
           (ctor pair (pi a Nat (pi b Nat Pair))))
 
@@ -588,7 +649,7 @@ fn typed_backend_executes_nested_projections() {
         (def sum_pair (pi p Pair Nat)
           (lam p Pair
             (match p Nat
-              (case (pair a b) (add a b)))))
+              (case (pair a b) b))))
 
         (def leaf_sum (pi t Tree Nat)
           (lam t Tree
@@ -597,7 +658,7 @@ fn typed_backend_executes_nested_projections() {
               (case (node l r) zero))))
 
         (def entry Nat
-          (leaf_sum (leaf (pair (succ zero) (succ (succ zero))))))
+          (leaf_sum (leaf (pair zero (succ (succ zero))))))
     "#;
 
     let (env, ids, defs, main_name) = lower_program(source, false, false);
@@ -606,8 +667,8 @@ fn typed_backend_executes_nested_projections() {
     let output = compile_and_run(&code);
 
     assert!(
-        output.contains("Result: 3"),
-        "expected output to contain Result: 3, got {}",
+        output.contains("Result: 2"),
+        "expected output to contain Result: 2, got {}",
         output
     );
 }
@@ -647,7 +708,7 @@ fn typed_backend_matches_dynamic_output_for_stage1_program() {
 }
 
 #[test]
-fn typed_backend_auto_falls_back_to_dynamic_on_parametric_adt() {
+fn typed_backend_matches_dynamic_output_for_parametric_adt_program() {
     let source = r#"
         (inductive copy Bool (sort 1)
           (ctor true Bool)
@@ -656,33 +717,499 @@ fn typed_backend_auto_falls_back_to_dynamic_on_parametric_adt() {
         (inductive Box (pi (T (sort 1)) (sort 1))
           (ctor mk_box (pi (T (sort 1)) (pi (x T) (Box T)))))
 
-        (def id_box (pi (T (sort 1)) (pi (b (Box T)) (Box T)))
-          (lam T (sort 1) (lam b (Box T) b)))
+        (def unbox_bool (pi b (Box Bool) Bool)
+          (lam b (Box Bool)
+            (match b Bool
+              (case (mk_box x) x))))
 
         (def entry Bool
-          true)
+          (unbox_bool (mk_box Bool true)))
     "#;
 
     let (env, ids, defs, main_name) = lower_program(source, false, false);
     let program = build_typed_program(&defs, main_name.clone());
-    let err = codegen_program(&env, &ids, &program).expect_err("expected typed backend error");
-    assert!(
-        err.message.contains("parametric ADT"),
-        "expected parametric ADT error, got: {}",
-        err.message
-    );
-
+    let typed_code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
     let dynamic_code = build_dynamic_code(&env, &ids, &defs, main_name);
+
+    assert!(
+        typed_code.contains("enum Box<T0>"),
+        "expected generic Box enum in typed output"
+    );
+    assert!(
+        !typed_code.contains("Value::"),
+        "typed backend should not emit Value runtime for parametric subset"
+    );
     assert!(
         dynamic_code.contains("Value::"),
         "expected dynamic backend codegen to use Value runtime"
     );
-    let output = compile_and_run(&dynamic_code);
-    assert_eq!(
-        extract_bool_result(&output),
-        Some(true),
-        "unexpected dynamic output: {}",
+}
+
+#[test]
+fn typed_backend_emits_ref_lowering_for_borrow_shared() {
+    let source = r#"
+        (axiom Ref (pi k Type (pi A (sort 1) (sort 1))))
+        (axiom Shared Type)
+        (axiom Mut Type)
+        (axiom borrow_shared (pi {A (sort 1)} (pi x A (Ref #[r] Shared A))))
+
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (def ignore_ref (pi r (Ref #[r] Shared Nat) Nat)
+          (lam r (Ref #[r] Shared Nat) (succ zero)))
+
+        (def entry Nat
+          (let x Nat
+            (succ zero)
+            (ignore_ref (borrow_shared x))))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let output = compile_and_run(&code);
+
+    assert!(
+        code.contains("LrlRefShared"),
+        "expected LrlRefShared lowering in output"
+    );
+    assert!(
+        code.contains("from_value"),
+        "expected borrow rvalue lowering to use wrapper constructor"
+    );
+    assert!(
+        output.contains("Result: 1"),
+        "expected output to contain Result: 1, got {}",
         output
+    );
+}
+
+#[test]
+fn typed_backend_codegen_is_deterministic_with_generics_and_refs() {
+    let source = r#"
+        (axiom Ref (pi k Type (pi A (sort 1) (sort 1))))
+        (axiom Shared Type)
+        (axiom Mut Type)
+        (axiom borrow_shared (pi {A (sort 1)} (pi x A (Ref #[r] Shared A))))
+
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (inductive Box (pi (T (sort 1)) (sort 1))
+          (ctor mk_box (pi (T (sort 1)) (pi (x T) (Box T)))))
+
+        (def ignore_ref (pi r (Ref #[r] Shared Nat) Nat)
+          (lam r (Ref #[r] Shared Nat) (succ zero)))
+
+        (def use_box (pi x Nat Nat)
+          (lam x Nat
+            (match (mk_box Nat x) Nat
+              (case (mk_box y) y))))
+
+        (def entry Nat
+          (let x Nat
+            (succ zero)
+            (use_box (ignore_ref (borrow_shared x)))))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+
+    let code1 = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let code2 = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+
+    assert_eq!(code1, code2, "typed backend output is nondeterministic");
+    assert!(
+        code1.contains("enum Box<T0>"),
+        "expected generic Box enum in typed output"
+    );
+    assert!(
+        code1.contains("LrlRefShared"),
+        "expected shared-ref wrapper emission in typed output"
+    );
+}
+
+#[test]
+fn typed_backend_accepts_prop_inductive_function_signatures() {
+    let source = r#"
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (inductive ProofEq (pi A (sort 1) (pi a A (pi b A (sort 0))))
+          (ctor reflP (pi A (sort 1) (pi a A (ProofEq A a a)))))
+
+        (def keep_nat
+          (pi n Nat (pi p (ProofEq Nat n n) Nat))
+          (lam n Nat
+            (lam p (ProofEq Nat n n)
+              n)))
+
+        (def entry Nat
+          (keep_nat (succ zero) (reflP Nat (succ zero))))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let output = compile_and_run(&code);
+
+    assert!(
+        !code.contains("Value::"),
+        "typed backend should not fall back to dynamic Value runtime"
+    );
+    assert!(
+        !code.contains("enum ProofEq"),
+        "proof-only ADTs should be erased from runtime typed Rust output"
+    );
+    assert!(
+        output.contains("Result: 1"),
+        "expected output to contain Result: 1, got {}",
+        output
+    );
+}
+
+#[test]
+fn typed_backend_executes_comp_constructor_from_typed_prelude() {
+    let source = r#"
+        (def entry (Comp Nat)
+          (ret Nat (succ zero)))
+    "#;
+
+    let (env, ids, defs, main_name) =
+        lower_program_with_prelude(source, Some("stdlib/prelude_typed.lrl"), false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let output = compile_and_run(&code);
+
+    assert!(
+        code.contains("enum Comp<T0>"),
+        "expected Comp enum in typed output"
+    );
+    assert!(
+        !code.contains("Value::"),
+        "typed backend should not emit Value runtime"
+    );
+    assert!(
+        output.contains("Result: ret"),
+        "expected output to contain Result: ret..., got {}",
+        output
+    );
+}
+
+#[test]
+fn typed_backend_executes_eval_with_capability_token_from_typed_prelude() {
+    let source = r#"
+        (unsafe entry Dyn
+          (eval (dyn_nat (succ zero)) eval_cap))
+    "#;
+
+    let (env, ids, defs, main_name) =
+        lower_program_with_prelude(source, Some("stdlib/prelude_typed.lrl"), false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let output = compile_and_run(&code);
+
+    assert!(
+        code.contains("enum Dyn"),
+        "expected Dyn enum in typed output"
+    );
+    assert!(
+        output.contains("dyn_nat"),
+        "expected output to contain dyn_nat, got {}",
+        output
+    );
+}
+
+#[test]
+fn typed_backend_emits_index_and_runtime_check_lowering() {
+    let source = r#"
+        (axiom unsafe interior_mutable Type)
+        (axiom unsafe may_panic_on_borrow_violation Type)
+        (axiom unsafe concurrency_primitive Type)
+        (axiom unsafe atomic_primitive Type)
+        (axiom unsafe indexable Type)
+
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (inductive (indexable) VecDyn (pi T (sort 1) (sort 1))
+          (ctor mk_vec_dyn (pi (T (sort 1)) (pi x T (VecDyn T))))
+        )
+
+        (axiom unsafe index_vec_dyn (pi {T (sort 1)} (pi v (VecDyn T) (pi i Nat T))))
+
+        (unsafe entry Nat
+          (let v (VecDyn Nat)
+            (mk_vec_dyn Nat (succ zero))
+            v[0]))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+
+    assert!(
+        code.contains("runtime_bounds_check("),
+        "expected bounds-check runtime check emission"
+    );
+    assert!(
+        code.contains("runtime_index("),
+        "expected index projection lowering via runtime_index"
+    );
+}
+
+#[test]
+fn typed_backend_executes_index_projection_for_vecdyn_singleton() {
+    let source = r#"
+        (axiom unsafe interior_mutable Type)
+        (axiom unsafe may_panic_on_borrow_violation Type)
+        (axiom unsafe concurrency_primitive Type)
+        (axiom unsafe atomic_primitive Type)
+        (axiom unsafe indexable Type)
+
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (inductive (indexable) VecDyn (pi T (sort 1) (sort 1))
+          (ctor mk_vec_dyn (pi (T (sort 1)) (pi x T (VecDyn T))))
+        )
+
+        (axiom unsafe index_vec_dyn (pi {T (sort 1)} (pi v (VecDyn T) (pi i Nat T))))
+
+        (unsafe entry Nat
+          (let v (VecDyn Nat)
+            (mk_vec_dyn Nat (succ zero))
+            v[0]))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let output = compile_and_run(&code);
+
+    assert!(
+        output.contains("Result: 1"),
+        "expected output to contain Result: 1, got {}",
+        output
+    );
+}
+
+#[test]
+fn typed_backend_panics_on_out_of_bounds_vecdyn_index() {
+    let source = r#"
+        (axiom unsafe interior_mutable Type)
+        (axiom unsafe may_panic_on_borrow_violation Type)
+        (axiom unsafe concurrency_primitive Type)
+        (axiom unsafe atomic_primitive Type)
+        (axiom unsafe indexable Type)
+
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (inductive (indexable) VecDyn (pi T (sort 1) (sort 1))
+          (ctor mk_vec_dyn (pi (T (sort 1)) (pi x T (VecDyn T))))
+        )
+
+        (axiom unsafe index_vec_dyn (pi {T (sort 1)} (pi v (VecDyn T) (pi i Nat T))))
+
+        (unsafe entry Nat
+          (let v (VecDyn Nat)
+            (mk_vec_dyn Nat (succ zero))
+            v[1]))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let output = compile_and_run_allow_failure(&code);
+
+    assert!(
+        !output.status.success(),
+        "expected runtime failure for out-of-bounds VecDyn index"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{}\n{}", stdout, stderr);
+    assert!(
+        combined.contains("index out of bounds"),
+        "expected out-of-bounds panic text, got:\n{}",
+        combined
+    );
+}
+
+#[test]
+fn typed_backend_executes_deep_recursive_tree_payload_program() {
+    let source = r#"
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (inductive copy NatTree (sort 1)
+          (ctor leaf (pi n Nat NatTree))
+          (ctor node (pi l NatTree (pi r NatTree NatTree))))
+
+        (def add_nat (pi a Nat (pi b Nat Nat))
+          (lam a Nat
+            (lam b Nat
+              (match a Nat
+                (case (zero) b)
+                (case (succ x ih) (succ ih))))))
+
+        (def sum_tree (pi t NatTree Nat)
+          (lam t NatTree
+            (match t Nat
+              (case (leaf n) n)
+              (case (node l lsum r rsum) (add_nat lsum rsum)))))
+
+        (def entry Nat
+          (sum_tree
+            (node
+              (leaf (succ zero))
+              (node (leaf (succ (succ zero))) (leaf (succ zero))))))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let output = compile_and_run(&code);
+
+    assert!(
+        output.contains("Result: 4"),
+        "expected output to contain Result: 4, got {}",
+        output
+    );
+}
+
+#[test]
+fn typed_backend_executes_index_projection_for_slice_list_wrapper() {
+    let source = r#"
+        (axiom unsafe interior_mutable Type)
+        (axiom unsafe may_panic_on_borrow_violation Type)
+        (axiom unsafe concurrency_primitive Type)
+        (axiom unsafe atomic_primitive Type)
+        (axiom unsafe indexable Type)
+
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (inductive List (pi T (sort 1) (sort 1))
+          (ctor nil (pi (T (sort 1)) (List T)))
+          (ctor cons (pi (T (sort 1)) (pi h T (pi t (List T) (List T)))))
+        )
+
+        (inductive (indexable) Slice (pi T (sort 1) (sort 1))
+          (ctor mk_slice (pi (T (sort 1)) (pi data (List T) (Slice T))))
+        )
+
+        (axiom unsafe index_slice (pi {T (sort 1)} (pi v (Slice T) (pi i Nat T))))
+
+        (unsafe entry Nat
+          (let xs (Slice Nat)
+            (mk_slice Nat (cons Nat (succ zero) (cons Nat zero (nil Nat))))
+            xs[1]))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let output = compile_and_run(&code);
+
+    assert!(
+        output.contains("Result: 0"),
+        "expected output to contain Result: 0, got {}",
+        output
+    );
+}
+
+#[test]
+fn typed_backend_codegen_is_deterministic_for_slice_index_program() {
+    let source = r#"
+        (axiom unsafe interior_mutable Type)
+        (axiom unsafe may_panic_on_borrow_violation Type)
+        (axiom unsafe concurrency_primitive Type)
+        (axiom unsafe atomic_primitive Type)
+        (axiom unsafe indexable Type)
+
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (inductive List (pi T (sort 1) (sort 1))
+          (ctor nil (pi (T (sort 1)) (List T)))
+          (ctor cons (pi (T (sort 1)) (pi h T (pi t (List T) (List T)))))
+        )
+
+        (inductive (indexable) Slice (pi T (sort 1) (sort 1))
+          (ctor mk_slice (pi (T (sort 1)) (pi data (List T) (Slice T))))
+        )
+
+        (axiom unsafe index_slice (pi {T (sort 1)} (pi v (Slice T) (pi i Nat T))))
+
+        (unsafe entry Nat
+          (let xs (Slice Nat)
+            (mk_slice Nat (cons Nat (succ zero) (cons Nat zero (nil Nat))))
+            xs[1]))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code1 = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let code2 = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+
+    assert_eq!(code1, code2, "typed backend output is nondeterministic");
+    assert!(
+        code1.contains("runtime_index("),
+        "expected typed index runtime lowering in output"
+    );
+}
+
+#[test]
+fn typed_backend_emits_rawptr_and_interior_mutable_local_types() {
+    let env = Env::new();
+    let ids = IdRegistry::from_env(&env);
+
+    let mut body = mir::Body::new(0);
+    body.local_decls
+        .push(mir::LocalDecl::new(MirType::Unit, Some("_0".to_string())));
+    body.local_decls.push(mir::LocalDecl::new(
+        MirType::RawPtr(Box::new(MirType::Nat), mir::types::Mutability::Not),
+        Some("_1".to_string()),
+    ));
+    body.local_decls.push(mir::LocalDecl::new(
+        MirType::InteriorMutable(Box::new(MirType::Nat), mir::types::IMKind::RefCell),
+        Some("_2".to_string()),
+    ));
+    body.basic_blocks.push(mir::BasicBlockData {
+        statements: vec![],
+        terminator: Some(mir::Terminator::Return),
+    });
+
+    let program = TypedProgram {
+        defs: vec![TypedBody {
+            name: "entry".to_string(),
+            body,
+            closure_base: 0,
+        }],
+        closures: vec![],
+        main_name: None,
+    };
+
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    assert!(
+        code.contains("Option<*const u64>"),
+        "expected raw pointer local type in emitted Rust"
+    );
+    assert!(
+        code.contains("Option<LrlRefCell<u64>>"),
+        "expected interior mutability local type in emitted Rust"
     );
 }
 

@@ -2,10 +2,10 @@
   (lam xs ListRc
     (lam d Nat
       (match xs Nat
-        (case (nil) d)
-        (case (cons h t ih)
+        (case (nil_rc) d)
+        (case (cons_rc h t ih)
           (match t Nat
-            (case (nil) h)
-            (case (cons h2 t2 ih2) h2)))))))
+            (case (nil_rc) h)
+            (case (cons_rc h2 t2 ih2) h2)))))))
 
-(second_or (cons zero (cons (succ zero) nil)) (succ (succ zero)))
+(second_or (cons_rc zero (cons_rc (succ zero) nil_rc)) (succ (succ zero)))

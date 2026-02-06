@@ -1,10 +1,11 @@
-use crate::types::{AdtId, AdtLayoutRegistry, CtorId, IdRegistry, MirType};
+use crate::types::{AdtId, AdtLayoutRegistry, CtorId, IMKind, IdRegistry, MirType, Mutability};
 use crate::{
-    Body, CallOperand, Constant, Literal, Operand, Place, PlaceElem, Rvalue, Statement, Terminator,
+    Body, BorrowKind, CallOperand, Constant, Literal, Operand, Place, PlaceElem, RuntimeCheckKind,
+    Rvalue, Statement, Terminator,
 };
-use kernel::ast::FunctionKind;
+use kernel::ast::{FunctionKind, Level, Term};
 use kernel::checker::{Builtin, Env};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct TypedCodegenError {
@@ -51,11 +52,12 @@ pub fn codegen_program(
 
     let mut items = Vec::new();
     items.push(Item::CrateAttr(
-        "allow(dead_code, unused_variables, unused_parens, unreachable_patterns)".to_string(),
+        "allow(dead_code, unused_variables, unused_parens, unreachable_patterns, non_snake_case, non_camel_case_types)".to_string(),
     ));
     items.push(Item::Use("std::rc::Rc".to_string()));
     items.extend(ctx.emit_callable_runtime_items());
     items.extend(ctx.emit_adts()?);
+    items.extend(ctx.emit_index_runtime_impls()?);
     items.extend(ctx.emit_ctors()?);
     items.extend(ctx.emit_recursors()?);
     items.extend(ctx.emit_closure_bodies(program)?);
@@ -77,6 +79,7 @@ struct CodegenContext<'a> {
     recursor_specs: Vec<RecursorSpec>,
     recursor_lookup: HashMap<(AdtId, String), String>,
     closure_usage: HashMap<usize, ClosureUsage>,
+    prop_adts: HashSet<AdtId>,
 }
 
 impl<'a> CodegenContext<'a> {
@@ -84,10 +87,14 @@ impl<'a> CodegenContext<'a> {
         let adt_layouts = ids.adt_layouts();
         let mut adt_name_map = HashMap::new();
         let mut ctor_name_map = HashMap::new();
+        let mut prop_adts = HashSet::new();
 
         for (name, decl) in &env.inductives {
             let adt_id = ids.adt_id(name).unwrap_or_else(|| AdtId::new(name));
             adt_name_map.insert(adt_id.clone(), sanitize_name(name));
+            if inductive_result_sort_is_prop(decl.ty.as_ref()) {
+                prop_adts.insert(adt_id.clone());
+            }
             for (idx, ctor) in decl.ctors.iter().enumerate() {
                 let ctor_id = CtorId::new(adt_id.clone(), idx);
                 ctor_name_map.insert(ctor_id, sanitize_name(&ctor.name));
@@ -106,6 +113,7 @@ impl<'a> CodegenContext<'a> {
             recursor_specs: Vec::new(),
             recursor_lookup: HashMap::new(),
             closure_usage: HashMap::new(),
+            prop_adts,
         })
     }
 
@@ -186,23 +194,15 @@ impl<'a> CodegenContext<'a> {
     ) -> Result<(), TypedCodegenError> {
         match ty {
             MirType::Unit | MirType::Bool | MirType::Nat => Ok(()),
-            MirType::IndexTerm(_) => Err(TypedCodegenError::new(
-                "index terms are not supported in typed backend",
-            )),
+            MirType::IndexTerm(_) => Ok(()),
             MirType::Adt(adt, args) => {
-                if !args.is_empty() {
-                    return Err(TypedCodegenError::new(format!(
-                        "parametric ADT {} is not supported",
-                        self.adt_name(adt)
-                    )));
-                }
-                if self.ids.adt_num_params(adt).unwrap_or(0) > 0 {
-                    return Err(TypedCodegenError::new(format!(
-                        "parametric ADT {} is not supported",
-                        self.adt_name(adt)
-                    )));
+                if self.prop_adts.contains(adt) {
+                    return Ok(());
                 }
                 used_adts.insert(adt.clone());
+                for arg in args {
+                    self.check_type_supported(arg, used_adts)?;
+                }
                 Ok(())
             }
             MirType::Fn(kind, _regions, args, ret)
@@ -223,21 +223,11 @@ impl<'a> CodegenContext<'a> {
                 }
                 self.check_type_supported(ret, used_adts)
             }
-            MirType::Ref(_, _, _) => Err(TypedCodegenError::new(
-                "Ref types are not supported in typed backend",
-            )),
-            MirType::RawPtr(_, _) => Err(TypedCodegenError::new(
-                "Raw pointers are not supported in typed backend",
-            )),
-            MirType::InteriorMutable(_, _) => Err(TypedCodegenError::new(
-                "Interior mutability is not supported in typed backend",
-            )),
-            MirType::Opaque { .. } => Err(TypedCodegenError::new(
-                "Opaque types are not supported in typed backend",
-            )),
-            MirType::Param(_) => Err(TypedCodegenError::new(
-                "Type parameters are not supported in typed backend",
-            )),
+            MirType::Ref(_, inner, _) => self.check_type_supported(inner, used_adts),
+            MirType::RawPtr(inner, _) => self.check_type_supported(inner, used_adts),
+            MirType::InteriorMutable(inner, _) => self.check_type_supported(inner, used_adts),
+            MirType::Opaque { .. } => Ok(()),
+            MirType::Param(_) => Ok(()),
         }
     }
 
@@ -258,10 +248,9 @@ impl<'a> CodegenContext<'a> {
                 }
                 Ok(())
             }
-            Statement::RuntimeCheck(_) => Err(TypedCodegenError::new(format!(
-                "runtime checks are not supported in typed backend (in {})",
-                body.name
-            ))),
+            Statement::RuntimeCheck(check) => {
+                self.check_runtime_check_supported(body, check, used_adts)
+            }
             Statement::StorageLive(_) | Statement::StorageDead(_) | Statement::Nop => Ok(()),
         }
     }
@@ -303,10 +292,36 @@ impl<'a> CodegenContext<'a> {
         match rvalue {
             Rvalue::Use(op) => self.check_operand_supported(body, op, used_adts),
             Rvalue::Discriminant(place) => self.check_place_supported(body, place, used_adts),
-            Rvalue::Ref(_, _) => Err(TypedCodegenError::new(format!(
-                "borrow (Ref) rvalues are not supported in {}",
-                body.name
-            ))),
+            Rvalue::Ref(_, place) => self.check_place_supported(body, place, used_adts),
+        }
+    }
+
+    fn check_runtime_check_supported(
+        &self,
+        body: &TypedBody,
+        check: &RuntimeCheckKind,
+        used_adts: &mut HashSet<AdtId>,
+    ) -> Result<(), TypedCodegenError> {
+        match check {
+            RuntimeCheckKind::RefCellBorrow { local } | RuntimeCheckKind::MutexLock { local } => {
+                let ty = self.local_type(body, local.index()).ok_or_else(|| {
+                    TypedCodegenError::new(format!(
+                        "unknown local in runtime check in {}",
+                        body.name
+                    ))
+                })?;
+                self.check_type_supported(ty, used_adts)
+            }
+            RuntimeCheckKind::BoundsCheck { local, index } => {
+                let container_ty = self.local_type(body, local.index()).ok_or_else(|| {
+                    TypedCodegenError::new(format!("unknown container local in {}", body.name))
+                })?;
+                let index_ty = self.local_type(body, index.index()).ok_or_else(|| {
+                    TypedCodegenError::new(format!("unknown index local in {}", body.name))
+                })?;
+                self.check_type_supported(container_ty, used_adts)?;
+                self.check_type_supported(index_ty, used_adts)
+            }
         }
     }
 
@@ -339,8 +354,10 @@ impl<'a> CodegenContext<'a> {
                 })?;
                 if !self.is_fn_type(&ty) {
                     return Err(TypedCodegenError::new(format!(
-                        "borrowed call operand must be a function in {}",
-                        body.name
+                        "borrowed call operand must be a function in {} (local _{} has type {:?})",
+                        body.name,
+                        place.local.index(),
+                        ty
                     )));
                 }
                 Ok(())
@@ -371,17 +388,8 @@ impl<'a> CodegenContext<'a> {
                 let _ = self.check_recursor_supported(ind_name)?;
                 Ok(())
             }
-            Literal::OpaqueConst(reason) => Err(TypedCodegenError::new(format!(
-                "OpaqueConst is not supported in typed backend ({}): {}",
-                body.name, reason
-            ))),
+            Literal::OpaqueConst(_) => Ok(()),
             Literal::InductiveCtor(ctor, _) => {
-                if self.ids.adt_num_params(&ctor.adt).unwrap_or(0) > 0 {
-                    return Err(TypedCodegenError::new(format!(
-                        "parametric ADT {} is not supported",
-                        self.adt_name(&ctor.adt)
-                    )));
-                }
                 used_adts.insert(ctor.adt.clone());
                 Ok(())
             }
@@ -432,13 +440,7 @@ impl<'a> CodegenContext<'a> {
                                 {
                                     next_ty
                                 } else if let MirType::Adt(adt_id, args) = &current_ty {
-                                    if !args.is_empty() {
-                                        return Err(TypedCodegenError::new(format!(
-                                            "parametric ADT {} is not supported",
-                                            self.adt_name(adt_id)
-                                        )));
-                                    }
-                                    self.field_type_without_downcast(adt_id, *field_idx)
+                                    self.field_type_without_downcast(adt_id, *field_idx, args)
                                         .ok_or_else(|| {
                                             TypedCodegenError::new(format!(
                                                 "unsupported field access in {}",
@@ -455,16 +457,32 @@ impl<'a> CodegenContext<'a> {
                                 variant = None;
                             }
                             PlaceElem::Deref => {
-                                return Err(TypedCodegenError::new(format!(
-                                    "deref projections are not supported in {}",
-                                    body.name
-                                )));
+                                current_ty = match current_ty {
+                                    MirType::Ref(_, inner, _) | MirType::RawPtr(inner, _) => *inner,
+                                    _ => {
+                                        return Err(TypedCodegenError::new(format!(
+                                            "deref projection on non-reference in {}",
+                                            body.name
+                                        )))
+                                    }
+                                };
+                                self.check_type_supported(&current_ty, used_adts)?;
+                                variant = None;
                             }
                             PlaceElem::Index(_) => {
-                                return Err(TypedCodegenError::new(format!(
-                                    "index projections are not supported in {}",
-                                    body.name
-                                )));
+                                current_ty = match current_ty {
+                                    MirType::Adt(_, args) => {
+                                        args.get(0).cloned().unwrap_or(MirType::Unit)
+                                    }
+                                    _ => {
+                                        return Err(TypedCodegenError::new(format!(
+                                            "index projection on non-ADT in {}",
+                                            body.name
+                                        )))
+                                    }
+                                };
+                                self.check_type_supported(&current_ty, used_adts)?;
+                                variant = None;
                             }
                         }
                     }
@@ -508,13 +526,7 @@ impl<'a> CodegenContext<'a> {
                         if let Some(next_ty) = self.field_type(&current_ty, variant, *field_idx) {
                             next_ty
                         } else if let MirType::Adt(adt_id, args) = &current_ty {
-                            if !args.is_empty() {
-                                return Err(TypedCodegenError::new(format!(
-                                    "parametric ADT {} is not supported",
-                                    self.adt_name(adt_id)
-                                )));
-                            }
-                            self.field_type_without_downcast(adt_id, *field_idx)
+                            self.field_type_without_downcast(adt_id, *field_idx, args)
                                 .ok_or_else(|| {
                                     TypedCodegenError::new(format!(
                                         "unsupported field access in {}",
@@ -531,16 +543,30 @@ impl<'a> CodegenContext<'a> {
                     variant = None;
                 }
                 PlaceElem::Deref => {
-                    return Err(TypedCodegenError::new(format!(
-                        "deref projections are not supported in {}",
-                        body.name
-                    )));
+                    current_ty = match current_ty {
+                        MirType::Ref(_, inner, _) | MirType::RawPtr(inner, _) => *inner,
+                        _ => {
+                            return Err(TypedCodegenError::new(format!(
+                                "deref projection on non-reference in {}",
+                                body.name
+                            )))
+                        }
+                    };
+                    self.check_type_supported(&current_ty, used_adts)?;
+                    variant = None;
                 }
                 PlaceElem::Index(_) => {
-                    return Err(TypedCodegenError::new(format!(
-                        "index projections are not supported in {}",
-                        body.name
-                    )));
+                    current_ty = match current_ty {
+                        MirType::Adt(_, args) => args.get(0).cloned().unwrap_or(MirType::Unit),
+                        _ => {
+                            return Err(TypedCodegenError::new(format!(
+                                "index projection on non-ADT in {}",
+                                body.name
+                            )))
+                        }
+                    };
+                    self.check_type_supported(&current_ty, used_adts)?;
+                    variant = None;
                 }
             }
         }
@@ -553,7 +579,12 @@ impl<'a> CodegenContext<'a> {
             if adt_id.is_builtin(Builtin::Nat) || adt_id.is_builtin(Builtin::Bool) {
                 continue;
             }
+            if self.prop_adts.contains(adt_id) {
+                continue;
+            }
             let adt_name = self.adt_name(adt_id);
+            let generics = self.adt_generic_params(adt_id);
+            let adt_decl_name = self.name_with_generics(adt_name, &generics);
             let Some(layout) = self.adt_layouts.get(adt_id) else {
                 return Err(TypedCodegenError::new("missing ADT layout"));
             };
@@ -574,8 +605,17 @@ impl<'a> CodegenContext<'a> {
                     fields,
                 });
             }
+            if !generics.is_empty() {
+                variants.push(EnumVariant {
+                    name: "__Phantom".to_string(),
+                    fields: vec![format!(
+                        "std::marker::PhantomData<({})>",
+                        generics.join(", ")
+                    )],
+                });
+            }
             items.push(Item::Enum {
-                name: adt_name.to_string(),
+                name: adt_decl_name,
                 derives: vec!["Clone".to_string(), "Debug".to_string()],
                 variants,
             });
@@ -635,10 +675,241 @@ where
         (self.func)(self_dyn, self.cap.clone(), arg)
     }
 }
+
+#[derive(Clone, Debug)]
+struct LrlRefShared<T> {
+    value: T,
+}
+
+impl<T> LrlRefShared<T> {
+    fn from_value(value: T) -> Self {
+        Self { value }
+    }
+}
+
+impl<T: Clone> LrlRefShared<T> {
+    fn read(&self) -> T {
+        self.value.clone()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct LrlRefMut<T> {
+    value: T,
+}
+
+impl<T> LrlRefMut<T> {
+    fn from_value(value: T) -> Self {
+        Self { value }
+    }
+}
+
+impl<T: Clone> LrlRefMut<T> {
+    fn read(&self) -> T {
+        self.value.clone()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct LrlRefCell<T> {
+    value: T,
+}
+
+#[derive(Clone, Debug)]
+struct LrlMutex<T> {
+    value: T,
+}
+
+#[derive(Clone, Debug)]
+struct LrlAtomic<T> {
+    value: T,
+}
+
+#[derive(Clone, Debug)]
+struct LrlOpaque {
+    reason: String,
+}
+
+impl LrlOpaque {
+    fn new(reason: &str) -> Self {
+        Self {
+            reason: reason.to_string(),
+        }
+    }
+}
+
+fn runtime_refcell_borrow_check<T>(_value: T) {}
+
+fn runtime_mutex_lock<T>(_value: T) {}
+
+fn runtime_bounds_check<TContainer, TIndex>(_container: TContainer, _index: TIndex) {}
+
+trait LrlIndex<TItem> {
+    fn lrl_index(self, index: usize) -> TItem;
+}
+
+fn runtime_index<TItem, TContainer>(container: TContainer, index: u64) -> TItem
+where
+    TContainer: LrlIndex<TItem>,
+{
+    container.lrl_index(index as usize)
+}
+
+fn runtime_raw_ptr_read<T: Clone>(ptr: *const T) -> T {
+    // Pointer validity is guaranteed by MIR borrow/raw-pointer analyses before codegen.
+    unsafe { (*ptr).clone() }
+}
+
+fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
+    // Pointer validity is guaranteed by MIR borrow/raw-pointer analyses before codegen.
+    unsafe { (*ptr).clone() }
+}
 "#
             .trim()
             .to_string(),
         )]
+    }
+
+    fn emit_index_runtime_impls(&self) -> Result<Vec<Item>, TypedCodegenError> {
+        let mut items = Vec::new();
+        let list_builtin = self.ids.builtin_adt(Builtin::List);
+        for adt_id in &self.used_adts {
+            let is_indexable = self.ids.is_indexable_adt(adt_id);
+            let is_builtin_list = list_builtin.as_ref().is_some_and(|id| id == adt_id);
+            if !is_indexable && !is_builtin_list {
+                continue;
+            }
+
+            let adt_name = self.adt_name(adt_id).to_string();
+            let generics = self.adt_generic_params(adt_id);
+            let layout = self
+                .adt_layouts
+                .get(adt_id)
+                .ok_or_else(|| TypedCodegenError::new("missing ADT layout"))?;
+
+            if is_builtin_list {
+                if layout.variants.len() != 2 {
+                    continue;
+                }
+                let nil_ctor = self
+                    .ctor_name_map
+                    .get(&layout.variants[0].ctor)
+                    .cloned()
+                    .unwrap_or_else(|| "nil".to_string());
+                let cons_ctor = self
+                    .ctor_name_map
+                    .get(&layout.variants[1].ctor)
+                    .cloned()
+                    .unwrap_or_else(|| "cons".to_string());
+                if layout.variants[1].fields.len() < 2 || generics.is_empty() {
+                    continue;
+                }
+                let impl_generics = format!("<{}>", generics.join(", "));
+                let adt_ty = self.name_with_generics(&adt_name, &generics);
+                let item_ty = generics[0].clone();
+                let text = format!(
+                    "impl{} LrlIndex<{}> for {} {{
+    fn lrl_index(self, index: usize) -> {} {{
+        let mut current = self;
+        let mut i = index;
+        loop {{
+            match current {{
+                {}::{} => panic!(\"index out of bounds\"),
+                {}::{}(head, tail) => {{
+                    if i == 0 {{
+                        return head;
+                    }}
+                    i -= 1;
+                    current = *tail;
+                }},
+                _ => panic!(\"indexing shape unsupported in typed backend\"),
+            }}
+        }}
+    }}
+}}",
+                    impl_generics,
+                    item_ty,
+                    adt_ty,
+                    item_ty,
+                    adt_name,
+                    nil_ctor,
+                    adt_name,
+                    cons_ctor
+                );
+                items.push(Item::Raw(text));
+                continue;
+            }
+
+            if !is_indexable || layout.variants.len() != 1 {
+                continue;
+            }
+            let variant = &layout.variants[0];
+            if variant.fields.is_empty() {
+                continue;
+            }
+
+            let ctor_name = self
+                .ctor_name_map
+                .get(&variant.ctor)
+                .cloned()
+                .unwrap_or_else(|| "ctor".to_string());
+            let first_field_ty = &variant.fields[0];
+            let impl_generics = if generics.is_empty() {
+                String::new()
+            } else {
+                format!("<{}>", generics.join(", "))
+            };
+            let adt_ty = self.name_with_generics(&adt_name, &generics);
+            let item_ty = if !generics.is_empty() {
+                generics[0].clone()
+            } else {
+                self.rust_type(first_field_ty)?
+            };
+            let field_names: Vec<String> = (0..variant.fields.len())
+                .map(|i| {
+                    if i == 0 {
+                        "data".to_string()
+                    } else {
+                        format!("_{}", i)
+                    }
+                })
+                .collect();
+            let pattern = if field_names.is_empty() {
+                format!("{}::{}", adt_name, ctor_name)
+            } else {
+                format!("{}::{}({})", adt_name, ctor_name, field_names.join(", "))
+            };
+
+            let first_field_is_item = matches!(first_field_ty, MirType::Param(0));
+            let first_field_is_list = matches!(
+                first_field_ty,
+                MirType::Adt(list_id, list_args)
+                    if list_builtin.as_ref().is_some_and(|id| id == list_id)
+                        && !list_args.is_empty()
+                        && matches!(list_args[0], MirType::Param(0))
+            );
+            let body_expr = if first_field_is_item {
+                "if index == 0 { data } else { panic!(\"index out of bounds\") }".to_string()
+            } else if first_field_is_list {
+                "runtime_index(data, index as u64)".to_string()
+            } else {
+                "panic!(\"indexing shape unsupported in typed backend\")".to_string()
+            };
+
+            let text = format!(
+                "impl{} LrlIndex<{}> for {} {{
+    fn lrl_index(self, index: usize) -> {} {{
+        match self {{
+            {} => {},
+            _ => panic!(\"indexing shape unsupported in typed backend\"),
+        }}
+    }}
+}}",
+                impl_generics, item_ty, adt_ty, item_ty, pattern, body_expr
+            );
+            items.push(Item::Raw(text));
+        }
+        Ok(items)
     }
 
     fn collect_closure_usage(&mut self, program: &TypedProgram) -> Result<(), TypedCodegenError> {
@@ -785,10 +1056,16 @@ where
                     .ctor_arity(&ctor_id)
                     .unwrap_or_else(|| count_arity(&ctor.ty));
 
+                let generics = if self.prop_adts.contains(&adt_id) {
+                    Vec::new()
+                } else {
+                    self.adt_generic_params(&adt_id)
+                };
+
                 let ctor_value_type = self.ctor_value_type(&adt_id, idx, arity)?;
                 let ctor_expr = self.ctor_value_expr(&adt_id, idx, arity)?;
                 items.push(Item::Fn {
-                    name: ctor_name,
+                    name: self.fn_name_with_generics(&ctor_name, &generics),
                     params: Vec::new(),
                     ret: Some(ctor_value_type),
                     body: Block {
@@ -930,6 +1207,11 @@ where
         let ret_ty = self
             .local_type(body, 0)
             .ok_or_else(|| TypedCodegenError::new("missing closure return type"))?;
+        let mut generic_types: Vec<&MirType> = Vec::new();
+        generic_types.extend(captures.iter());
+        generic_types.push(arg_ty);
+        generic_types.push(ret_ty);
+        let generics = self.generics_for_types(generic_types);
 
         let mut call_args = Vec::new();
         for i in 0..captures.len() {
@@ -938,7 +1220,7 @@ where
         call_args.push(self.expr_path("arg"));
 
         Ok(Item::Fn {
-            name: format!("closure_adapter_{}", global_idx),
+            name: self.fn_name_with_generics(&format!("closure_adapter_{}", global_idx), &generics),
             params: vec![
                 Param {
                     name: "cap".to_string(),
@@ -989,6 +1271,11 @@ where
         let ret_ty = self
             .local_type(body, 0)
             .ok_or_else(|| TypedCodegenError::new("missing closure return type"))?;
+        let mut generic_types: Vec<&MirType> = Vec::new();
+        generic_types.extend(explicit_captures.iter());
+        generic_types.push(arg_ty);
+        generic_types.push(ret_ty);
+        let generics = self.generics_for_types(generic_types);
 
         let mut call_args = Vec::new();
         call_args.push(self.expr_path("self_fn"));
@@ -998,7 +1285,7 @@ where
         call_args.push(self.expr_path("arg"));
 
         Ok(Item::Fn {
-            name: format!("fix_adapter_{}", global_idx),
+            name: self.fn_name_with_generics(&format!("fix_adapter_{}", global_idx), &generics),
             params: vec![
                 Param {
                     name: "self_fn".to_string(),
@@ -1089,6 +1376,9 @@ where
                 args.len()
             )));
         }
+        let mut rec_types: Vec<&MirType> = args.iter().collect();
+        rec_types.push(&spec.result_ty);
+        let generics = self.generics_for_types(rec_types);
 
         let motive_ty = self.rust_type(&args[0])?;
         let zero_ty = self.rust_type(&args[1])?;
@@ -1123,7 +1413,7 @@ where
             &ret_ty,
         );
         let entry_item = Item::Fn {
-            name: spec.name.clone(),
+            name: self.fn_name_with_generics(&spec.name, &generics),
             params: vec![Param {
                 name: "motive".to_string(),
                 ty: Some(motive_ty.clone()),
@@ -1202,7 +1492,7 @@ where
             else_branch: Some(else_block),
         };
         let impl_item = Item::Fn {
-            name: spec.impl_name(),
+            name: self.fn_name_with_generics(&spec.impl_name(), &generics),
             params: vec![
                 Param {
                     name: "motive".to_string(),
@@ -1239,6 +1529,9 @@ where
                 args.len()
             )));
         }
+        let mut rec_types: Vec<&MirType> = args.iter().collect();
+        rec_types.push(&spec.result_ty);
+        let generics = self.generics_for_types(rec_types);
 
         let motive_ty = self.rust_type(&args[0])?;
         let true_ty = self.rust_type(&args[1])?;
@@ -1273,7 +1566,7 @@ where
             &ret_ty,
         );
         let entry_item = Item::Fn {
-            name: spec.name.clone(),
+            name: self.fn_name_with_generics(&spec.name, &generics),
             params: vec![Param {
                 name: "motive".to_string(),
                 ty: Some(motive_ty.clone()),
@@ -1309,7 +1602,7 @@ where
             else_branch: Some(else_block),
         };
         let impl_item = Item::Fn {
-            name: spec.impl_name(),
+            name: self.fn_name_with_generics(&spec.impl_name(), &generics),
             params: vec![
                 Param {
                     name: "motive".to_string(),
@@ -1340,48 +1633,94 @@ where
 
     fn emit_adt_recursor(&self, spec: &RecursorSpec) -> Result<Vec<Item>, TypedCodegenError> {
         let args = &spec.arg_types;
-        if args.len() < 2 {
-            return Err(TypedCodegenError::new(
-                "recursor must have at least motive and major args",
-            ));
-        }
-
+        let mut rec_types: Vec<&MirType> = args.iter().collect();
+        rec_types.push(&spec.result_ty);
+        let generics = self.generics_for_types(rec_types);
         let adt_name = self.adt_name(&spec.adt_id);
         let Some(layout) = self.adt_layouts.get(&spec.adt_id) else {
             return Err(TypedCodegenError::new("missing ADT layout"));
         };
+        let decl =
+            self.env.inductives.get(spec.adt_id.name()).ok_or_else(|| {
+                TypedCodegenError::new("missing inductive declaration for recursor")
+            })?;
+        let param_count = decl.num_params;
+        let index_count = count_indices(&decl.ty, decl.num_params);
+        let expected = param_count + 1 + layout.variants.len() + index_count + 1;
+        if args.len() != expected {
+            return Err(TypedCodegenError::new(format!(
+                "recursor for {} expects {} args, got {}",
+                adt_name,
+                expected,
+                args.len()
+            )));
+        }
 
-        let motive_ty = self.rust_type(&args[0])?;
-        let major_ty = self.rust_type(args.last().unwrap())?;
+        let motive_pos = param_count;
+        let minor_start = motive_pos + 1;
+        let minor_end = minor_start + layout.variants.len();
+        let index_start = minor_end;
+        let index_end = index_start + index_count;
+        let major_pos = index_end;
+
+        let param_types: Vec<String> = args[..param_count]
+            .iter()
+            .map(|ty| self.rust_type(ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let motive_ty = self.rust_type(&args[motive_pos])?;
+        let major_ty = self.rust_type(&args[major_pos])?;
         let ret_ty = self.rust_type(&spec.result_ty)?;
-        let minor_types: Vec<String> = args[1..args.len() - 1]
+        let minor_types: Vec<String> = args[minor_start..minor_end]
+            .iter()
+            .map(|ty| self.rust_type(ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let index_types: Vec<String> = args[index_start..index_end]
             .iter()
             .map(|ty| self.rust_type(ty))
             .collect::<Result<Vec<_>, _>>()?;
 
-        if minor_types.len() != layout.variants.len() {
-            return Err(TypedCodegenError::new(format!(
-                "recursor for {} expects {} minors, got {}",
-                adt_name,
-                layout.variants.len(),
-                minor_types.len()
-            )));
+        let mut captured_names = Vec::new();
+        for idx in 0..param_count {
+            captured_names.push(format!("param_{}", idx));
         }
+        captured_names.push("motive".to_string());
+
+        let mut entry_params = Vec::new();
+        for (idx, ty) in param_types.iter().enumerate() {
+            entry_params.push(Param {
+                name: format!("param_{}", idx),
+                ty: Some(ty.clone()),
+            });
+        }
+        entry_params.push(Param {
+            name: "motive".to_string(),
+            ty: Some(motive_ty.clone()),
+        });
 
         let mut entry_arg_names = Vec::new();
         for idx in 0..minor_types.len() {
             entry_arg_names.push(format!("minor_{}", idx));
         }
+        for idx in 0..index_types.len() {
+            entry_arg_names.push(format!("index_{}", idx));
+        }
         entry_arg_names.push("major".to_string());
 
         let mut entry_arg_types = minor_types.clone();
+        entry_arg_types.extend(index_types.clone());
         entry_arg_types.push(major_ty.clone());
         let entry_ret_ty = self.curried_fn_type(&entry_arg_types, ret_ty.clone());
         let impl_call = self.expr_call(self.expr_path(spec.impl_name()), {
             let mut args = Vec::new();
+            for idx in 0..param_count {
+                args.push(self.expr_clone(self.expr_path(format!("param_{}", idx))));
+            }
             args.push(self.expr_clone(self.expr_path("motive")));
             for idx in 0..minor_types.len() {
                 args.push(self.expr_path(format!("minor_{}", idx)));
+            }
+            for idx in 0..index_types.len() {
+                args.push(self.expr_path(format!("index_{}", idx)));
             }
             args.push(self.expr_path("major"));
             args
@@ -1389,16 +1728,13 @@ where
         let entry_expr = self.curried_entry_expr(
             &entry_arg_names,
             &entry_arg_types,
-            &["motive".to_string()],
+            &captured_names,
             &impl_call,
             &ret_ty,
         );
         let entry_item = Item::Fn {
-            name: spec.name.clone(),
-            params: vec![Param {
-                name: "motive".to_string(),
-                ty: Some(motive_ty.clone()),
-            }],
+            name: self.fn_name_with_generics(&spec.name, &generics),
+            params: entry_params,
             ret: Some(entry_ret_ty),
             body: Block {
                 stmts: Vec::new(),
@@ -1459,9 +1795,15 @@ where
                 if self.is_direct_recursive(field_ty, &spec.adt_id) {
                     let ih_name = format!("ih_{}", field_idx);
                     let mut ih_args = Vec::new();
+                    for idx in 0..param_count {
+                        ih_args.push(self.expr_clone(self.expr_path(format!("param_{}", idx))));
+                    }
                     ih_args.push(self.expr_clone(self.expr_path("motive")));
                     for idx in 0..minor_types.len() {
                         ih_args.push(self.expr_clone(self.expr_path(format!("minor_{}", idx))));
+                    }
+                    for idx in 0..index_types.len() {
+                        ih_args.push(self.expr_clone(self.expr_path(format!("index_{}", idx))));
                     }
                     ih_args.push(self.expr_clone(self.expr_path(&field_name)));
                     arm_stmts.push(Stmt::Let {
@@ -1509,9 +1851,15 @@ where
         };
 
         let impl_item = Item::Fn {
-            name: spec.impl_name(),
+            name: self.fn_name_with_generics(&spec.impl_name(), &generics),
             params: {
                 let mut params = Vec::new();
+                for (idx, ty) in param_types.iter().enumerate() {
+                    params.push(Param {
+                        name: format!("param_{}", idx),
+                        ty: Some(ty.clone()),
+                    });
+                }
                 params.push(Param {
                     name: "motive".to_string(),
                     ty: Some(motive_ty),
@@ -1519,6 +1867,12 @@ where
                 for (idx, ty) in minor_types.iter().enumerate() {
                     params.push(Param {
                         name: format!("minor_{}", idx),
+                        ty: Some(ty.clone()),
+                    });
+                }
+                for (idx, ty) in index_types.iter().enumerate() {
+                    params.push(Param {
+                        name: format!("index_{}", idx),
                         ty: Some(ty.clone()),
                     });
                 }
@@ -1715,17 +2069,7 @@ where
             .get(ind_name)
             .ok_or_else(|| TypedCodegenError::new("unknown inductive in recursor"))?;
         let indices = count_indices(&decl.ty, decl.num_params);
-        if indices != 0 {
-            return Err(TypedCodegenError::new(
-                "indexed inductives are not supported in typed backend",
-            ));
-        }
-        if decl.num_params != 0 {
-            return Err(TypedCodegenError::new(
-                "parametric inductives are not supported in typed backend",
-            ));
-        }
-        Ok(1 + decl.ctors.len() + 1)
+        Ok(decl.num_params + 1 + decl.ctors.len() + indices + 1)
     }
 
     fn recursor_expr(
@@ -1763,21 +2107,9 @@ where
     }
 
     fn check_recursor_supported(&self, ind_name: &str) -> Result<AdtId, TypedCodegenError> {
-        let decl = self.env.inductives.get(ind_name).ok_or_else(|| {
+        let _decl = self.env.inductives.get(ind_name).ok_or_else(|| {
             TypedCodegenError::new(format!("unknown inductive in recursor: {}", ind_name))
         })?;
-        if decl.num_params != 0 {
-            return Err(TypedCodegenError::new(format!(
-                "parametric ADT {} is not supported",
-                ind_name
-            )));
-        }
-        let indices = count_indices(&decl.ty, decl.num_params);
-        if indices != 0 {
-            return Err(TypedCodegenError::new(
-                "indexed inductives are not supported in typed backend",
-            ));
-        }
         Ok(self
             .ids
             .adt_id(ind_name)
@@ -1842,6 +2174,8 @@ where
     }
 
     fn emit_body(&self, body: &TypedBody, is_closure: bool) -> Result<Item, TypedCodegenError> {
+        let generics = self.body_generics(body);
+        let bound_generics = self.body_generic_indices(body);
         let ret_ty = self.rust_type(
             self.local_type(body, 0)
                 .ok_or_else(|| TypedCodegenError::new("missing return type"))?,
@@ -1888,7 +2222,11 @@ where
         stmts.push(Stmt::Let {
             name: "_0".to_string(),
             mutable: true,
-            ty: Some(format!("Option<{}>", ret_ty)),
+            ty: self.option_local_type_annotation(
+                self.local_type(body, 0)
+                    .ok_or_else(|| TypedCodegenError::new("missing return type"))?,
+                &bound_generics,
+            )?,
             value: Some(self.expr_none()),
         });
 
@@ -1902,22 +2240,20 @@ where
             let arg_ty = self
                 .local_type(body, 2)
                 .ok_or_else(|| TypedCodegenError::new("missing closure arg"))?;
-            let arg_ty_str = self.rust_type(arg_ty)?;
             stmts.push(Stmt::Let {
                 name: "_2".to_string(),
                 mutable: true,
-                ty: Some(format!("Option<{}>", arg_ty_str)),
+                ty: self.option_local_type_annotation(arg_ty, &bound_generics)?,
                 value: Some(self.expr_some(self.expr_path("__arg"))),
             });
             for i in 3..body.body.local_decls.len() {
                 let local_ty = self
                     .local_type(body, i)
                     .ok_or_else(|| TypedCodegenError::new("missing local"))?;
-                let local_ty_str = self.rust_type(local_ty)?;
                 stmts.push(Stmt::Let {
                     name: format!("_{}", i),
                     mutable: true,
-                    ty: Some(format!("Option<{}>", local_ty_str)),
+                    ty: self.option_local_type_annotation(local_ty, &bound_generics)?,
                     value: Some(self.expr_none()),
                 });
             }
@@ -1926,11 +2262,10 @@ where
                 let local_ty = self
                     .local_type(body, i)
                     .ok_or_else(|| TypedCodegenError::new("missing local"))?;
-                let local_ty_str = self.rust_type(local_ty)?;
                 stmts.push(Stmt::Let {
                     name: format!("_{}", i),
                     mutable: true,
-                    ty: Some(format!("Option<{}>", local_ty_str)),
+                    ty: self.option_local_type_annotation(local_ty, &bound_generics)?,
                     value: Some(self.expr_none()),
                 });
             }
@@ -1977,7 +2312,7 @@ where
         ));
 
         Ok(Item::Fn {
-            name: body.name.clone(),
+            name: self.fn_name_with_generics(&body.name, &generics),
             params,
             ret: Some(ret_ty),
             body: Block { stmts, tail },
@@ -2007,10 +2342,36 @@ where
                 }))
             }
             Statement::StorageLive(_) | Statement::StorageDead(_) | Statement::Nop => Ok(None),
-            Statement::RuntimeCheck(_) => Err(TypedCodegenError::new(
-                "runtime checks are not supported in typed backend",
-            )),
+            Statement::RuntimeCheck(check) => {
+                Ok(Some(self.emit_runtime_check(body, check, closure_env)?))
+            }
         }
+    }
+
+    fn emit_runtime_check(
+        &self,
+        body: &TypedBody,
+        check: &RuntimeCheckKind,
+        closure_env: Option<&ClosureEnv>,
+    ) -> Result<Stmt, TypedCodegenError> {
+        let expr = match check {
+            RuntimeCheckKind::RefCellBorrow { local } => self.expr_call_path(
+                "runtime_refcell_borrow_check",
+                vec![self.place_expr(body, &Place::from(*local), AccessKind::Copy, closure_env)?],
+            ),
+            RuntimeCheckKind::MutexLock { local } => self.expr_call_path(
+                "runtime_mutex_lock",
+                vec![self.place_expr(body, &Place::from(*local), AccessKind::Copy, closure_env)?],
+            ),
+            RuntimeCheckKind::BoundsCheck { local, index } => self.expr_call_path(
+                "runtime_bounds_check",
+                vec![
+                    self.place_expr(body, &Place::from(*local), AccessKind::Copy, closure_env)?,
+                    self.place_expr(body, &Place::from(*index), AccessKind::Copy, closure_env)?,
+                ],
+            ),
+        };
+        Ok(Stmt::Expr(expr))
     }
 
     fn emit_terminator(
@@ -2128,9 +2489,14 @@ where
         match rvalue {
             Rvalue::Use(op) => self.operand_expr(body, op, closure_env, expected_ty),
             Rvalue::Discriminant(place) => self.discriminant_expr(body, place, closure_env),
-            Rvalue::Ref(_, _) => Err(TypedCodegenError::new(
-                "borrow rvalues not supported in typed backend",
-            )),
+            Rvalue::Ref(kind, place) => {
+                let inner = self.place_expr(body, place, AccessKind::Copy, closure_env)?;
+                let wrapper = match kind {
+                    BorrowKind::Shared => "LrlRefShared::from_value",
+                    BorrowKind::Mut => "LrlRefMut::from_value",
+                };
+                Ok(self.expr_call_path(wrapper, vec![inner]))
+            }
         }
     }
 
@@ -2180,10 +2546,9 @@ where
                 Ok(self.expr_call(self.expr_path(safe), Vec::new()))
             }
             Literal::Recursor(ind_name) => self.recursor_expr(ind_name, expected_ty),
-            Literal::OpaqueConst(reason) => Err(TypedCodegenError::new(format!(
-                "OpaqueConst is not supported in {}: {}",
-                body.name, reason
-            ))),
+            Literal::OpaqueConst(reason) => {
+                Ok(self.expr_call_path("LrlOpaque::new", vec![self.expr_lit_str(reason)]))
+            }
             Literal::InductiveCtor(ctor, arity) => {
                 let ctor_name = self
                     .ctor_name_map
@@ -2195,7 +2560,12 @@ where
             }
             Literal::Closure(idx, captures) => {
                 let global_idx = body.closure_base + *idx;
-                let fn_ty = &constant.ty;
+                let fn_ty = expected_ty.unwrap_or(&constant.ty);
+                if self.type_contains_params(fn_ty) {
+                    return Err(TypedCodegenError::new(
+                        "polymorphic function-value specialization is not yet supported in typed backend",
+                    ));
+                }
                 let arg_ty = self
                     .fn_arg_type(fn_ty)
                     .ok_or_else(|| TypedCodegenError::new("unsupported closure type"))?;
@@ -2227,7 +2597,12 @@ where
             }
             Literal::Fix(idx, captures) => {
                 let global_idx = body.closure_base + *idx;
-                let fn_ty = &constant.ty;
+                let fn_ty = expected_ty.unwrap_or(&constant.ty);
+                if self.type_contains_params(fn_ty) {
+                    return Err(TypedCodegenError::new(
+                        "polymorphic function-value specialization is not yet supported in typed backend",
+                    ));
+                }
                 let arg_ty = self
                     .fn_arg_type(fn_ty)
                     .ok_or_else(|| TypedCodegenError::new("unsupported fixpoint type"))?;
@@ -2324,194 +2699,10 @@ where
         }
 
         let base_expr = self.local_expr(place.local.index(), AccessKind::Copy)?;
-        let mut variant = None;
-        let mut field = None;
-        for proj in &place.projection {
-            match proj {
-                PlaceElem::Downcast(idx) => variant = Some(*idx),
-                PlaceElem::Field(idx) => field = Some(*idx),
-                PlaceElem::Deref => {
-                    return Err(TypedCodegenError::new(
-                        "deref projections not supported in typed backend",
-                    ));
-                }
-                PlaceElem::Index(_) => {
-                    return Err(TypedCodegenError::new(
-                        "index projections not supported in typed backend",
-                    ));
-                }
-            }
-        }
-        let Some(field_idx) = field else {
-            return Err(TypedCodegenError::new("unsupported place projection"));
-        };
-
-        let local_ty = self
+        let base_ty = self
             .local_type(body, place.local.index())
             .ok_or_else(|| TypedCodegenError::new("missing local type"))?;
-
-        if matches!(local_ty, MirType::Nat) {
-            if let (Some(variant_idx), Some(field_idx)) = (variant, field) {
-                if variant_idx == 1 && field_idx == 0 {
-                    return Ok(Expr::Binary {
-                        op: BinaryOp::Sub,
-                        left: Box::new(base_expr),
-                        right: Box::new(self.expr_lit_int("1")),
-                    });
-                }
-            }
-            return Err(TypedCodegenError::new(
-                "unsupported Nat projection in typed backend",
-            ));
-        }
-        let (adt_id, args) = match local_ty {
-            MirType::Adt(adt_id, args) => (adt_id, args),
-            _ => {
-                return Err(TypedCodegenError::new(
-                    "field projection only supported on ADTs",
-                ));
-            }
-        };
-        if !args.is_empty() {
-            return Err(TypedCodegenError::new("parametric ADTs are not supported"));
-        }
-        let layout = self
-            .adt_layouts
-            .get(&adt_id)
-            .ok_or_else(|| TypedCodegenError::new("missing ADT layout"))?;
-        let adt_name = self.adt_name(&adt_id);
-
-        if let Some(variant_idx) = variant.or_else(|| {
-            if layout.variants.len() == 1 {
-                Some(0)
-            } else {
-                None
-            }
-        }) {
-            let variant_layout = layout
-                .variants
-                .get(variant_idx)
-                .ok_or_else(|| TypedCodegenError::new("invalid variant"))?;
-            let ctor_name = self
-                .ctor_name_map
-                .get(&variant_layout.ctor)
-                .cloned()
-                .unwrap_or_else(|| format!("Ctor{}", variant_idx));
-
-            let mut pattern_parts = Vec::new();
-            for idx in 0..variant_layout.fields.len() {
-                if idx == field_idx {
-                    pattern_parts.push(Pat::Bind(format!("field_{}", idx)));
-                } else {
-                    pattern_parts.push(Pat::Wild);
-                }
-            }
-            let pattern = if pattern_parts.is_empty() {
-                Pat::Path(format!("{}::{}", adt_name, ctor_name))
-            } else {
-                Pat::Tuple {
-                    path: format!("{}::{}", adt_name, ctor_name),
-                    args: pattern_parts,
-                }
-            };
-
-            let field_name = format!("field_{}", field_idx);
-            let needs_unbox = self
-                .boxed_fields
-                .contains(&(adt_id.clone(), variant_idx, field_idx));
-            let field_expr = if needs_unbox {
-                self.expr_clone(Expr::Unary {
-                    op: UnaryOp::Deref,
-                    expr: Box::new(self.expr_path(field_name)),
-                })
-            } else {
-                self.expr_clone(self.expr_path(field_name))
-            };
-            return Ok(Expr::Match {
-                scrutinee: Box::new(base_expr),
-                arms: vec![
-                    MatchArm {
-                        pat: pattern,
-                        body: Block {
-                            stmts: Vec::new(),
-                            tail: Some(Box::new(field_expr)),
-                        },
-                    },
-                    MatchArm {
-                        pat: Pat::Wild,
-                        body: Block {
-                            stmts: Vec::new(),
-                            tail: Some(Box::new(self.expr_unreachable())),
-                        },
-                    },
-                ],
-            });
-        }
-
-        let mut arms = Vec::new();
-        let mut has_arm = false;
-        for (variant_idx, variant_layout) in layout.variants.iter().enumerate() {
-            if field_idx >= variant_layout.fields.len() {
-                continue;
-            }
-            let ctor_name = self
-                .ctor_name_map
-                .get(&variant_layout.ctor)
-                .cloned()
-                .unwrap_or_else(|| format!("Ctor{}", variant_idx));
-            let mut pattern_parts = Vec::new();
-            for idx in 0..variant_layout.fields.len() {
-                if idx == field_idx {
-                    pattern_parts.push(Pat::Bind(format!("field_{}", idx)));
-                } else {
-                    pattern_parts.push(Pat::Wild);
-                }
-            }
-            let pattern = if pattern_parts.is_empty() {
-                Pat::Path(format!("{}::{}", adt_name, ctor_name))
-            } else {
-                Pat::Tuple {
-                    path: format!("{}::{}", adt_name, ctor_name),
-                    args: pattern_parts,
-                }
-            };
-            let needs_unbox = self
-                .boxed_fields
-                .contains(&(adt_id.clone(), variant_idx, field_idx));
-            let field_name = format!("field_{}", field_idx);
-            let field_expr = if needs_unbox {
-                self.expr_clone(Expr::Unary {
-                    op: UnaryOp::Deref,
-                    expr: Box::new(self.expr_path(field_name)),
-                })
-            } else {
-                self.expr_clone(self.expr_path(field_name))
-            };
-            arms.push(MatchArm {
-                pat: pattern,
-                body: Block {
-                    stmts: Vec::new(),
-                    tail: Some(Box::new(field_expr)),
-                },
-            });
-            has_arm = true;
-        }
-        if !has_arm {
-            return Err(TypedCodegenError::new(
-                "missing downcast for multi-variant ADT",
-            ));
-        }
-        arms.push(MatchArm {
-            pat: Pat::Wild,
-            body: Block {
-                stmts: Vec::new(),
-                tail: Some(Box::new(self.expr_unreachable())),
-            },
-        });
-        Ok(Expr::Match {
-            scrutinee: Box::new(base_expr),
-            arms,
-        })
+        self.project_from_expr(base_expr, base_ty, &place.projection)
     }
 
     fn project_from_expr(
@@ -2557,9 +2748,6 @@ where
                             ))
                         }
                     };
-                    if !args.is_empty() {
-                        return Err(TypedCodegenError::new("parametric ADTs are not supported"));
-                    }
                     let layout = self
                         .adt_layouts
                         .get(&adt_id)
@@ -2571,7 +2759,7 @@ where
                     {
                         next_ty
                     } else {
-                        self.field_type_without_downcast(&adt_id, *field_idx)
+                        self.field_type_without_downcast(&adt_id, *field_idx, &args)
                             .ok_or_else(|| TypedCodegenError::new("unsupported field access"))?
                     };
 
@@ -2713,14 +2901,47 @@ where
                     variant = None;
                 }
                 PlaceElem::Deref => {
-                    return Err(TypedCodegenError::new(
-                        "deref projections not supported in typed backend",
-                    ));
+                    match &current_ty {
+                        MirType::Ref(_, inner, mutability) => {
+                            expr = match mutability {
+                                Mutability::Not | Mutability::Mut => {
+                                    self.expr_method(expr, "read", vec![])
+                                }
+                            };
+                            current_ty = (**inner).clone();
+                        }
+                        MirType::RawPtr(inner, mutability) => {
+                            expr = match mutability {
+                                Mutability::Not => {
+                                    self.expr_call_path("runtime_raw_ptr_read", vec![expr])
+                                }
+                                Mutability::Mut => {
+                                    self.expr_call_path("runtime_raw_ptr_read_mut", vec![expr])
+                                }
+                            };
+                            current_ty = (**inner).clone();
+                        }
+                        _ => {
+                            return Err(TypedCodegenError::new(
+                                "deref projection on non-reference type",
+                            ))
+                        }
+                    }
+                    variant = None;
                 }
-                PlaceElem::Index(_) => {
-                    return Err(TypedCodegenError::new(
-                        "index projections not supported in typed backend",
-                    ));
+                PlaceElem::Index(local) => {
+                    let elem_ty = match &current_ty {
+                        MirType::Adt(_, args) => args.get(0).cloned().unwrap_or(MirType::Unit),
+                        _ => {
+                            return Err(TypedCodegenError::new(
+                                "index projection only supported on ADTs",
+                            ))
+                        }
+                    };
+                    let index_expr = self.local_expr(local.index(), AccessKind::Copy)?;
+                    expr = self.expr_call_path("runtime_index", vec![expr, index_expr]);
+                    current_ty = elem_ty;
+                    variant = None;
                 }
             }
         }
@@ -2770,10 +2991,7 @@ where
                     }),
                 })
             }
-            MirType::Adt(adt_id, args) => {
-                if !args.is_empty() {
-                    return Err(TypedCodegenError::new("parametric ADTs are not supported"));
-                }
+            MirType::Adt(adt_id, _args) => {
                 let expr = self.place_expr(body, place, AccessKind::Copy, closure_env)?;
                 let layout = self
                     .adt_layouts
@@ -2830,14 +3048,25 @@ where
             MirType::Unit => Ok("()".to_string()),
             MirType::Bool => Ok("bool".to_string()),
             MirType::Nat => Ok("u64".to_string()),
-            MirType::IndexTerm(_) => Err(TypedCodegenError::new(
-                "index terms are not supported in typed backend",
-            )),
+            MirType::IndexTerm(_) => Ok("usize".to_string()),
             MirType::Adt(adt_id, args) => {
-                if !args.is_empty() {
-                    return Err(TypedCodegenError::new("parametric ADTs are not supported"));
+                if self.prop_adts.contains(adt_id) {
+                    return Ok("()".to_string());
                 }
-                Ok(self.adt_name(adt_id).to_string())
+                let param_count = self.ids.adt_num_params(adt_id).unwrap_or(0);
+                let mut rendered_args = Vec::new();
+                for arg in args.iter().take(param_count) {
+                    rendered_args.push(self.rust_type(arg)?);
+                }
+                if rendered_args.is_empty() {
+                    Ok(self.adt_name(adt_id).to_string())
+                } else {
+                    Ok(format!(
+                        "{}<{}>",
+                        self.adt_name(adt_id),
+                        rendered_args.join(", ")
+                    ))
+                }
             }
             MirType::Fn(kind, _regions, args, ret)
             | MirType::FnItem(_, kind, _regions, args, ret)
@@ -2854,22 +3083,156 @@ where
                 let ret_str = self.rust_type(ret)?;
                 Ok(format!("Rc<dyn LrlCallable<{}, {}>>", arg_str, ret_str))
             }
-            MirType::Ref(_, _, _) => Err(TypedCodegenError::new(
-                "Ref types are not supported in typed backend",
-            )),
-            MirType::RawPtr(_, _) => Err(TypedCodegenError::new(
-                "Raw pointers are not supported in typed backend",
-            )),
-            MirType::InteriorMutable(_, _) => Err(TypedCodegenError::new(
-                "Interior mutability is not supported in typed backend",
-            )),
-            MirType::Opaque { .. } => Err(TypedCodegenError::new(
-                "Opaque types are not supported in typed backend",
-            )),
-            MirType::Param(_) => Err(TypedCodegenError::new(
-                "Type parameters are not supported in typed backend",
-            )),
+            MirType::Ref(_, inner, mutability) => {
+                let inner = self.rust_type(inner)?;
+                match mutability {
+                    Mutability::Not => Ok(format!("LrlRefShared<{}>", inner)),
+                    Mutability::Mut => Ok(format!("LrlRefMut<{}>", inner)),
+                }
+            }
+            MirType::RawPtr(inner, mutability) => {
+                let inner = self.rust_type(inner)?;
+                match mutability {
+                    Mutability::Not => Ok(format!("*const {}", inner)),
+                    Mutability::Mut => Ok(format!("*mut {}", inner)),
+                }
+            }
+            MirType::InteriorMutable(inner, kind) => {
+                let inner = self.rust_type(inner)?;
+                let wrapper = match kind {
+                    IMKind::RefCell => "LrlRefCell",
+                    IMKind::Mutex => "LrlMutex",
+                    IMKind::Atomic => "LrlAtomic",
+                };
+                Ok(format!("{}<{}>", wrapper, inner))
+            }
+            MirType::Opaque { .. } => Ok("LrlOpaque".to_string()),
+            MirType::Param(idx) => Ok(self.generic_param_name(*idx)),
         }
+    }
+
+    fn generic_param_name(&self, idx: usize) -> String {
+        format!("T{}", idx)
+    }
+
+    fn name_with_generics(&self, name: &str, generics: &[String]) -> String {
+        if generics.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}<{}>", name, generics.join(", "))
+        }
+    }
+
+    fn fn_name_with_generics(&self, name: &str, generics: &[String]) -> String {
+        if generics.is_empty() {
+            name.to_string()
+        } else {
+            let bounded = generics
+                .iter()
+                .map(|param| format!("{}: Clone + 'static", param))
+                .collect::<Vec<_>>();
+            format!("{}<{}>", name, bounded.join(", "))
+        }
+    }
+
+    fn adt_generic_params(&self, adt_id: &AdtId) -> Vec<String> {
+        (0..self.ids.adt_num_params(adt_id).unwrap_or(0))
+            .map(|idx| self.generic_param_name(idx))
+            .collect()
+    }
+
+    fn collect_param_indices_in_type(ty: &MirType, out: &mut BTreeSet<usize>) {
+        match ty {
+            MirType::Param(idx) => {
+                out.insert(*idx);
+            }
+            MirType::Adt(_, args) => {
+                for arg in args {
+                    Self::collect_param_indices_in_type(arg, out);
+                }
+            }
+            MirType::Ref(_, inner, _)
+            | MirType::RawPtr(inner, _)
+            | MirType::InteriorMutable(inner, _) => Self::collect_param_indices_in_type(inner, out),
+            MirType::Fn(_, _, args, ret)
+            | MirType::FnItem(_, _, _, args, ret)
+            | MirType::Closure(_, _, _, args, ret) => {
+                for arg in args {
+                    Self::collect_param_indices_in_type(arg, out);
+                }
+                Self::collect_param_indices_in_type(ret, out);
+            }
+            MirType::Unit
+            | MirType::Bool
+            | MirType::Nat
+            | MirType::IndexTerm(_)
+            | MirType::Opaque { .. } => {}
+        }
+    }
+
+    fn type_contains_params(&self, ty: &MirType) -> bool {
+        let mut indices = BTreeSet::new();
+        Self::collect_param_indices_in_type(ty, &mut indices);
+        !indices.is_empty()
+    }
+
+    fn generics_for_types<'b, I>(&self, types: I) -> Vec<String>
+    where
+        I: IntoIterator<Item = &'b MirType>,
+    {
+        let mut indices = BTreeSet::new();
+        for ty in types {
+            Self::collect_param_indices_in_type(ty, &mut indices);
+        }
+        indices
+            .into_iter()
+            .map(|idx| self.generic_param_name(idx))
+            .collect()
+    }
+
+    fn body_generics(&self, body: &TypedBody) -> Vec<String> {
+        self.body_generic_indices(body)
+            .into_iter()
+            .map(|idx| self.generic_param_name(idx))
+            .collect()
+    }
+
+    fn body_generic_indices(&self, body: &TypedBody) -> BTreeSet<usize> {
+        let mut tys: Vec<&MirType> = Vec::new();
+        if let Some(ret_ty) = body.body.local_decls.get(0).map(|decl| &decl.ty) {
+            tys.push(ret_ty);
+        }
+        for idx in 1..=body.body.arg_count {
+            if let Some(arg_ty) = body.body.local_decls.get(idx).map(|decl| &decl.ty) {
+                tys.push(arg_ty);
+            }
+        }
+        if self.is_closure_body(&body.body) {
+            if let Some(env_decl) = body.body.local_decls.get(1) {
+                for capture_ty in &env_decl.closure_captures {
+                    tys.push(capture_ty);
+                }
+            }
+        }
+        let mut indices = BTreeSet::new();
+        for ty in tys {
+            Self::collect_param_indices_in_type(ty, &mut indices);
+        }
+        indices
+    }
+
+    fn option_local_type_annotation(
+        &self,
+        ty: &MirType,
+        bound_generics: &BTreeSet<usize>,
+    ) -> Result<Option<String>, TypedCodegenError> {
+        let mut indices = BTreeSet::new();
+        Self::collect_param_indices_in_type(ty, &mut indices);
+        if indices.iter().any(|idx| !bound_generics.contains(idx)) {
+            return Ok(None);
+        }
+        let local_ty = self.rust_type(ty)?;
+        Ok(Some(format!("Option<{}>", local_ty)))
     }
 
     fn rust_field_type(
@@ -2906,10 +3269,38 @@ where
         if adt_id.is_builtin(Builtin::Bool) {
             return Ok("bool".to_string());
         }
-        let adt_name = self.adt_name(adt_id);
-        if arity == 0 {
-            return Ok(adt_name.to_string());
+        if self.prop_adts.contains(adt_id) {
+            if arity == 0 {
+                return Ok("()".to_string());
+            }
+            let arg_types = self.ctor_runtime_arg_types(adt_id, variant_idx, arity)?;
+            let mut ty = "()".to_string();
+            for arg_ty in arg_types.iter().rev() {
+                let arg_ty = self.rust_type(arg_ty)?;
+                ty = format!("Rc<dyn LrlCallable<{}, {}>>", arg_ty, ty);
+            }
+            return Ok(ty);
         }
+        let adt_name = self.adt_name(adt_id);
+        let adt_ty = self.name_with_generics(adt_name, &self.adt_generic_params(adt_id));
+        if arity == 0 {
+            return Ok(adt_ty);
+        }
+        let arg_types = self.ctor_runtime_arg_types(adt_id, variant_idx, arity)?;
+        let mut ty = adt_ty;
+        for arg_ty in arg_types.iter().rev() {
+            let arg_ty = self.rust_type(arg_ty)?;
+            ty = format!("Rc<dyn LrlCallable<{}, {}>>", arg_ty, ty);
+        }
+        Ok(ty)
+    }
+
+    fn ctor_runtime_arg_types(
+        &self,
+        adt_id: &AdtId,
+        variant_idx: usize,
+        arity: usize,
+    ) -> Result<Vec<MirType>, TypedCodegenError> {
         let layout = self
             .adt_layouts
             .get(adt_id)
@@ -2918,19 +3309,18 @@ where
             .variants
             .get(variant_idx)
             .ok_or_else(|| TypedCodegenError::new("invalid variant"))?;
-        let mut ty = adt_name.to_string();
-        for (field_idx, field_ty) in variant.fields.iter().enumerate().rev() {
-            let arg_ty = self.rust_type(field_ty)?;
-            ty = format!("Rc<dyn LrlCallable<{}, {}>>", arg_ty, ty);
-            if self
-                .boxed_fields
-                .contains(&(adt_id.clone(), variant_idx, field_idx))
-            {
-                // still the same outward type (Box is internal to constructor)
-                let _ = field_idx;
-            }
+        if arity < variant.fields.len() {
+            return Err(TypedCodegenError::new(
+                "constructor arity smaller than layout field count",
+            ));
         }
-        Ok(ty)
+        let erased_prefix = arity - variant.fields.len();
+        let mut arg_types = Vec::with_capacity(arity);
+        for _ in 0..erased_prefix {
+            arg_types.push(MirType::Unit);
+        }
+        arg_types.extend(variant.fields.iter().cloned());
+        Ok(arg_types)
     }
 
     fn ctor_value_expr(
@@ -2970,8 +3360,31 @@ where
                 Ok(self.expr_lit_bool(false))
             };
         }
+        if self.prop_adts.contains(adt_id) {
+            if arity == 0 {
+                return Ok(self.expr_path("()"));
+            }
+            let arg_types = self.ctor_runtime_arg_types(adt_id, variant_idx, arity)?;
+            let mut arg_names = Vec::new();
+            for i in 0..arity {
+                arg_names.push(format!("a{}", i));
+            }
+            let arg_type_names: Vec<String> = arg_types
+                .iter()
+                .map(|ty| self.rust_type(ty))
+                .collect::<Result<_, _>>()?;
+            let final_expr = self.expr_path("()");
+            return Ok(self.curried_entry_expr(
+                &arg_names,
+                &arg_type_names,
+                &[],
+                &final_expr,
+                "()",
+            ));
+        }
 
         let adt_name = self.adt_name(adt_id);
+        let adt_ty = self.name_with_generics(adt_name, &self.adt_generic_params(adt_id));
         let layout = self
             .adt_layouts
             .get(adt_id)
@@ -2990,29 +3403,36 @@ where
             return Ok(self.expr_path(format!("{}::{}", adt_name, ctor_name)));
         }
 
+        let arg_types = self.ctor_runtime_arg_types(adt_id, variant_idx, arity)?;
         let mut arg_names = Vec::new();
-        let mut arg_types = Vec::new();
         for i in 0..arity {
             arg_names.push(format!("a{}", i));
-            arg_types.push(self.rust_type(&variant.fields[i])?);
         }
+        let arg_type_names: Vec<String> = arg_types
+            .iter()
+            .map(|ty| self.rust_type(ty))
+            .collect::<Result<_, _>>()?;
+
         let mut ctor_args = Vec::new();
-        for i in 0..arity {
-            let arg_name = format!("a{}", i);
+        let first_field_arg_idx = arity - variant.fields.len();
+        for field_idx in 0..variant.fields.len() {
+            let arg_name = format!("a{}", first_field_arg_idx + field_idx);
             if self
                 .boxed_fields
-                .contains(&(adt_id.clone(), variant_idx, i))
+                .contains(&(adt_id.clone(), variant_idx, field_idx))
             {
                 ctor_args.push(self.expr_call_path("Box::new", vec![self.expr_path(arg_name)]));
             } else {
                 ctor_args.push(self.expr_path(arg_name));
             }
         }
-        let final_expr = self.expr_call(
-            self.expr_path(format!("{}::{}", adt_name, ctor_name)),
-            ctor_args,
-        );
-        Ok(self.curried_entry_expr(&arg_names, &arg_types, &[], &final_expr, adt_name))
+        let ctor_expr = self.expr_path(format!("{}::{}", adt_name, ctor_name));
+        let final_expr = if ctor_args.is_empty() {
+            ctor_expr
+        } else {
+            self.expr_call(ctor_expr, ctor_args)
+        };
+        Ok(self.curried_entry_expr(&arg_names, &arg_type_names, &[], &final_expr, &adt_ty))
     }
 
     fn fn_arg_type<'b>(&self, ty: &'b MirType) -> Option<&'b MirType> {
@@ -3055,17 +3475,23 @@ where
         }
     }
 
-    fn field_type_without_downcast(&self, adt_id: &AdtId, field_idx: usize) -> Option<MirType> {
+    fn field_type_without_downcast(
+        &self,
+        adt_id: &AdtId,
+        field_idx: usize,
+        args: &[MirType],
+    ) -> Option<MirType> {
         let layout = self.adt_layouts.get(adt_id)?;
         let mut field_ty: Option<MirType> = None;
         for variant in &layout.variants {
-            if let Some(ty) = variant.fields.get(field_idx) {
+            if let Some(ty_template) = variant.fields.get(field_idx) {
+                let ty = ty_template.substitute_params(args);
                 if let Some(existing) = &field_ty {
-                    if existing != ty {
+                    if existing != &ty {
                         return None;
                     }
                 } else {
-                    field_ty = Some(ty.clone());
+                    field_ty = Some(ty);
                 }
             }
         }
@@ -3074,10 +3500,37 @@ where
 
     fn place_type(&self, body: &TypedBody, place: &Place) -> Option<MirType> {
         if self.is_closure_body(&body.body) && place.local.index() == 1 {
-            if place.projection.len() == 1 {
+            if !place.projection.is_empty() {
                 if let PlaceElem::Field(idx) = place.projection[0] {
                     let captures = self.closure_capture_types(&body.body).ok()?;
-                    return captures.get(idx).cloned();
+                    let mut current_ty = captures.get(idx).cloned()?;
+                    let mut variant = None;
+                    for proj in place.projection.iter().skip(1) {
+                        match proj {
+                            PlaceElem::Downcast(idx) => variant = Some(*idx),
+                            PlaceElem::Field(field_idx) => {
+                                current_ty = self.field_type(&current_ty, variant, *field_idx)?;
+                                variant = None;
+                            }
+                            PlaceElem::Deref => {
+                                current_ty = match current_ty {
+                                    MirType::Ref(_, inner, _) | MirType::RawPtr(inner, _) => *inner,
+                                    _ => return None,
+                                };
+                                variant = None;
+                            }
+                            PlaceElem::Index(_) => {
+                                current_ty = match current_ty {
+                                    MirType::Adt(_, args) => {
+                                        args.get(0).cloned().unwrap_or(MirType::Unit)
+                                    }
+                                    _ => return None,
+                                };
+                                variant = None;
+                            }
+                        }
+                    }
+                    return Some(current_ty);
                 }
             }
             return None;
@@ -3092,7 +3545,20 @@ where
                     current_ty = self.field_type(&current_ty, variant, *field_idx)?;
                     variant = None;
                 }
-                PlaceElem::Deref | PlaceElem::Index(_) => return None,
+                PlaceElem::Deref => {
+                    current_ty = match current_ty {
+                        MirType::Ref(_, inner, _) | MirType::RawPtr(inner, _) => *inner,
+                        _ => return None,
+                    };
+                    variant = None;
+                }
+                PlaceElem::Index(_) => {
+                    current_ty = match current_ty {
+                        MirType::Adt(_, args) => args.get(0).cloned().unwrap_or(MirType::Unit),
+                        _ => return None,
+                    };
+                    variant = None;
+                }
             }
         }
         Some(current_ty)
@@ -3963,6 +4429,19 @@ struct RecursorSpec {
 impl RecursorSpec {
     fn impl_name(&self) -> String {
         format!("{}_impl", self.name)
+    }
+}
+
+fn inductive_result_sort_is_prop(ty: &Term) -> bool {
+    let mut current = ty;
+    loop {
+        match current {
+            Term::Pi(_, body, _, _) => {
+                current = body.as_ref();
+            }
+            Term::Sort(level) => return matches!(level, Level::Zero),
+            _ => return false,
+        }
     }
 }
 

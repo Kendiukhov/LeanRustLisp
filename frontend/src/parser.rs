@@ -1,5 +1,6 @@
 use crate::surface::{Span, Syntax, SyntaxKind};
 use std::iter::Peekable;
+use std::num::IntErrorKind;
 use std::str::Chars;
 use thiserror::Error;
 
@@ -11,6 +12,10 @@ pub enum ParseError {
     UnexpectedChar(char, Span),
     #[error("Unmatched parenthesis")]
     UnmatchedParen(Span),
+    #[error("Invalid integer literal: {0}")]
+    InvalidIntegerLiteral(String, Span),
+    #[error("Integer literal out of range for usize: {0}")]
+    IntegerOverflow(String, Span),
 }
 
 impl ParseError {
@@ -18,7 +23,9 @@ impl ParseError {
         match self {
             ParseError::UnexpectedEof(span)
             | ParseError::UnexpectedChar(_, span)
-            | ParseError::UnmatchedParen(span) => *span,
+            | ParseError::UnmatchedParen(span)
+            | ParseError::InvalidIntegerLiteral(_, span)
+            | ParseError::IntegerOverflow(_, span) => *span,
         }
     }
 
@@ -27,6 +34,8 @@ impl ParseError {
             ParseError::UnexpectedEof(_) => "F0001",
             ParseError::UnexpectedChar(_, _) => "F0002",
             ParseError::UnmatchedParen(_) => "F0003",
+            ParseError::InvalidIntegerLiteral(_, _) => "F0004",
+            ParseError::IntegerOverflow(_, _) => "F0005",
         }
     }
 }
@@ -336,24 +345,35 @@ impl<'a> Parser<'a> {
                     })
                 }
             }
-            Some(c) if c.is_digit(10) => {
+            Some(c) if c.is_ascii_digit() => {
                 let mut s = String::new();
                 while let Some(c) = self.lexer.peek() {
-                    if c.is_digit(10) {
-                        s.push(self.lexer.next().unwrap());
+                    if c.is_ascii_digit() {
+                        let next_digit = self
+                            .lexer
+                            .next()
+                            .ok_or_else(|| ParseError::UnexpectedEof(self.lexer.current_span()))?;
+                        s.push(next_digit);
                     } else {
                         break;
                     }
                 }
                 let end_span = self.lexer.current_span();
+                let literal_span = Span {
+                    start: start_span.start,
+                    end: end_span.end,
+                    line: start_span.line,
+                    col: start_span.col,
+                };
+                let parsed = s.parse::<usize>().map_err(|err| match err.kind() {
+                    IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => {
+                        ParseError::IntegerOverflow(s.clone(), literal_span)
+                    }
+                    _ => ParseError::InvalidIntegerLiteral(s.clone(), literal_span),
+                })?;
                 Ok(Syntax {
-                    kind: SyntaxKind::Int(s.parse().unwrap()),
-                    span: Span {
-                        start: start_span.start,
-                        end: end_span.end,
-                        line: start_span.line,
-                        col: start_span.col,
-                    },
+                    kind: SyntaxKind::Int(parsed),
+                    span: literal_span,
                     scopes: Vec::new(),
                 })
             }
@@ -368,7 +388,11 @@ impl<'a> Parser<'a> {
                         && c != '['
                         && c != ']'
                     {
-                        s.push(self.lexer.next().unwrap());
+                        let next_char = self
+                            .lexer
+                            .next()
+                            .ok_or_else(|| ParseError::UnexpectedEof(self.lexer.current_span()))?;
+                        s.push(next_char);
                     } else {
                         break;
                     }

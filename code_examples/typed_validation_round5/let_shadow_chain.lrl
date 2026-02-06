@@ -1,0 +1,6 @@
+(def entry Nat
+  (print_nat
+    (let x Nat (succ zero)
+      (let x Nat (succ x)
+        (let x Nat (succ x)
+          x)))))

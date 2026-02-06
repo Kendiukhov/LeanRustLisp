@@ -171,8 +171,10 @@ fn fuzz_parser_expander_elaborator_no_panic() {
                                 let _ = elab.solve_constraints();
                             }
                             Declaration::DefMacro { .. } => {}
+                            Declaration::Module { .. } => {}
                             Declaration::ImportClassical => {}
                             Declaration::ImportModule { .. } => {}
+                            Declaration::OpenModule { .. } => {}
                         }
                     }));
 

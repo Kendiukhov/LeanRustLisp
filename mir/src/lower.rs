@@ -4,7 +4,7 @@ use crate::*;
 use kernel::ast::{BorrowWrapperMarker, FunctionKind, Level, MarkerId, Term, TypeMarker};
 use kernel::checker::{
     compute_recursor_type, infer, is_prop_like_with_transparency, whnf_in_ctx, Builtin, Context,
-    Env, PropTransparencyContext,
+    Env, PropTransparencyContext, TypeError,
 };
 use kernel::ownership::{CaptureModes, ClosureId, DefCaptureModeMap, UsageMode};
 use kernel::Transparency;
@@ -91,7 +91,6 @@ pub struct LoweringContext<'a> {
     closure_id_map: Option<Rc<HashMap<usize, ClosureId>>>,
     def_name: Option<String>,
     current_span: Option<SourceSpan>,
-    pending_error: Option<LoweringError>,
     next_region: usize,
 }
 
@@ -283,7 +282,7 @@ impl<'a> LoweringContext<'a> {
         ret_ty: Rc<Term>,
         kernel_env: &'a kernel::checker::Env,
         ids: &'a IdRegistry,
-    ) -> Self {
+    ) -> LoweringResult<Self> {
         Self::new_with_metadata(args, ret_ty, kernel_env, ids, None, None, None)
     }
 
@@ -293,7 +292,7 @@ impl<'a> LoweringContext<'a> {
         kernel_env: &'a kernel::checker::Env,
         ids: &'a IdRegistry,
         term_span_map: Option<Rc<TermSpanMap>>,
-    ) -> Self {
+    ) -> LoweringResult<Self> {
         Self::new_with_metadata(args, ret_ty, kernel_env, ids, term_span_map, None, None)
     }
 
@@ -305,7 +304,7 @@ impl<'a> LoweringContext<'a> {
         term_span_map: Option<Rc<TermSpanMap>>,
         def_name: Option<String>,
         capture_mode_map: Option<Rc<DefCaptureModeMap>>,
-    ) -> Self {
+    ) -> LoweringResult<Self> {
         let mut body = Body::new(args.len());
         body.adt_layouts = ids.adt_layouts().clone();
         // Create entry block
@@ -331,28 +330,27 @@ impl<'a> LoweringContext<'a> {
             closure_id_map: None,
             def_name,
             current_span: None,
-            pending_error: None,
             next_region: 1,
         };
 
         // Push Return Place _0 with correct type
-        ctx.push_local(ret_ty, Some("_0".to_string()));
+        ctx.push_local(ret_ty, Some("_0".to_string()))?;
 
         for (name, ty) in args {
-            let local = ctx.push_local(ty, Some(name));
+            let local = ctx.push_local(ty, Some(name))?;
             ctx.debruijn_map.push(local);
         }
 
-        ctx
+        Ok(ctx)
     }
 
-    pub fn lower_type(&mut self, term: &Rc<Term>) -> MirType {
-        let mut scope = self.type_param_scope_from_ctx();
+    pub fn lower_type(&mut self, term: &Rc<Term>) -> LoweringResult<MirType> {
+        let mut scope = self.type_param_scope_from_ctx()?;
         self.lower_type_general_with_scope(term, &mut scope)
     }
 
-    fn lower_type_general(&mut self, term: &Rc<Term>) -> MirType {
-        let mut scope = self.type_param_scope_from_ctx();
+    fn lower_type_general(&mut self, term: &Rc<Term>) -> LoweringResult<MirType> {
+        let mut scope = self.type_param_scope_from_ctx()?;
         self.lower_type_general_with_scope(term, &mut scope)
     }
 
@@ -360,25 +358,30 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         term: &Rc<Term>,
         scope: &mut TypeParamScope,
-    ) -> MirType {
+    ) -> LoweringResult<MirType> {
         let term_norm = whnf_in_ctx(
             self.kernel_env,
             &self.checker_ctx,
             term.clone(),
             Transparency::Reducible,
         )
-        .unwrap_or_else(|_| term.clone());
+        .map_err(|err| {
+            self.lowering_error(format!(
+                "Failed to normalize type during MIR lowering: {}",
+                err
+            ))
+        })?;
 
-        if let Some(mir_ty) = self.lower_borrow_shape_general(&term_norm, scope) {
-            return mir_ty;
+        if let Some(mir_ty) = self.lower_borrow_shape_general(&term_norm, scope)? {
+            return Ok(mir_ty);
         }
 
         match &*term_norm {
-            Term::Sort(_) => MirType::Unit, // Types are erased
-            Term::Var(idx) => scope
+            Term::Sort(_) => Ok(MirType::Unit), // Types are erased
+            Term::Var(idx) => Ok(scope
                 .param_for_var(*idx)
                 .map(MirType::Param)
-                .unwrap_or(MirType::Unit),
+                .unwrap_or(MirType::Unit)),
             Term::Ind(name, _) => self.lower_inductive_type_general(name, &[], scope),
             Term::App(_, _, _) => {
                 let (head, args) = collect_app_spine(&term_norm);
@@ -386,25 +389,29 @@ impl<'a> LoweringContext<'a> {
                     self.lower_inductive_type_general(name, &args, scope)
                 } else {
                     // Generic application or dependent type -> Opaque
-                    MirType::Opaque {
+                    Ok(MirType::Opaque {
                         reason: opaque_reason(&term_norm),
-                    }
+                    })
                 }
             }
             Term::Pi(_, _, _, _) => self.lower_fn_type_with_scope(&term_norm, scope),
-            _ => MirType::Opaque {
+            _ => Ok(MirType::Opaque {
                 reason: opaque_reason(&term_norm),
-            },
+            }),
         }
     }
 
-    fn lower_fn_type(&mut self, term: &Rc<Term>) -> MirType {
+    fn lower_fn_type(&mut self, term: &Rc<Term>) -> LoweringResult<MirType> {
         let mut assigner = RegionParamAssigner::default();
-        let mut scope = self.type_param_scope_from_ctx();
+        let mut scope = self.type_param_scope_from_ctx()?;
         self.lower_fn_type_with_interner_scoped(term, &mut assigner, &mut scope)
     }
 
-    fn lower_fn_type_with_scope(&mut self, term: &Rc<Term>, scope: &mut TypeParamScope) -> MirType {
+    fn lower_fn_type_with_scope(
+        &mut self,
+        term: &Rc<Term>,
+        scope: &mut TypeParamScope,
+    ) -> LoweringResult<MirType> {
         let mut assigner = RegionParamAssigner::default();
         self.lower_fn_type_with_interner_scoped(term, &mut assigner, scope)
     }
@@ -414,8 +421,8 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         term: &Rc<Term>,
         assigner: &mut RegionParamAssigner,
-    ) -> MirType {
-        let mut scope = self.type_param_scope_from_ctx();
+    ) -> LoweringResult<MirType> {
+        let mut scope = self.type_param_scope_from_ctx()?;
         self.lower_fn_type_with_interner_scoped(term, assigner, &mut scope)
     }
 
@@ -424,27 +431,27 @@ impl<'a> LoweringContext<'a> {
         term: &Rc<Term>,
         assigner: &mut RegionParamAssigner,
         scope: &mut TypeParamScope,
-    ) -> MirType {
+    ) -> LoweringResult<MirType> {
         match &**term {
             Term::Pi(dom, cod, _, kind) => {
-                let dom_is_type_param = self.is_type_param_binder(dom);
+                let dom_is_type_param = self.is_type_param_binder(dom)?;
                 let arg =
-                    self.lower_type_in_fn_with_scope(dom, assigner, LifetimePosition::Arg, scope);
+                    self.lower_type_in_fn_with_scope(dom, assigner, LifetimePosition::Arg, scope)?;
                 scope.push(dom_is_type_param);
                 let ret = match &**cod {
                     Term::Pi(_, _, _, _) => {
-                        self.lower_fn_type_with_interner_scoped(cod, assigner, scope)
+                        self.lower_fn_type_with_interner_scoped(cod, assigner, scope)?
                     }
                     _ => self.lower_type_in_fn_with_scope(
                         cod,
                         assigner,
                         LifetimePosition::Return,
                         scope,
-                    ),
+                    )?,
                 };
                 scope.pop();
                 let region_params = assigner.params().to_vec();
-                MirType::Fn(*kind, region_params, vec![arg], Box::new(ret))
+                Ok(MirType::Fn(*kind, region_params, vec![arg], Box::new(ret)))
             }
             _ => self.lower_type_in_fn_with_scope(term, assigner, LifetimePosition::Return, scope),
         }
@@ -456,8 +463,8 @@ impl<'a> LoweringContext<'a> {
         term: &Rc<Term>,
         assigner: &mut RegionParamAssigner,
         position: LifetimePosition,
-    ) -> MirType {
-        let mut scope = self.type_param_scope_from_ctx();
+    ) -> LoweringResult<MirType> {
+        let mut scope = self.type_param_scope_from_ctx()?;
         self.lower_type_in_fn_with_scope(term, assigner, position, &mut scope)
     }
 
@@ -467,25 +474,32 @@ impl<'a> LoweringContext<'a> {
         assigner: &mut RegionParamAssigner,
         position: LifetimePosition,
         scope: &mut TypeParamScope,
-    ) -> MirType {
+    ) -> LoweringResult<MirType> {
         let term_norm = whnf_in_ctx(
             self.kernel_env,
             &self.checker_ctx,
             term.clone(),
             Transparency::Reducible,
         )
-        .unwrap_or_else(|_| term.clone());
+        .map_err(|err| {
+            self.lowering_error(format!(
+                "Failed to normalize function type during MIR lowering: {}",
+                err
+            ))
+        })?;
 
-        if let Some(mir_ty) = self.lower_borrow_shape_in_fn(&term_norm, assigner, position, scope) {
-            return mir_ty;
+        if let Some(mir_ty) =
+            self.lower_borrow_shape_in_fn(&term_norm, assigner, position, scope)?
+        {
+            return Ok(mir_ty);
         }
 
         match &*term_norm {
-            Term::Sort(_) => MirType::Unit, // Types are erased
-            Term::Var(idx) => scope
+            Term::Sort(_) => Ok(MirType::Unit), // Types are erased
+            Term::Var(idx) => Ok(scope
                 .param_for_var(*idx)
                 .map(MirType::Param)
-                .unwrap_or(MirType::Unit),
+                .unwrap_or(MirType::Unit)),
             Term::Ind(name, _) => {
                 self.lower_inductive_type_in_fn(name, &[], assigner, position, scope)
             }
@@ -495,38 +509,43 @@ impl<'a> LoweringContext<'a> {
                     self.lower_inductive_type_in_fn(name, &args, assigner, position, scope)
                 } else {
                     // Generic application or dependent type -> Opaque
-                    MirType::Opaque {
+                    Ok(MirType::Opaque {
                         reason: opaque_reason(&term_norm),
-                    }
+                    })
                 }
             }
             Term::Pi(_, _, _, _) => self.lower_fn_type_with_scope(&term_norm, scope),
-            _ => MirType::Opaque {
+            _ => Ok(MirType::Opaque {
                 reason: opaque_reason(&term_norm),
-            },
+            }),
         }
     }
 
-    fn is_type_param_binder(&self, dom: &Rc<Term>) -> bool {
+    fn is_type_param_binder(&self, dom: &Rc<Term>) -> LoweringResult<bool> {
         let dom_norm = whnf_in_ctx(
             self.kernel_env,
             &self.checker_ctx,
             dom.clone(),
             Transparency::Reducible,
         )
-        .unwrap_or_else(|_| dom.clone());
-        matches!(&*dom_norm, Term::Sort(_))
+        .map_err(|err| {
+            self.lowering_error(format!(
+                "Failed to normalize binder type during MIR lowering: {}",
+                err
+            ))
+        })?;
+        Ok(matches!(&*dom_norm, Term::Sort(_)))
     }
 
-    fn type_param_scope_from_ctx(&self) -> TypeParamScope {
+    fn type_param_scope_from_ctx(&self) -> LoweringResult<TypeParamScope> {
         let mut scope = TypeParamScope::default();
         let len = self.checker_ctx.len();
         for idx in (0..len).rev() {
             if let Some(ty) = self.checker_ctx.get(idx) {
-                scope.push(self.is_type_param_binder(&ty));
+                scope.push(self.is_type_param_binder(&ty)?);
             }
         }
-        scope
+        Ok(scope)
     }
 
     fn substitute_params_offset(&self, ty: &MirType, offset: usize, params: &[MirType]) -> MirType {
@@ -592,10 +611,10 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         ty: Rc<Term>,
         args: &[Rc<Term>],
-    ) -> Option<MirType> {
+    ) -> LoweringResult<Option<MirType>> {
         let mut current = ty;
         let mut assigner = RegionParamAssigner::default();
-        let mut scope = self.type_param_scope_from_ctx();
+        let mut scope = self.type_param_scope_from_ctx()?;
         let outer_param_offset = scope.next_param;
         let mut arg_types = Vec::new();
         let mut arg_kinds = Vec::new();
@@ -608,21 +627,26 @@ impl<'a> LoweringContext<'a> {
                 current.clone(),
                 Transparency::Reducible,
             )
-            .unwrap_or_else(|_| current.clone());
+            .map_err(|err| {
+                self.lowering_error(format!(
+                    "Failed to normalize recursive application type during MIR lowering: {}",
+                    err
+                ))
+            })?;
             let Term::Pi(dom, body, _info, kind) = &*term_norm else {
-                return None;
+                return Ok(None);
             };
 
-            if self.is_type_param_binder(dom) {
-                let mut arg_scope = self.type_param_scope_from_ctx();
-                param_subst.push(self.lower_type_general_with_scope(arg, &mut arg_scope));
+            if self.is_type_param_binder(dom)? {
+                let mut arg_scope = self.type_param_scope_from_ctx()?;
+                param_subst.push(self.lower_type_general_with_scope(arg, &mut arg_scope)?);
             }
             let dom_mir = self.lower_type_in_fn_with_scope(
                 dom,
                 &mut assigner,
                 LifetimePosition::Arg,
                 &mut scope,
-            );
+            )?;
             arg_types.push(dom_mir);
             arg_kinds.push(*kind);
             current = body.subst(0, arg);
@@ -634,24 +658,33 @@ impl<'a> LoweringContext<'a> {
             current.clone(),
             Transparency::Reducible,
         )
-        .unwrap_or_else(|_| current.clone());
+        .map_err(|err| {
+            self.lowering_error(format!(
+                "Failed to normalize recursive result type during MIR lowering: {}",
+                err
+            ))
+        })?;
         let Term::Pi(dom, body, _info, kind) = &*term_norm else {
-            return None;
+            return Ok(None);
         };
 
-        let dom_mir =
-            self.lower_type_in_fn_with_scope(dom, &mut assigner, LifetimePosition::Arg, &mut scope);
+        let dom_mir = self.lower_type_in_fn_with_scope(
+            dom,
+            &mut assigner,
+            LifetimePosition::Arg,
+            &mut scope,
+        )?;
         arg_types.push(dom_mir);
         arg_kinds.push(*kind);
 
-        let dom_is_type_param = self.is_type_param_binder(dom);
+        let dom_is_type_param = self.is_type_param_binder(dom)?;
         scope.push(dom_is_type_param);
         let ret_mir = self.lower_type_in_fn_with_scope(
             body,
             &mut assigner,
             LifetimePosition::Return,
             &mut scope,
-        );
+        )?;
         scope.pop();
 
         let region_params = assigner.params().to_vec();
@@ -662,73 +695,69 @@ impl<'a> LoweringContext<'a> {
         if !param_subst.is_empty() {
             result = self.substitute_params_offset(&result, outer_param_offset, &param_subst);
         }
-        Some(result)
+        Ok(Some(result))
     }
 
     fn lower_borrow_shape_general(
         &mut self,
         term_norm: &Rc<Term>,
         scope: &mut TypeParamScope,
-    ) -> Option<MirType> {
+    ) -> LoweringResult<Option<MirType>> {
         if let Some((kind, inner, _label)) = self.parse_ref_type(term_norm) {
-            let inner_ty = self.lower_type_general_with_scope(&inner, scope);
+            let inner_ty = self.lower_type_general_with_scope(&inner, scope)?;
             let region = self.fresh_region();
-            return Some(MirType::Ref(region, Box::new(inner_ty), kind.into()));
+            return Ok(Some(MirType::Ref(region, Box::new(inner_ty), kind.into())));
         }
-        if let Some((kind, inner)) = self.parse_interior_mutability_type(term_norm) {
-            let inner_ty = self.lower_type_general_with_scope(&inner, scope);
-            return Some(MirType::InteriorMutable(Box::new(inner_ty), kind));
+        if let Some((kind, inner)) = self.parse_interior_mutability_type(term_norm)? {
+            let inner_ty = self.lower_type_general_with_scope(&inner, scope)?;
+            return Ok(Some(MirType::InteriorMutable(Box::new(inner_ty), kind)));
         }
 
-        if let Some((name, marker, unfolded)) = self.unfold_marked_borrow_wrapper(term_norm) {
+        if let Some((name, marker, unfolded)) = self.unfold_marked_borrow_wrapper(term_norm)? {
             if let Some(expected) = ref_kind_for_borrow_wrapper(marker) {
                 match self.parse_ref_type(&unfolded) {
                     Some((kind, inner, _label)) if kind == expected => {
-                        let inner_ty = self.lower_type_general_with_scope(&inner, scope);
+                        let inner_ty = self.lower_type_general_with_scope(&inner, scope)?;
                         let region = self.fresh_region();
-                        return Some(MirType::Ref(region, Box::new(inner_ty), kind.into()));
+                        return Ok(Some(MirType::Ref(region, Box::new(inner_ty), kind.into())));
                     }
                     Some((kind, _, _)) => {
-                        self.record_pending_error(self.lowering_error(format!(
+                        return Err(self.lowering_error(format!(
                             "Borrow-wrapper marker on '{}' expects {:?}, but unfolded to {:?}",
                             name, expected, kind
                         )));
-                        return None;
                     }
                     None => {
-                        self.record_pending_error(self.lowering_error(format!(
+                        return Err(self.lowering_error(format!(
                             "Borrow-wrapper marker on '{}' expects Ref shape, but unfolded term is not Ref",
                             name
                         )));
-                        return None;
                     }
                 }
             }
             if let Some(expected) = interior_mutability_for_borrow_wrapper(marker) {
-                match self.parse_interior_mutability_type(&unfolded) {
+                match self.parse_interior_mutability_type(&unfolded)? {
                     Some((kind, inner)) if kind == expected => {
-                        let inner_ty = self.lower_type_general_with_scope(&inner, scope);
-                        return Some(MirType::InteriorMutable(Box::new(inner_ty), kind));
+                        let inner_ty = self.lower_type_general_with_scope(&inner, scope)?;
+                        return Ok(Some(MirType::InteriorMutable(Box::new(inner_ty), kind)));
                     }
                     Some((kind, _)) => {
-                        self.record_pending_error(self.lowering_error(format!(
+                        return Err(self.lowering_error(format!(
                             "Borrow-wrapper marker on '{}' expects {:?}, but unfolded to {:?}",
                             name, expected, kind
                         )));
-                        return None;
                     }
                     None => {
-                        self.record_pending_error(self.lowering_error(format!(
+                        return Err(self.lowering_error(format!(
                             "Borrow-wrapper marker on '{}' expects interior mutability shape, but unfolded term is not interior mutable",
                             name
                         )));
-                        return None;
                     }
                 }
             }
         }
 
-        None
+        Ok(None)
     }
 
     fn lower_borrow_shape_in_fn(
@@ -737,149 +766,158 @@ impl<'a> LoweringContext<'a> {
         assigner: &mut RegionParamAssigner,
         position: LifetimePosition,
         scope: &mut TypeParamScope,
-    ) -> Option<MirType> {
+    ) -> LoweringResult<Option<MirType>> {
         if let Some((kind, inner, label)) = self.parse_ref_type(term_norm) {
-            let inner_ty = self.lower_type_in_fn_with_scope(&inner, assigner, position, scope);
+            let inner_ty = self.lower_type_in_fn_with_scope(&inner, assigner, position, scope)?;
             let region =
                 assigner.region_for_ref(label.as_deref(), position, || self.fresh_region());
-            return Some(MirType::Ref(region, Box::new(inner_ty), kind.into()));
+            return Ok(Some(MirType::Ref(region, Box::new(inner_ty), kind.into())));
         }
-        if let Some((kind, inner)) = self.parse_interior_mutability_type(term_norm) {
-            let inner_ty = self.lower_type_in_fn_with_scope(&inner, assigner, position, scope);
-            return Some(MirType::InteriorMutable(Box::new(inner_ty), kind));
+        if let Some((kind, inner)) = self.parse_interior_mutability_type(term_norm)? {
+            let inner_ty = self.lower_type_in_fn_with_scope(&inner, assigner, position, scope)?;
+            return Ok(Some(MirType::InteriorMutable(Box::new(inner_ty), kind)));
         }
 
-        if let Some((name, marker, unfolded)) = self.unfold_marked_borrow_wrapper(term_norm) {
+        if let Some((name, marker, unfolded)) = self.unfold_marked_borrow_wrapper(term_norm)? {
             if let Some(expected) = ref_kind_for_borrow_wrapper(marker) {
                 match self.parse_ref_type(&unfolded) {
                     Some((kind, inner, label)) if kind == expected => {
                         let inner_ty =
-                            self.lower_type_in_fn_with_scope(&inner, assigner, position, scope);
+                            self.lower_type_in_fn_with_scope(&inner, assigner, position, scope)?;
                         let region = assigner
                             .region_for_ref(label.as_deref(), position, || self.fresh_region());
-                        return Some(MirType::Ref(region, Box::new(inner_ty), kind.into()));
+                        return Ok(Some(MirType::Ref(region, Box::new(inner_ty), kind.into())));
                     }
                     Some((kind, _, _)) => {
-                        self.record_pending_error(self.lowering_error(format!(
+                        return Err(self.lowering_error(format!(
                             "Borrow-wrapper marker on '{}' expects {:?}, but unfolded to {:?}",
                             name, expected, kind
                         )));
-                        return None;
                     }
                     None => {
-                        self.record_pending_error(self.lowering_error(format!(
+                        return Err(self.lowering_error(format!(
                             "Borrow-wrapper marker on '{}' expects Ref shape, but unfolded term is not Ref",
                             name
                         )));
-                        return None;
                     }
                 }
             }
             if let Some(expected) = interior_mutability_for_borrow_wrapper(marker) {
-                match self.parse_interior_mutability_type(&unfolded) {
+                match self.parse_interior_mutability_type(&unfolded)? {
                     Some((kind, inner)) if kind == expected => {
                         let inner_ty =
-                            self.lower_type_in_fn_with_scope(&inner, assigner, position, scope);
-                        return Some(MirType::InteriorMutable(Box::new(inner_ty), kind));
+                            self.lower_type_in_fn_with_scope(&inner, assigner, position, scope)?;
+                        return Ok(Some(MirType::InteriorMutable(Box::new(inner_ty), kind)));
                     }
                     Some((kind, _)) => {
-                        self.record_pending_error(self.lowering_error(format!(
+                        return Err(self.lowering_error(format!(
                             "Borrow-wrapper marker on '{}' expects {:?}, but unfolded to {:?}",
                             name, expected, kind
                         )));
-                        return None;
                     }
                     None => {
-                        self.record_pending_error(self.lowering_error(format!(
+                        return Err(self.lowering_error(format!(
                             "Borrow-wrapper marker on '{}' expects interior mutability shape, but unfolded term is not interior mutable",
                             name
                         )));
-                        return None;
                     }
                 }
             }
         }
 
-        None
+        Ok(None)
     }
 
     fn unfold_marked_borrow_wrapper(
         &mut self,
         term_norm: &Rc<Term>,
-    ) -> Option<(String, BorrowWrapperMarker, Rc<Term>)> {
+    ) -> LoweringResult<Option<(String, BorrowWrapperMarker, Rc<Term>)>> {
         let (head, _) = collect_app_spine(term_norm);
         let Term::Const(name, _) = &*head else {
-            return None;
+            return Ok(None);
         };
-        let def = self.kernel_env.get_definition(name)?;
-        let marker = def.borrow_wrapper_marker?;
+        let Some(def) = self.kernel_env.get_definition(name) else {
+            return Ok(None);
+        };
+        let Some(marker) = def.borrow_wrapper_marker else {
+            return Ok(None);
+        };
         if def.transparency != Transparency::None {
-            return None;
+            return Ok(None);
         }
         if def.value.is_none() {
-            self.record_pending_error(self.lowering_error(format!(
+            return Err(self.lowering_error(format!(
                 "Borrow-wrapper marker on '{}' requires a definition body",
                 name
             )));
-            return None;
         }
 
-        let unfolded = match whnf_in_ctx(
+        let unfolded = whnf_in_ctx(
             self.kernel_env,
             &self.checker_ctx,
             term_norm.clone(),
             Transparency::All,
-        ) {
-            Ok(unfolded) => unfolded,
-            Err(err) => {
-                self.record_pending_error(self.lowering_error(format!(
-                    "Failed to unfold borrow-wrapper alias '{}': {}",
-                    name, err
-                )));
-                return None;
-            }
-        };
-        Some((name.clone(), marker, unfolded))
+        )
+        .map_err(|err| {
+            self.lowering_error(format!(
+                "Failed to unfold borrow-wrapper alias '{}': {}",
+                name, err
+            ))
+        })?;
+        Ok(Some((name.clone(), marker, unfolded)))
     }
 
     fn function_signature_from_type(
         &mut self,
         ty: &Rc<Term>,
-    ) -> Option<(FunctionKind, Vec<Region>, Vec<MirType>, Box<MirType>)> {
+    ) -> LoweringResult<Option<(FunctionKind, Vec<Region>, Vec<MirType>, Box<MirType>)>> {
         let ty_norm = whnf_in_ctx(
             self.kernel_env,
             &self.checker_ctx,
             ty.clone(),
             Transparency::Reducible,
         )
-        .unwrap_or_else(|_| ty.clone());
+        .map_err(|err| {
+            self.lowering_error(format!(
+                "Failed to normalize function signature during MIR lowering: {}",
+                err
+            ))
+        })?;
         if !matches!(&*ty_norm, Term::Pi(_, _, _, _)) {
-            return None;
+            return Ok(None);
         }
-        let mir_ty = self.lower_fn_type(&ty_norm);
+        let mir_ty = self.lower_fn_type(&ty_norm)?;
         match mir_ty {
-            MirType::Fn(kind, region_params, args, ret) => Some((kind, region_params, args, ret)),
-            _ => None,
+            MirType::Fn(kind, region_params, args, ret) => {
+                Ok(Some((kind, region_params, args, ret)))
+            }
+            _ => Ok(None),
         }
     }
 
-    fn function_value_mir_type(&mut self, term: &Rc<Term>, ty: &Rc<Term>) -> Option<MirType> {
-        let (kind, region_params, args, ret) = self.function_signature_from_type(ty)?;
+    fn function_value_mir_type(
+        &mut self,
+        term: &Rc<Term>,
+        ty: &Rc<Term>,
+    ) -> LoweringResult<Option<MirType>> {
+        let Some((kind, region_params, args, ret)) = self.function_signature_from_type(ty)? else {
+            return Ok(None);
+        };
         match &**term {
-            Term::Const(_, _) => self
+            Term::Const(_, _) => Ok(self
                 .def_id_for_const(term)
-                .map(|def_id| MirType::FnItem(def_id, kind, region_params, args, ret)),
+                .map(|def_id| MirType::FnItem(def_id, kind, region_params, args, ret))),
             Term::Lam(_, _, _, _) | Term::Fix(_, _) => {
                 let self_region = self.fresh_region();
-                Some(MirType::Closure(
+                Ok(Some(MirType::Closure(
                     kind,
                     self_region,
                     region_params,
                     args,
                     ret,
-                ))
+                )))
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -888,14 +926,14 @@ impl<'a> LoweringContext<'a> {
         name: &str,
         args: &[Rc<Term>],
         scope: &mut TypeParamScope,
-    ) -> MirType {
+    ) -> LoweringResult<MirType> {
         let adt_id = self.ids.adt_id(name).unwrap_or_else(|| AdtId::new(name));
 
         if adt_id.is_builtin(Builtin::Nat) {
-            return MirType::Nat;
+            return Ok(MirType::Nat);
         }
         if adt_id.is_builtin(Builtin::Bool) {
-            return MirType::Bool;
+            return Ok(MirType::Bool);
         }
 
         let param_count = self
@@ -912,13 +950,13 @@ impl<'a> LoweringContext<'a> {
         let mut kept_args = Vec::new();
         for (idx, arg) in args.iter().enumerate() {
             if idx < param_count {
-                kept_args.push(self.lower_type_general_with_scope(arg, scope));
+                kept_args.push(self.lower_type_general_with_scope(arg, scope)?);
             } else {
                 kept_args.push(MirType::IndexTerm(arg.clone()));
             }
         }
 
-        MirType::Adt(adt_id, kept_args)
+        Ok(MirType::Adt(adt_id, kept_args))
     }
 
     fn lower_inductive_type_in_fn(
@@ -928,14 +966,14 @@ impl<'a> LoweringContext<'a> {
         assigner: &mut RegionParamAssigner,
         position: LifetimePosition,
         scope: &mut TypeParamScope,
-    ) -> MirType {
+    ) -> LoweringResult<MirType> {
         let adt_id = self.ids.adt_id(name).unwrap_or_else(|| AdtId::new(name));
 
         if adt_id.is_builtin(Builtin::Nat) {
-            return MirType::Nat;
+            return Ok(MirType::Nat);
         }
         if adt_id.is_builtin(Builtin::Bool) {
-            return MirType::Bool;
+            return Ok(MirType::Bool);
         }
 
         let param_count = self
@@ -952,13 +990,13 @@ impl<'a> LoweringContext<'a> {
         let mut kept_args = Vec::new();
         for (idx, arg) in args.iter().enumerate() {
             if idx < param_count {
-                kept_args.push(self.lower_type_in_fn_with_scope(arg, assigner, position, scope));
+                kept_args.push(self.lower_type_in_fn_with_scope(arg, assigner, position, scope)?);
             } else {
                 kept_args.push(MirType::IndexTerm(arg.clone()));
             }
         }
 
-        MirType::Adt(adt_id, kept_args)
+        Ok(MirType::Adt(adt_id, kept_args))
     }
 
     fn fresh_region(&mut self) -> Region {
@@ -1008,7 +1046,7 @@ impl<'a> LoweringContext<'a> {
                     .len()
                     .checked_sub(1 + *idx)
                     .ok_or_else(|| {
-                        LoweringError::new(format!(
+                        self.lowering_error(format!(
                             "De Bruijn index out of bounds: {} (context size {})",
                             idx,
                             self.debruijn_map.len()
@@ -1024,25 +1062,24 @@ impl<'a> LoweringContext<'a> {
                     Ok(Place::from(local))
                 }
             }
-            _ => Err(LoweringError::new(
-                "Borrow expects a variable place".to_string(),
-            )),
+            _ => Err(self.lowering_error("Borrow expects a variable place")),
         }
     }
 
-    fn parse_interior_mutability_type(&mut self, ty: &Rc<Term>) -> Option<(IMKind, Rc<Term>)> {
+    fn parse_interior_mutability_type(
+        &mut self,
+        ty: &Rc<Term>,
+    ) -> LoweringResult<Option<(IMKind, Rc<Term>)>> {
         if let Term::App(f, inner_ty, _) = &**ty {
             if let Term::Ind(name, _) = &**f {
                 if let Some(decl) = self.kernel_env.inductives.get(name) {
-                    match self.interior_mutability_kind(name, &decl.markers) {
-                        Ok(Some(kind)) => return Some((kind, inner_ty.clone())),
-                        Ok(None) => {}
-                        Err(err) => self.record_pending_error(err),
+                    if let Some(kind) = self.interior_mutability_kind(name, &decl.markers)? {
+                        return Ok(Some((kind, inner_ty.clone())));
                     }
                 }
             }
         }
-        None
+        Ok(None)
     }
 
     fn interior_mutability_kind(
@@ -1070,23 +1107,6 @@ impl<'a> LoweringContext<'a> {
         }
 
         Ok(None)
-    }
-
-    fn record_pending_error(&mut self, error: LoweringError) {
-        if self.pending_error.is_none() {
-            self.pending_error = Some(error);
-        }
-    }
-
-    fn take_pending_error(&mut self) -> Option<LoweringError> {
-        self.pending_error.take()
-    }
-
-    fn finish_with_pending_check(&mut self) -> LoweringResult<()> {
-        if let Some(error) = self.take_pending_error() {
-            return Err(error);
-        }
-        Ok(())
     }
 
     fn collect_captures(
@@ -1223,13 +1243,23 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    fn is_copy_type_in_ctx(&self, ctx: &Context, ty: &Rc<Term>) -> Option<bool> {
-        kernel::checker::is_copy_type_in_ctx(self.kernel_env, ctx, ty).ok()
+    fn is_copy_type_in_ctx(&self, ctx: &Context, ty: &Rc<Term>) -> LoweringResult<bool> {
+        kernel::checker::is_copy_type_in_ctx(self.kernel_env, ctx, ty).map_err(|err| {
+            self.lowering_error(format!(
+                "Failed to determine capture Copy-ness during MIR lowering: {}",
+                err
+            ))
+        })
     }
 
-    fn is_mut_ref_type(&self, ctx: &Context, ty: &Rc<Term>) -> Option<bool> {
-        let ty_whnf =
-            whnf_in_ctx(self.kernel_env, ctx, ty.clone(), Transparency::Reducible).ok()?;
+    fn is_mut_ref_type(&self, ctx: &Context, ty: &Rc<Term>) -> LoweringResult<bool> {
+        let ty_whnf = whnf_in_ctx(self.kernel_env, ctx, ty.clone(), Transparency::Reducible)
+            .map_err(|err| {
+                self.lowering_error(format!(
+                    "Failed to normalize capture type during MIR lowering: {}",
+                    err
+                ))
+            })?;
         let (head, args) = collect_app_spine(&ty_whnf);
         let is_mut_ref = match (&*head, args.as_slice()) {
             (Term::Const(name, _), [kind, _]) if name == "Ref" => {
@@ -1237,7 +1267,7 @@ impl<'a> LoweringContext<'a> {
             }
             _ => false,
         };
-        Some(is_mut_ref)
+        Ok(is_mut_ref)
     }
 
     fn function_pi_info_from_term(
@@ -1276,7 +1306,7 @@ impl<'a> LoweringContext<'a> {
         ctx: &Context,
         capture_depth: usize,
         mode: UsageMode,
-    ) -> Option<CaptureModes> {
+    ) -> LoweringResult<Option<CaptureModes>> {
         match &**term {
             Term::Var(idx) => {
                 let mut modes = HashMap::new();
@@ -1294,7 +1324,7 @@ impl<'a> LoweringContext<'a> {
                     let capture_idx = idx - capture_depth;
                     modes.insert(capture_idx, capture_mode);
                 }
-                Some(modes)
+                Ok(Some(modes))
             }
             Term::App(f, a, _) => {
                 if mode != UsageMode::Observational {
@@ -1318,34 +1348,43 @@ impl<'a> LoweringContext<'a> {
                                 } else {
                                     UsageMode::Consuming
                                 };
-                                let arg_modes = self.collect_required_capture_modes_in_term(
+                                let Some(arg_modes) = self.collect_required_capture_modes_in_term(
                                     arg,
                                     ctx,
                                     capture_depth,
                                     arg_mode,
-                                )?;
+                                )?
+                                else {
+                                    return Ok(None);
+                                };
                                 Self::merge_capture_modes(&mut modes, arg_modes);
                             }
-                            return Some(modes);
+                            return Ok(Some(modes));
                         }
                     }
                 }
 
                 if mode == UsageMode::Observational {
-                    let mut modes = self.collect_required_capture_modes_in_term(
+                    let Some(mut modes) = self.collect_required_capture_modes_in_term(
                         f,
                         ctx,
                         capture_depth,
                         UsageMode::Observational,
-                    )?;
-                    let arg_modes = self.collect_required_capture_modes_in_term(
+                    )?
+                    else {
+                        return Ok(None);
+                    };
+                    let Some(arg_modes) = self.collect_required_capture_modes_in_term(
                         a,
                         ctx,
                         capture_depth,
                         UsageMode::Observational,
-                    )?;
+                    )?
+                    else {
+                        return Ok(None);
+                    };
                     Self::merge_capture_modes(&mut modes, arg_modes);
-                    Some(modes)
+                    Ok(Some(modes))
                 } else {
                     let (arg_mode, f_mode) = match self.function_pi_info_from_term(f, ctx) {
                         Some((arg_ty, info, kind)) => {
@@ -1363,106 +1402,139 @@ impl<'a> LoweringContext<'a> {
                             let f_mode = usage_mode_for_kind(kind);
                             (arg_mode, f_mode)
                         }
-                        None => return None,
+                        None => return Ok(None),
                     };
                     let f_eval_mode = match (&**f, f_mode) {
                         (Term::Var(_), UsageMode::Observational) => UsageMode::Observational,
                         (Term::Var(_), UsageMode::MutBorrow) => UsageMode::MutBorrow,
                         _ => UsageMode::Consuming,
                     };
-                    let mut modes = self.collect_required_capture_modes_in_term(
+                    let Some(mut modes) = self.collect_required_capture_modes_in_term(
                         f,
                         ctx,
                         capture_depth,
                         f_eval_mode,
-                    )?;
-                    let arg_modes = self.collect_required_capture_modes_in_term(
+                    )?
+                    else {
+                        return Ok(None);
+                    };
+                    let Some(arg_modes) = self.collect_required_capture_modes_in_term(
                         a,
                         ctx,
                         capture_depth,
                         arg_mode,
-                    )?;
+                    )?
+                    else {
+                        return Ok(None);
+                    };
                     Self::merge_capture_modes(&mut modes, arg_modes);
-                    Some(modes)
+                    Ok(Some(modes))
                 }
             }
             Term::Lam(ty, body, _, _) => {
-                let mut modes = self.collect_required_capture_modes_in_term(
+                let Some(mut modes) = self.collect_required_capture_modes_in_term(
                     ty,
                     ctx,
                     capture_depth,
                     UsageMode::Observational,
-                )?;
+                )?
+                else {
+                    return Ok(None);
+                };
                 let new_ctx = ctx.push(ty.clone());
-                let body_modes = self.collect_required_capture_modes_in_term(
+                let Some(body_modes) = self.collect_required_capture_modes_in_term(
                     body,
                     &new_ctx,
                     capture_depth + 1,
                     mode,
-                )?;
+                )?
+                else {
+                    return Ok(None);
+                };
                 Self::merge_capture_modes(&mut modes, body_modes);
-                Some(modes)
+                Ok(Some(modes))
             }
             Term::Pi(ty, body, _, _) => {
-                let mut modes = self.collect_required_capture_modes_in_term(
+                let Some(mut modes) = self.collect_required_capture_modes_in_term(
                     ty,
                     ctx,
                     capture_depth,
                     UsageMode::Observational,
-                )?;
+                )?
+                else {
+                    return Ok(None);
+                };
                 let new_ctx = ctx.push(ty.clone());
-                let body_modes = self.collect_required_capture_modes_in_term(
+                let Some(body_modes) = self.collect_required_capture_modes_in_term(
                     body,
                     &new_ctx,
                     capture_depth + 1,
                     UsageMode::Observational,
-                )?;
+                )?
+                else {
+                    return Ok(None);
+                };
                 Self::merge_capture_modes(&mut modes, body_modes);
-                Some(modes)
+                Ok(Some(modes))
             }
             Term::LetE(ty, val, body) => {
-                let mut modes = self.collect_required_capture_modes_in_term(
+                let Some(mut modes) = self.collect_required_capture_modes_in_term(
                     ty,
                     ctx,
                     capture_depth,
                     UsageMode::Observational,
-                )?;
-                let val_modes =
-                    self.collect_required_capture_modes_in_term(val, ctx, capture_depth, mode)?;
+                )?
+                else {
+                    return Ok(None);
+                };
+                let Some(val_modes) =
+                    self.collect_required_capture_modes_in_term(val, ctx, capture_depth, mode)?
+                else {
+                    return Ok(None);
+                };
                 Self::merge_capture_modes(&mut modes, val_modes);
                 let new_ctx = ctx.push(ty.clone());
-                let body_modes = self.collect_required_capture_modes_in_term(
+                let Some(body_modes) = self.collect_required_capture_modes_in_term(
                     body,
                     &new_ctx,
                     capture_depth + 1,
                     mode,
-                )?;
+                )?
+                else {
+                    return Ok(None);
+                };
                 Self::merge_capture_modes(&mut modes, body_modes);
-                Some(modes)
+                Ok(Some(modes))
             }
             Term::Fix(ty, body) => {
-                let mut modes = self.collect_required_capture_modes_in_term(
+                let Some(mut modes) = self.collect_required_capture_modes_in_term(
                     ty,
                     ctx,
                     capture_depth,
                     UsageMode::Observational,
-                )?;
+                )?
+                else {
+                    return Ok(None);
+                };
                 let new_ctx = ctx.push(ty.clone());
-                let body_modes = self.collect_required_capture_modes_in_term(
+                let Some(body_modes) = self.collect_required_capture_modes_in_term(
                     body,
                     &new_ctx,
                     capture_depth + 1,
                     mode,
-                )?;
+                )?
+                else {
+                    return Ok(None);
+                };
                 Self::merge_capture_modes(&mut modes, body_modes);
-                Some(modes)
+                Ok(Some(modes))
             }
             Term::Const(_, _)
             | Term::Sort(_)
             | Term::Ind(_, _)
             | Term::Ctor(_, _, _)
             | Term::Rec(_, _)
-            | Term::Meta(_) => Some(HashMap::new()),
+            | Term::Meta(_) => Ok(Some(HashMap::new())),
         }
     }
 
@@ -1470,20 +1542,26 @@ impl<'a> LoweringContext<'a> {
         &self,
         arg_ty: &Rc<Term>,
         body: &Rc<Term>,
-    ) -> Option<CaptureModes> {
+    ) -> LoweringResult<Option<CaptureModes>> {
         let ctx = self.checker_ctx.push(arg_ty.clone());
         self.collect_required_capture_modes_in_term(body, &ctx, 1, UsageMode::Consuming)
     }
 
-    fn is_prop_type(&self, ty: &Rc<Term>) -> bool {
+    fn is_prop_type(&self, ty: &Rc<Term>) -> LoweringResult<bool> {
         match is_prop_like_with_transparency(
             self.kernel_env,
             &self.checker_ctx,
             ty,
             PropTransparencyContext::UnfoldOpaque,
         ) {
-            Ok(is_prop) => is_prop,
-            Err(_) => false,
+            Ok(is_prop) => Ok(is_prop),
+            // Local declarations may carry open dependent types; treat unknown
+            // de Bruijn variables conservatively as non-Prop instead of aborting.
+            Err(TypeError::UnknownVariable(_)) => Ok(false),
+            Err(err) => Err(self.lowering_error(format!(
+                "Failed to determine Prop-like status during MIR lowering: {}",
+                err
+            ))),
         }
     }
 
@@ -1506,14 +1584,14 @@ impl<'a> LoweringContext<'a> {
         is_copy
     }
 
-    pub fn push_local(&mut self, ty: Rc<Term>, name: Option<String>) -> Local {
+    pub fn push_local(&mut self, ty: Rc<Term>, name: Option<String>) -> LoweringResult<Local> {
         let idx = self.body.local_decls.len();
 
         // Determine if type is Prop (for Erasure)
-        let is_prop = self.is_prop_type(&ty);
+        let is_prop = self.is_prop_type(&ty)?;
 
         // Lower to MIR Type
-        let mir_ty = self.lower_type(&ty);
+        let mir_ty = self.lower_type(&ty)?;
 
         // Determine if type has Copy semantics (opaque types are always non-Copy)
         let is_copy = self.compute_is_copy_for_mir(&ty, &mir_ty);
@@ -1528,16 +1606,16 @@ impl<'a> LoweringContext<'a> {
             is_copy,
             closure_captures: Vec::new(),
         });
-        Local(idx as u32)
+        Ok(Local(idx as u32))
     }
 
-    fn push_temp_local(&mut self, ty: Rc<Term>, name: Option<String>) -> Local {
+    fn push_temp_local(&mut self, ty: Rc<Term>, name: Option<String>) -> LoweringResult<Local> {
         let idx = self.body.local_decls.len();
 
         // Determine if type is Prop (for Erasure)
-        let is_prop = self.is_prop_type(&ty);
+        let is_prop = self.is_prop_type(&ty)?;
 
-        let mir_ty = self.lower_type(&ty);
+        let mir_ty = self.lower_type(&ty)?;
         let is_copy = self.compute_is_copy_for_mir(&ty, &mir_ty);
 
         self.body.local_decls.push(LocalDecl {
@@ -1547,7 +1625,7 @@ impl<'a> LoweringContext<'a> {
             is_copy,
             closure_captures: Vec::new(),
         });
-        Local(idx as u32)
+        Ok(Local(idx as u32))
     }
 
     fn push_temp_local_with_mir(
@@ -1555,9 +1633,9 @@ impl<'a> LoweringContext<'a> {
         ty: Rc<Term>,
         mir_ty: MirType,
         name: Option<String>,
-    ) -> Local {
+    ) -> LoweringResult<Local> {
         let idx = self.body.local_decls.len();
-        let is_prop = self.is_prop_type(&ty);
+        let is_prop = self.is_prop_type(&ty)?;
         let is_copy = self.compute_is_copy_for_mir(&ty, &mir_ty);
         self.body.local_decls.push(LocalDecl {
             ty: mir_ty,
@@ -1566,7 +1644,7 @@ impl<'a> LoweringContext<'a> {
             is_copy,
             closure_captures: Vec::new(),
         });
-        Local(idx as u32)
+        Ok(Local(idx as u32))
     }
 
     fn push_temp_local_for_value(
@@ -1574,8 +1652,8 @@ impl<'a> LoweringContext<'a> {
         term: &Rc<Term>,
         ty: Rc<Term>,
         name: Option<String>,
-    ) -> Local {
-        if let Some(mir_ty) = self.function_value_mir_type(term, &ty) {
+    ) -> LoweringResult<Local> {
+        if let Some(mir_ty) = self.function_value_mir_type(term, &ty)? {
             return self.push_temp_local_with_mir(ty, mir_ty, name);
         }
         self.push_temp_local(ty, name)
@@ -1613,6 +1691,73 @@ impl<'a> LoweringContext<'a> {
             .as_ref()
             .and_then(|map| map.get(closure_id))
             .cloned()
+    }
+
+    fn closure_metadata_label(&self, term: &Rc<Term>) -> String {
+        if let Some(closure_id) = self
+            .closure_id_map
+            .as_ref()
+            .and_then(|map| map.get(&Self::term_key(term)))
+        {
+            return format!("DefId({})", closure_id.0);
+        }
+        format!("ptr@0x{:x}", Self::term_key(term))
+    }
+
+    fn capture_modes_for_required_closure(
+        &self,
+        term: &Rc<Term>,
+        captured_indices: &HashSet<usize>,
+    ) -> LoweringResult<Option<CaptureModes>> {
+        if captured_indices.is_empty() {
+            return Ok(self.capture_modes_for(term));
+        }
+
+        // Fail closed: capturing closures require source spans for actionable diagnostics.
+        if self.term_span_map.is_some() && self.term_span_for(term).is_none() {
+            return Err(self.lowering_error(format!(
+                "Missing closure span metadata for {} while lowering capturing closure",
+                self.closure_metadata_label(term)
+            )));
+        }
+
+        let capture_modes = self.capture_modes_for(term);
+        // Fail closed: silently dropping capture metadata can change capture lowering semantics.
+        if self.capture_mode_map.is_some() && capture_modes.is_none() {
+            return Err(self.lowering_error(format!(
+                "Missing closure capture metadata for {} while lowering capturing closure",
+                self.closure_metadata_label(term)
+            )));
+        }
+
+        Ok(capture_modes)
+    }
+
+    fn ensure_capture_modes_complete(
+        &self,
+        term: &Rc<Term>,
+        captured_indices: &HashSet<usize>,
+        capture_modes: Option<&CaptureModes>,
+    ) -> LoweringResult<()> {
+        let Some(capture_modes) = capture_modes else {
+            return Ok(());
+        };
+        // Sparse annotations are accepted: missing entries fall back to required modes
+        // computed from the lowered closure body.
+        let mut unexpected: Vec<usize> = capture_modes
+            .keys()
+            .copied()
+            .filter(|idx| !captured_indices.contains(idx))
+            .collect();
+        unexpected.sort_unstable();
+        if let Some(idx) = unexpected.first() {
+            return Err(self.lowering_error(format!(
+                "Invalid closure capture metadata for {}: unknown capture index {}",
+                self.closure_metadata_label(term),
+                idx
+            )));
+        }
+        Ok(())
     }
 
     fn ensure_closure_id_map(&mut self, term: &Rc<Term>) {
@@ -1684,7 +1829,7 @@ impl<'a> LoweringContext<'a> {
 
     fn lower_term_to_local(&mut self, term: &Rc<Term>) -> LoweringResult<Local> {
         let ty = self.infer_term_type(term)?;
-        let temp = self.push_temp_local_for_value(term, ty, None);
+        let temp = self.push_temp_local_for_value(term, ty, None)?;
         self.push_statement(Statement::StorageLive(temp));
         let next_block = self.new_block();
         self.lower_term(term, Place::from(temp), next_block)?;
@@ -1873,9 +2018,6 @@ impl<'a> LoweringContext<'a> {
         destination: Place,
         target: BasicBlock,
     ) -> LoweringResult<()> {
-        if let Some(error) = self.take_pending_error() {
-            return Err(error);
-        }
         self.ensure_closure_id_map(term);
         let _span_guard = self.enter_term_span(term);
         match &**term {
@@ -1911,7 +2053,7 @@ impl<'a> LoweringContext<'a> {
                 self.terminate(Terminator::Goto { target });
             }
             Term::LetE(ty, val, body) => {
-                let temp = self.push_temp_local_for_value(val, ty.clone(), None);
+                let temp = self.push_temp_local_for_value(val, ty.clone(), None)?;
                 self.push_statement(Statement::StorageLive(temp));
                 let next_block = self.new_block();
                 self.lower_term(val, Place::from(temp), next_block)?;
@@ -2003,26 +2145,29 @@ impl<'a> LoweringContext<'a> {
                             }
 
                             self.terminate(Terminator::Goto { target });
-                            return self.finish_with_pending_check();
+                            return Ok(());
                         }
                     }
 
-                    if !args.is_empty() && (name == "borrow_shared" || name == "borrow_mut") {
+                    if name == "borrow_shared" || name == "borrow_mut" {
                         let kind = if name == "borrow_shared" {
                             BorrowKind::Shared
                         } else {
                             BorrowKind::Mut
                         };
-                        let arg = args
-                            .last()
-                            .expect("borrow app must have at least one argument");
+                        let Some(arg) = args.last() else {
+                            return Err(self.lowering_error(format!(
+                                "Malformed borrow application: `{}` requires an argument",
+                                name
+                            )));
+                        };
                         let place = self.place_from_term(arg)?;
                         self.push_statement(Statement::Assign(
                             destination,
                             Rvalue::Ref(kind, place),
                         ));
                         self.terminate(Terminator::Goto { target });
-                        return self.finish_with_pending_check();
+                        return Ok(());
                     }
                 }
 
@@ -2085,11 +2230,11 @@ impl<'a> LoweringContext<'a> {
                         }
 
                         self.terminate(Terminator::Goto { target });
-                        return self.finish_with_pending_check();
+                        return Ok(());
                     }
 
                     self.lower_rec(ind_name, levels, &args, destination, target)?;
-                    return self.finish_with_pending_check();
+                    return Ok(());
                 }
 
                 let mut current_func_place: Option<Place> = None;
@@ -2178,8 +2323,9 @@ impl<'a> LoweringContext<'a> {
                 let arg_ty = ty.clone();
                 let mut free_vars = HashSet::new();
                 collect_free_vars(body, 1, &mut free_vars);
-                let required_modes = self.required_capture_modes_for_closure(ty, body);
-                let capture_modes = self.capture_modes_for(term);
+                let required_modes = self.required_capture_modes_for_closure(ty, body)?;
+                let capture_modes = self.capture_modes_for_required_closure(term, &free_vars)?;
+                self.ensure_capture_modes_complete(term, &free_vars, capture_modes.as_ref())?;
                 let capture_plan = self.collect_captures(
                     *kind,
                     &free_vars,
@@ -2210,7 +2356,6 @@ impl<'a> LoweringContext<'a> {
                     closure_id_map: self.closure_id_map.clone(),
                     def_name: self.def_name.clone(),
                     current_span: None,
-                    pending_error: None,
                     next_region: 1,
                 };
 
@@ -2233,17 +2378,18 @@ impl<'a> LoweringContext<'a> {
                         )));
                     }
                 };
-                sub_ctx.push_temp_local(ret_ty, Some("_0".to_string()));
+                sub_ctx.push_temp_local(ret_ty, Some("_0".to_string()))?;
 
                 let env_local = sub_ctx.push_temp_local(
                     Rc::new(Term::Sort(kernel::ast::Level::Zero)),
                     Some("env".to_string()),
-                );
+                )?;
                 if !capture_plan.mir_types.is_empty() {
                     sub_ctx.body.local_decls[env_local.index()].closure_captures =
                         capture_plan.mir_types.clone();
                 }
-                let arg_local = sub_ctx.push_temp_local(arg_ty.clone(), Some("arg0".to_string()));
+                let arg_local =
+                    sub_ctx.push_temp_local(arg_ty.clone(), Some("arg0".to_string()))?;
 
                 let mut capture_locals = HashMap::new();
                 for (i, outer_idx) in capture_plan.outer_indices.iter().enumerate() {
@@ -2318,7 +2464,7 @@ impl<'a> LoweringContext<'a> {
                     .push(sub_ctx.span_table);
 
                 let fn_ty = self.infer_term_type(term)?;
-                let closure_ty = self.function_value_mir_type(term, &fn_ty).ok_or_else(|| {
+                let closure_ty = self.function_value_mir_type(term, &fn_ty)?.ok_or_else(|| {
                     LoweringError::new("Failed to lower closure type for lambda".to_string())
                 })?;
                 let constant = Constant {
@@ -2389,8 +2535,9 @@ impl<'a> LoweringContext<'a> {
                 };
                 let mut free_vars = HashSet::new();
                 collect_free_vars(body, 1, &mut free_vars);
-                let required_modes = self.required_capture_modes_for_closure(&arg_ty, body);
-                let capture_modes = self.capture_modes_for(term);
+                let required_modes = self.required_capture_modes_for_closure(&arg_ty, body)?;
+                let capture_modes = self.capture_modes_for_required_closure(term, &free_vars)?;
+                self.ensure_capture_modes_complete(term, &free_vars, capture_modes.as_ref())?;
                 let capture_plan = self.collect_captures(
                     fn_kind,
                     &free_vars,
@@ -2421,7 +2568,6 @@ impl<'a> LoweringContext<'a> {
                     closure_id_map: self.closure_id_map.clone(),
                     def_name: self.def_name.clone(),
                     current_span: None,
-                    pending_error: None,
                     next_region: 1,
                 };
 
@@ -2439,19 +2585,20 @@ impl<'a> LoweringContext<'a> {
                         )));
                     }
                 };
-                sub_ctx.push_temp_local(ret_ty, Some("_0".to_string()));
+                sub_ctx.push_temp_local(ret_ty, Some("_0".to_string()))?;
 
                 let env_local = sub_ctx.push_temp_local(
                     Rc::new(Term::Sort(kernel::ast::Level::Zero)),
                     Some("env".to_string()),
-                );
+                )?;
                 if !capture_plan.mir_types.is_empty() {
                     let mut env_types = Vec::with_capacity(capture_plan.mir_types.len() + 1);
-                    env_types.push(self.lower_type(&ty));
+                    env_types.push(self.lower_type(&ty)?);
                     env_types.extend(capture_plan.mir_types.clone());
                     sub_ctx.body.local_decls[env_local.index()].closure_captures = env_types;
                 }
-                let arg_local = sub_ctx.push_temp_local(arg_ty.clone(), Some("arg0".to_string()));
+                let arg_local =
+                    sub_ctx.push_temp_local(arg_ty.clone(), Some("arg0".to_string()))?;
 
                 let mut capture_locals = HashMap::new();
                 // Unpack captures from env fields starting at 1 (env[0] is self)
@@ -2506,7 +2653,7 @@ impl<'a> LoweringContext<'a> {
                 }
 
                 // Bind self from env[0]
-                let self_local = sub_ctx.push_temp_local(ty.clone(), Some("self".to_string()));
+                let self_local = sub_ctx.push_temp_local(ty.clone(), Some("self".to_string()))?;
                 sub_ctx.push_statement(Statement::Assign(
                     Place::from(self_local),
                     Rvalue::Use(Operand::Copy(Place {
@@ -2536,7 +2683,7 @@ impl<'a> LoweringContext<'a> {
                     .borrow_mut()
                     .push(sub_ctx.span_table);
 
-                let closure_ty = self.function_value_mir_type(term, ty).ok_or_else(|| {
+                let closure_ty = self.function_value_mir_type(term, ty)?.ok_or_else(|| {
                     LoweringError::new("Failed to lower closure type for fixpoint".to_string())
                 })?;
                 let constant = Constant {
@@ -2563,13 +2710,13 @@ impl<'a> LoweringContext<'a> {
             Term::Rec(name, _) => Literal::Recursor(name.clone()),
             _ => Literal::OpaqueConst(opaque_reason(&term)),
         };
-        if let Some(mir_ty) = self.function_value_mir_type(&term, &ty) {
+        if let Some(mir_ty) = self.function_value_mir_type(&term, &ty)? {
             return Ok(Constant {
                 literal,
                 ty: mir_ty,
             });
         }
-        let mir_ty = self.lower_type_general(&ty);
+        let mir_ty = self.lower_type_general(&ty)?;
         Ok(Constant {
             literal,
             ty: mir_ty,
@@ -2612,7 +2759,7 @@ impl<'a> LoweringContext<'a> {
                 Rvalue::Use(Operand::Constant(Box::new(constant))),
             ));
             self.terminate(Terminator::Goto { target });
-            return self.finish_with_pending_check();
+            return Ok(());
         }
 
         let major_premise = &args[args.len() - 1];
@@ -2644,7 +2791,7 @@ impl<'a> LoweringContext<'a> {
         shared_locals.extend_from_slice(&index_locals);
 
         let major_ty = self.infer_term_type(major_premise)?;
-        let temp_major = self.push_temp_local(major_ty, None);
+        let temp_major = self.push_temp_local(major_ty, None)?;
         self.push_statement(Statement::StorageLive(temp_major));
         let major_block = self.new_block();
         self.lower_term(major_premise, Place::from(temp_major), major_block)?;
@@ -2696,7 +2843,7 @@ impl<'a> LoweringContext<'a> {
                     local: temp_major,
                     projection: vec![PlaceElem::Downcast(i), PlaceElem::Field(field_pos)],
                 };
-                let field_local = self.push_temp_local(field_ty.clone(), None);
+                let field_local = self.push_temp_local(field_ty.clone(), None)?;
                 self.push_statement(Statement::StorageLive(field_local));
                 let field_is_copy = self.body.local_decls[field_local.index()].is_copy;
                 let field_operand = if field_is_copy {
@@ -2748,7 +2895,7 @@ impl<'a> LoweringContext<'a> {
                     let rec_index_terms = rec_index_terms_final.as_deref().unwrap_or(index_terms);
                     rec_args.extend(rec_index_terms.iter().cloned());
                     let rec_local = if let Some(spec_ty) =
-                        self.specialize_pi_type_with_args_and_last(rec_ty, &rec_args)
+                        self.specialize_pi_type_with_args_and_last(rec_ty, &rec_args)?
                     {
                         // Build the recursor value with the specialized MIR type so the
                         // assignment and local declaration stay in sync for MIR typing.
@@ -2804,7 +2951,7 @@ impl<'a> LoweringContext<'a> {
             self.terminate(Terminator::Goto { target });
         }
 
-        self.finish_with_pending_check()
+        Ok(())
     }
 
     fn get_ctor_arity(&self, ind_name: &str, ctor_idx: usize) -> Option<usize> {
@@ -3077,15 +3224,164 @@ mod tests {
             Rc::new(Term::Ind("RefCell".to_string(), vec![])),
             Rc::new(Term::Sort(Level::Zero)),
         );
-        let mut ctx = LoweringContext::new(vec![("c".to_string(), arg_ty)], ret_ty, &env, &ids);
-        let target = ctx.new_block();
-
-        let err = ctx
-            .lower_term(&Rc::new(Term::Var(0)), Place::from(Local(0)), target)
-            .expect_err("missing marker registry should return a lowering error");
+        let err = match LoweringContext::new(vec![("c".to_string(), arg_ty)], ret_ty, &env, &ids) {
+            Ok(_) => panic!("missing marker registry should fail context initialization"),
+            Err(err) => err,
+        };
         assert!(
             err.to_string().contains("Marker registry error"),
             "expected marker registry lowering diagnostic, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_context_init_unknown_type_reports_diagnostic() {
+        let env = Env::new();
+        let ids = IdRegistry::from_env(&env);
+        let ret_ty = Rc::new(Term::Sort(Level::Zero));
+        let arg_ty = Rc::new(Term::Const("MissingType".to_string(), vec![]));
+
+        let err = match LoweringContext::new(vec![("x".to_string(), arg_ty)], ret_ty, &env, &ids) {
+            Ok(_) => panic!("unknown constant type should fail context initialization"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("Failed to determine Prop-like status during MIR lowering")
+                || message.contains("Failed to normalize type during MIR lowering"),
+            "expected lowering diagnostic, got: {}",
+            err
+        );
+        assert!(
+            message.contains("Unknown Const"),
+            "expected unknown constant cause in diagnostic, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_malformed_borrow_application_reports_lowering_error() {
+        let env = Env::new();
+        let ids = IdRegistry::from_env(&env);
+        let ret_ty = Rc::new(Term::Sort(Level::Zero));
+        let malformed = Term::app(
+            Rc::new(Term::Const("borrow_shared".to_string(), vec![])),
+            Rc::new(Term::Const("not_a_var".to_string(), vec![])),
+        );
+
+        let expected_span = SourceSpan {
+            start: 10,
+            end: 24,
+            line: 1,
+            col: 11,
+        };
+        let term_id = 1;
+        let term_key = Rc::as_ptr(&malformed) as usize;
+        let mut spans_by_term_id = HashMap::new();
+        spans_by_term_id.insert(term_id, expected_span);
+        let mut term_ids_by_ptr = HashMap::new();
+        term_ids_by_ptr.insert(term_key, term_id);
+        let span_map = Rc::new(TermSpanMap::new(spans_by_term_id, term_ids_by_ptr));
+
+        let mut ctx = LoweringContext::new_with_spans(vec![], ret_ty, &env, &ids, Some(span_map))
+            .expect("context init should succeed");
+        let target = ctx.new_block();
+
+        let err = ctx
+            .lower_term(&malformed, Place::from(Local(0)), target)
+            .expect_err("malformed borrow application should return a lowering error");
+
+        assert!(
+            err.to_string().contains("Borrow expects a variable place"),
+            "expected malformed borrow diagnostic, got: {}",
+            err
+        );
+        assert_eq!(
+            err.span(),
+            Some(expected_span),
+            "malformed borrow diagnostic should carry source span"
+        );
+    }
+
+    #[test]
+    fn test_capturing_closure_missing_capture_metadata_fails_closed() {
+        let env = Env::new();
+        let ids = IdRegistry::from_env(&env);
+        let ret_ty = Rc::new(Term::Sort(Level::Zero));
+        let captured_ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
+        let term = Rc::new(Term::Lam(
+            captured_ty.clone(),
+            Rc::new(Term::Var(1)),
+            BinderInfo::Default,
+            FunctionKind::FnOnce,
+        ));
+
+        let mut ctx = LoweringContext::new_with_metadata(
+            vec![("captured".to_string(), captured_ty.clone())],
+            ret_ty,
+            &env,
+            &ids,
+            None,
+            Some("metadata_test".to_string()),
+            Some(Rc::new(DefCaptureModeMap::new())),
+        )
+        .expect("context init should succeed");
+        let target = ctx.new_block();
+
+        let err = ctx
+            .lower_term(&term, Place::from(Local(0)), target)
+            .expect_err("capturing closure without capture metadata must fail closed");
+        assert!(
+            err.to_string().contains("Missing closure capture metadata"),
+            "expected dedicated capture-metadata diagnostic, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_capturing_closure_missing_span_metadata_fails_closed() {
+        let env = Env::new();
+        let ids = IdRegistry::from_env(&env);
+        let ret_ty = Rc::new(Term::Sort(Level::Zero));
+        let captured_ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
+        let term = Rc::new(Term::Lam(
+            captured_ty.clone(),
+            Rc::new(Term::Var(1)),
+            BinderInfo::Default,
+            FunctionKind::FnOnce,
+        ));
+
+        let closure_ids = kernel::ownership::collect_closure_ids(&term, "metadata_span_test");
+        let closure_id = closure_ids
+            .values()
+            .next()
+            .copied()
+            .expect("closure id should exist");
+        let mut capture_modes = DefCaptureModeMap::new();
+        let mut modes = CaptureModes::new();
+        modes.insert(0usize, UsageMode::Consuming);
+        capture_modes.insert(closure_id, modes);
+
+        let empty_span_map = Rc::new(TermSpanMap::new(HashMap::new(), HashMap::new()));
+        let mut ctx = LoweringContext::new_with_metadata(
+            vec![("captured".to_string(), captured_ty.clone())],
+            ret_ty,
+            &env,
+            &ids,
+            Some(empty_span_map),
+            Some("metadata_span_test".to_string()),
+            Some(Rc::new(capture_modes)),
+        )
+        .expect("context init should succeed");
+        let target = ctx.new_block();
+
+        let err = ctx
+            .lower_term(&term, Place::from(Local(0)), target)
+            .expect_err("capturing closure without span metadata must fail closed");
+        assert!(
+            err.to_string().contains("Missing closure span metadata"),
+            "expected dedicated span-metadata diagnostic, got: {}",
             err
         );
     }
@@ -3105,7 +3401,8 @@ mod tests {
         let env = Env::new();
         let ids = IdRegistry::from_env(&env);
         let ret_ty = Rc::new(Term::Sort(Level::Zero));
-        let mut ctx = LoweringContext::new(vec![], ret_ty, &env, &ids);
+        let mut ctx =
+            LoweringContext::new(vec![], ret_ty, &env, &ids).expect("context init should succeed");
         let dest = Place::from(Local(0));
         let target = ctx.new_block();
 
@@ -3123,7 +3420,8 @@ mod tests {
         let ids = IdRegistry::from_env(&env);
         let arg_ty = Rc::new(Term::Sort(Level::Zero));
         let ret_ty = arg_ty.clone();
-        let ctx = LoweringContext::new(vec![("x".to_string(), arg_ty)], ret_ty, &env, &ids);
+        let ctx = LoweringContext::new(vec![("x".to_string(), arg_ty)], ret_ty, &env, &ids)
+            .expect("context init should succeed");
 
         assert!(
             ctx.body.local_decls[0].is_copy,
@@ -3140,9 +3438,12 @@ mod tests {
         let env = Env::new();
         let ids = IdRegistry::from_env(&env);
         let ret_ty = Rc::new(Term::Sort(Level::Zero));
-        let mut ctx = LoweringContext::new(vec![], ret_ty, &env, &ids);
+        let mut ctx =
+            LoweringContext::new(vec![], ret_ty, &env, &ids).expect("context init should succeed");
         let ty = Rc::new(Term::Sort(Level::Zero));
-        let temp = ctx.push_temp_local(ty, None);
+        let temp = ctx
+            .push_temp_local(ty, None)
+            .expect("temp local creation should succeed");
 
         assert!(
             ctx.body.local_decls[temp.index()].is_copy,
@@ -3164,7 +3465,8 @@ mod tests {
         let ids = IdRegistry::from_env(&env);
         let ret_ty = Rc::new(Term::Sort(Level::Zero));
         let arg_ty = Rc::new(Term::Const("MyProp".to_string(), vec![]));
-        let ctx = LoweringContext::new(vec![("p".to_string(), arg_ty)], ret_ty, &env, &ids);
+        let ctx = LoweringContext::new(vec![("p".to_string(), arg_ty)], ret_ty, &env, &ids)
+            .expect("context init should succeed");
 
         let arg_decl = &ctx.body.local_decls[1];
         assert!(
@@ -3191,7 +3493,8 @@ mod tests {
         let ids = IdRegistry::from_env(&env);
         let ret_ty = Rc::new(Term::Sort(Level::Zero));
         let arg_ty = const_term("MyRef");
-        let ctx = LoweringContext::new(vec![("r".to_string(), arg_ty)], ret_ty, &env, &ids);
+        let ctx = LoweringContext::new(vec![("r".to_string(), arg_ty)], ret_ty, &env, &ids)
+            .expect("context init should succeed");
 
         let arg_decl = &ctx.body.local_decls[1];
         assert!(
@@ -3222,7 +3525,8 @@ mod tests {
         let ids = IdRegistry::from_env(&env);
         let ret_ty = Rc::new(Term::Sort(Level::Zero));
         let arg_ty = const_term("MyOpaqueRef");
-        let ctx = LoweringContext::new(vec![("r".to_string(), arg_ty)], ret_ty, &env, &ids);
+        let ctx = LoweringContext::new(vec![("r".to_string(), arg_ty)], ret_ty, &env, &ids)
+            .expect("context init should succeed");
 
         let arg_decl = &ctx.body.local_decls[1];
         assert!(
@@ -3254,7 +3558,8 @@ mod tests {
         let ids = IdRegistry::from_env(&env);
         let ret_ty = Rc::new(Term::Sort(Level::Zero));
         let arg_ty = const_term("MyMarkedOpaqueRef");
-        let ctx = LoweringContext::new(vec![("r".to_string(), arg_ty)], ret_ty, &env, &ids);
+        let ctx = LoweringContext::new(vec![("r".to_string(), arg_ty)], ret_ty, &env, &ids)
+            .expect("context init should succeed");
 
         let arg_decl = &ctx.body.local_decls[1];
         assert!(
@@ -3291,7 +3596,8 @@ mod tests {
         let ids = IdRegistry::from_env(&env);
         let ret_ty = Rc::new(Term::Sort(Level::Zero));
         let arg_ty = Rc::new(Term::Const("MyCell".to_string(), vec![]));
-        let mut ctx = LoweringContext::new(vec![("c".to_string(), arg_ty)], ret_ty, &env, &ids);
+        let mut ctx = LoweringContext::new(vec![("c".to_string(), arg_ty)], ret_ty, &env, &ids)
+            .expect("context init should succeed");
 
         let arg_decl = &ctx.body.local_decls[1];
         assert!(
@@ -3342,7 +3648,8 @@ mod tests {
         let ids = IdRegistry::from_env(&env);
         let ret_ty = Rc::new(Term::Sort(Level::Zero));
         let arg_ty = Rc::new(Term::Const("MyMarkedCell".to_string(), vec![]));
-        let mut ctx = LoweringContext::new(vec![("c".to_string(), arg_ty)], ret_ty, &env, &ids);
+        let mut ctx = LoweringContext::new(vec![("c".to_string(), arg_ty)], ret_ty, &env, &ids)
+            .expect("context init should succeed");
 
         let arg_decl = &ctx.body.local_decls[1];
         assert!(
@@ -3379,7 +3686,8 @@ mod tests {
         let ids = IdRegistry::from_env(&env);
         let ret_ty = Rc::new(Term::Sort(Level::Zero));
         let arg_ty = Rc::new(Term::Const("OpaqueTy".to_string(), vec![]));
-        let ctx = LoweringContext::new(vec![("x".to_string(), arg_ty)], ret_ty, &env, &ids);
+        let ctx = LoweringContext::new(vec![("x".to_string(), arg_ty)], ret_ty, &env, &ids)
+            .expect("context init should succeed");
 
         let arg_decl = &ctx.body.local_decls[1];
         assert!(
@@ -3405,7 +3713,8 @@ mod tests {
 
         let ids = IdRegistry::from_env(&env);
         let ret_ty = Rc::new(Term::Sort(Level::Zero));
-        let mut ctx = LoweringContext::new(vec![], ret_ty, &env, &ids);
+        let mut ctx =
+            LoweringContext::new(vec![], ret_ty, &env, &ids).expect("context init should succeed");
         let f_term = Rc::new(Term::Const("f".to_string(), vec![]));
         let f_local = ctx.lower_term_to_local(&f_term).unwrap();
         let f_decl = &ctx.body.local_decls[f_local.index()];
@@ -3423,7 +3732,8 @@ mod tests {
         let env = Env::new();
         let ids = IdRegistry::from_env(&env);
         let ret_ty = Rc::new(Term::Sort(Level::Zero));
-        let mut ctx = LoweringContext::new(vec![], ret_ty, &env, &ids);
+        let mut ctx =
+            LoweringContext::new(vec![], ret_ty, &env, &ids).expect("context init should succeed");
         let arg_ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
         let lam = Rc::new(Term::Lam(
             arg_ty,
@@ -3450,7 +3760,8 @@ mod tests {
         let env = Env::new();
         let ids = IdRegistry::from_env(&env);
         let ret_ty = Rc::new(Term::Sort(Level::Zero));
-        let mut ctx = LoweringContext::new(vec![], ret_ty, &env, &ids);
+        let mut ctx =
+            LoweringContext::new(vec![], ret_ty, &env, &ids).expect("context init should succeed");
 
         let fn_ty = MirType::Fn(
             FunctionKind::Fn,

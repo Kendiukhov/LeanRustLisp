@@ -10,6 +10,7 @@ use mir::Literal;
 
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -24,7 +25,7 @@ pub enum BackendMode {
 
 impl Default for BackendMode {
     fn default() -> Self {
-        BackendMode::Dynamic
+        BackendMode::Auto
     }
 }
 
@@ -77,6 +78,26 @@ fn span_for_mir_location(location: Option<MirSpan>, span_table: &MirSpanMap) -> 
     location
         .and_then(|loc| span_table.get(&loc).copied())
         .map(to_frontend_span)
+}
+
+fn write_diagnostic_fallback<W: Write>(
+    writer: &mut W,
+    filename: &str,
+    diag: &Diagnostic,
+    render_error: &io::Error,
+) {
+    let _ = writeln!(
+        writer,
+        "Warning: failed to render diagnostic for {}: {}",
+        filename, render_error
+    );
+    let _ = writeln!(writer, "{:?}: {}", diag.level, diag.message_with_code());
+    if let Some(span) = diag.span {
+        let _ = writeln!(writer, "  --> {}:{}..{}", filename, span.start, span.end);
+    }
+    for (span, label) in &diag.labels {
+        let _ = writeln!(writer, "  = note: {}..{}: {}", span.start, span.end, label);
+    }
 }
 
 pub fn compile_file(
@@ -256,10 +277,11 @@ fn compile_with_mir(
                 );
             }
 
-            builder
-                .finish()
-                .print((filename, Source::from(content)))
-                .unwrap();
+            let report = builder.finish();
+            if let Err(render_error) = report.print((filename, Source::from(content))) {
+                let mut stderr = io::stderr().lock();
+                write_diagnostic_fallback(&mut stderr, filename, diag, &render_error);
+            }
         }
     };
 
@@ -384,27 +406,29 @@ fn compile_with_mir(
 
     for name in names {
         if let Some(def) = env.definitions().get(&name) {
-            // Skip if it's a constructor (Term::Ctor)
-            if let Some(val) = &def.value {
-                if let kernel::ast::Term::Ctor(_, _, _) = &**val {
-                    continue;
-                }
-            } else if def.totality == kernel::ast::Totality::Axiom {
-                if is_marker_axiom(&name) {
-                    continue;
-                }
-                axiom_stubs.push(AxiomStub {
-                    safe_name: sanitize_name(&name),
-                    original_name: name.clone(),
-                });
+            // Skip canonical constructor declarations, but keep ordinary definitions
+            // whose normalized value happens to be a constructor.
+            if !env.constructor_candidates(&name).is_empty() {
                 continue;
-            } else {
-                continue; // Should not happen for definitions without value unless axiom
+            }
+
+            if def.value.is_none() {
+                if def.totality == kernel::ast::Totality::Axiom {
+                    if is_marker_axiom(&name) {
+                        continue;
+                    }
+                    axiom_stubs.push(AxiomStub {
+                        safe_name: sanitize_name(&name),
+                        original_name: name.clone(),
+                    });
+                    continue;
+                }
+                continue; // Should not happen for non-axiom definitions without value
             }
 
             // Lower to MIR
             let term_span_map = result.term_span_maps.get(&name).cloned().map(Rc::new);
-            let mut ctx = mir::lower::LoweringContext::new_with_metadata(
+            let mut ctx = match mir::lower::LoweringContext::new_with_metadata(
                 vec![],
                 def.ty.clone(),
                 &env,
@@ -412,7 +436,18 @@ fn compile_with_mir(
                 term_span_map,
                 Some(name.clone()),
                 Some(Rc::new(def.capture_modes.clone())),
-            );
+            ) {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    let mut diagnostic =
+                        Diagnostic::error(format!("Lowering error in {}: {}", name, e));
+                    if let Some(span) = e.span() {
+                        diagnostic = diagnostic.with_span(to_frontend_span(span));
+                    }
+                    diagnostics.handle(diagnostic);
+                    continue;
+                }
+            };
             let dest = mir::Place::from(mir::Local(0));
             let target = mir::BasicBlock(1);
             ctx.body.basic_blocks.push(mir::BasicBlockData {
@@ -422,10 +457,12 @@ fn compile_with_mir(
 
             if let Some(val) = &def.value {
                 if let Err(e) = ctx.lower_term(val, dest, target) {
-                    diagnostics.handle(Diagnostic::error(format!(
-                        "Lowering error in {}: {}",
-                        name, e
-                    )));
+                    let mut diagnostic =
+                        Diagnostic::error(format!("Lowering error in {}: {}", name, e));
+                    if let Some(span) = e.span() {
+                        diagnostic = diagnostic.with_span(to_frontend_span(span));
+                    }
+                    diagnostics.handle(diagnostic);
                     continue;
                 }
             }
@@ -620,52 +657,24 @@ fn compile_with_mir(
         return;
     }
 
-    let all_code = match backend {
-        BackendMode::Dynamic => {
-            build_dynamic_code(&env, &ids, &lowered_defs, &axiom_stubs, &main_def_name)
-        }
-        BackendMode::Typed => {
-            if !axiom_stubs.is_empty() {
-                diagnostics.handle(Diagnostic::error(
-                    "Typed backend does not support axiom stubs; use --backend dynamic or --backend auto".to_string(),
-                ));
-                print_diagnostics(&diagnostics, path, &content);
-                return;
-            }
-            let program = build_typed_program(&lowered_defs, main_def_name.clone());
-            match mir::typed_codegen::codegen_program(&env, &ids, &program) {
-                Ok(code) => code,
-                Err(err) => {
-                    diagnostics.handle(Diagnostic::error(format!(
-                        "Typed backend unsupported: {}",
-                        err
-                    )));
-                    print_diagnostics(&diagnostics, path, &content);
-                    return;
-                }
-            }
-        }
-        BackendMode::Auto => {
-            if !axiom_stubs.is_empty() {
-                println!(
-                    "Warning: typed backend does not support axiom stubs; falling back to dynamic."
-                );
-                build_dynamic_code(&env, &ids, &lowered_defs, &axiom_stubs, &main_def_name)
-            } else {
-                let program = build_typed_program(&lowered_defs, main_def_name.clone());
-                match mir::typed_codegen::codegen_program(&env, &ids, &program) {
-                    Ok(code) => code,
-                    Err(err) => {
-                        println!(
-                            "Warning: typed backend unsupported: {}; falling back to dynamic.",
-                            err
-                        );
-                        build_dynamic_code(&env, &ids, &lowered_defs, &axiom_stubs, &main_def_name)
-                    }
-                }
-            }
+    let (all_code, warning) = match select_backend_code(
+        backend,
+        &env,
+        &ids,
+        &lowered_defs,
+        &axiom_stubs,
+        &main_def_name,
+    ) {
+        Ok(result) => result,
+        Err(message) => {
+            diagnostics.handle(Diagnostic::error(message));
+            print_diagnostics(&diagnostics, path, &content);
+            return;
         }
     };
+    if let Some(warning) = warning {
+        println!("{}", warning);
+    }
 
     // Write output
     let build_dir = "build";
@@ -698,6 +707,56 @@ fn compile_with_mir(
             }
         }
         Err(e) => println!("Error running rustc: {:?}", e),
+    }
+}
+
+fn select_backend_code(
+    backend: BackendMode,
+    env: &Env,
+    ids: &mir::types::IdRegistry,
+    lowered_defs: &[LoweredDef],
+    axiom_stubs: &[AxiomStub],
+    main_def_name: &Option<String>,
+) -> Result<(String, Option<String>), String> {
+    match backend {
+        BackendMode::Dynamic => Ok((
+            build_dynamic_code(env, ids, lowered_defs, axiom_stubs, main_def_name),
+            None,
+        )),
+        BackendMode::Typed => {
+            if !axiom_stubs.is_empty() {
+                return Err(
+                    "Typed backend does not support axiom stubs; use --backend dynamic or --backend auto"
+                        .to_string(),
+                );
+            }
+            let program = build_typed_program(lowered_defs, main_def_name.clone());
+            let code = mir::typed_codegen::codegen_program(env, ids, &program)
+                .map_err(|err| format!("Typed backend unsupported: {}", err))?;
+            Ok((code, None))
+        }
+        BackendMode::Auto => {
+            if !axiom_stubs.is_empty() {
+                return Ok((
+                    build_dynamic_code(env, ids, lowered_defs, axiom_stubs, main_def_name),
+                    Some(
+                        "Warning: typed backend does not support axiom stubs; falling back to dynamic."
+                            .to_string(),
+                    ),
+                ));
+            }
+            let program = build_typed_program(lowered_defs, main_def_name.clone());
+            match mir::typed_codegen::codegen_program(env, ids, &program) {
+                Ok(code) => Ok((code, None)),
+                Err(err) => Ok((
+                    build_dynamic_code(env, ids, lowered_defs, axiom_stubs, main_def_name),
+                    Some(format!(
+                        "Warning: typed backend unsupported: {}; falling back to dynamic.",
+                        err
+                    )),
+                )),
+            }
+        }
     }
 }
 
@@ -886,12 +945,12 @@ pub fn compile_string_with_prelude(source: &str, prelude: Option<&str>) -> Vec<D
             let mut borrow_errors = Vec::new();
 
             if let Some(def) = env.definitions().get(&name) {
+                if !env.constructor_candidates(&name).is_empty() {
+                    continue;
+                }
                 if let Some(val) = &def.value {
-                    if let kernel::ast::Term::Ctor(_, _, _) = &**val {
-                        continue;
-                    }
                     // Lower and Check
-                    let mut ctx = mir::lower::LoweringContext::new_with_metadata(
+                    let mut ctx = match mir::lower::LoweringContext::new_with_metadata(
                         vec![],
                         def.ty.clone(),
                         &env,
@@ -899,7 +958,20 @@ pub fn compile_string_with_prelude(source: &str, prelude: Option<&str>) -> Vec<D
                         None,
                         Some(name.clone()),
                         Some(Rc::new(def.capture_modes.clone())),
-                    );
+                    ) {
+                        Ok(ctx) => ctx,
+                        Err(e) => {
+                            lowering_errors.push(format!("Lowering error in {}: {}", name, e));
+                            results.push(DefCompileResult {
+                                name,
+                                lowering_errors,
+                                typing_errors,
+                                ownership_errors,
+                                borrow_errors,
+                            });
+                            continue;
+                        }
+                    };
                     let dest = mir::Place::from(mir::Local(0));
                     let target = mir::BasicBlock(1);
                     ctx.body.basic_blocks.push(mir::BasicBlockData {
@@ -956,6 +1028,7 @@ mod tests {
     use frontend::diagnostics::DiagnosticCollector;
     use frontend::macro_expander::{Expander, MacroBoundaryPolicy};
     use kernel::checker::Env;
+    use std::io::{self, Write};
 
     const TEST_PRELUDE: &str = r#"(
 inductive copy Nat (sort 1)
@@ -973,6 +1046,105 @@ inductive copy Nat (sort 1)
         (case (zero) m)
         (case (succ m' ih) (succ ih))))))
 "#;
+
+    #[test]
+    fn backend_mode_default_is_auto() {
+        assert_eq!(BackendMode::default(), BackendMode::Auto);
+    }
+
+    #[test]
+    fn backend_mode_uses_expected_preludes() {
+        assert_eq!(
+            prelude_for_backend(BackendMode::Typed),
+            "stdlib/prelude_typed.lrl"
+        );
+        assert_eq!(
+            prelude_for_backend(BackendMode::Auto),
+            "stdlib/prelude_typed.lrl"
+        );
+        assert_eq!(
+            prelude_for_backend(BackendMode::Dynamic),
+            "stdlib/prelude.lrl"
+        );
+    }
+
+    #[test]
+    fn auto_backend_fallback_warns_for_axiom_stubs() {
+        let env = Env::new();
+        let ids = mir::types::IdRegistry::from_env(&env);
+        let lowered_defs = Vec::new();
+        let axiom_stubs = vec![AxiomStub {
+            safe_name: "axiom_stub".to_string(),
+            original_name: "axiom_stub".to_string(),
+        }];
+
+        let (code, warning) = select_backend_code(
+            BackendMode::Auto,
+            &env,
+            &ids,
+            &lowered_defs,
+            &axiom_stubs,
+            &None,
+        )
+        .expect("auto backend should fall back to dynamic");
+
+        assert!(
+            code.contains("enum Value"),
+            "auto fallback should emit dynamic backend runtime"
+        );
+        assert!(
+            warning
+                .as_deref()
+                .is_some_and(|msg| msg.contains("falling back to dynamic")),
+            "expected explicit auto-fallback warning"
+        );
+    }
+
+    #[test]
+    fn typed_backend_rejects_axiom_stubs() {
+        let env = Env::new();
+        let ids = mir::types::IdRegistry::from_env(&env);
+        let lowered_defs = Vec::new();
+        let axiom_stubs = vec![AxiomStub {
+            safe_name: "axiom_stub".to_string(),
+            original_name: "axiom_stub".to_string(),
+        }];
+
+        let err = select_backend_code(
+            BackendMode::Typed,
+            &env,
+            &ids,
+            &lowered_defs,
+            &axiom_stubs,
+            &None,
+        )
+        .expect_err("typed backend must reject axiom stubs");
+
+        assert!(
+            err.contains("Typed backend does not support axiom stubs"),
+            "expected typed backend axiom stub diagnostic"
+        );
+    }
+
+    #[test]
+    fn compiler_diagnostic_fallback_handles_closed_writer() {
+        struct ClosedWriter;
+
+        impl Write for ClosedWriter {
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "writer closed"))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "writer closed"))
+            }
+        }
+
+        let diag = Diagnostic::error("synthetic diagnostic".to_string());
+        let render_error = io::Error::new(io::ErrorKind::BrokenPipe, "stdout closed");
+        let mut writer = ClosedWriter;
+        write_diagnostic_fallback(&mut writer, "compile_test", &diag, &render_error);
+    }
 
     #[test]
     fn test_basic_compilation() {

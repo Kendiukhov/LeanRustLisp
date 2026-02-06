@@ -164,6 +164,8 @@ pub fn codegen_recursors(inductives: &HashMap<String, InductiveDecl>, env: &Env)
 /// This includes the Value enum and all recursor helpers.
 pub fn codegen_prelude() -> String {
     r#"
+#![allow(non_snake_case, non_camel_case_types)]
+
 use std::rc::Rc;
 
 #[derive(Clone)]

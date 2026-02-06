@@ -1,0 +1,22 @@
+(inductive copy PairNB (sort 1)
+  (ctor mk_pair (pi n Nat (pi b Bool PairNB))))
+
+(inductive copy WrapNB (sort 1)
+  (ctor empty WrapNB)
+  (ctor boxed (pi p PairNB WrapNB))
+  (ctor nested (pi w WrapNB WrapNB)))
+
+(def score (pi w WrapNB Nat)
+  (lam w WrapNB
+    (match w Nat
+      (case (empty) zero)
+      (case (boxed p)
+        (match p Nat
+          (case (mk_pair n b)
+            (match b Nat
+              (case (true) n)
+              (case (false) zero)))))
+      (case (nested inner ih) ih))))
+
+(def entry Nat
+  (print_nat (score (nested (boxed (mk_pair (succ (succ zero)) true))))))

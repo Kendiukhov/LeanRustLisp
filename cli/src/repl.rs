@@ -1,12 +1,19 @@
 use crate::driver::{self, PipelineOptions};
 use crate::expand::{expand_and_format, ExpandError, ExpandMode};
-use frontend::diagnostics::DiagnosticCollector;
+use frontend::diagnostics::{Diagnostic, DiagnosticCollector};
 use frontend::macro_expander::Expander;
 use kernel::checker::{classical_axiom_dependencies, Env};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::fs;
+use std::io::{self, BufRead, Write};
 use std::path::Path;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ReplLineAction {
+    Continue,
+    Exit,
+}
 
 pub fn start(
     trace_macros: bool,
@@ -16,11 +23,6 @@ pub fn start(
     allow_redefine: bool,
     allow_axioms: bool,
 ) {
-    let mut rl = DefaultEditor::new().expect("Failed to init readline");
-    if rl.load_history("history.txt").is_err() {
-        // No history yet
-    }
-
     let mut env = Env::new();
     let mut expander = Expander::new();
     expander.trace_verbose = trace_macros;
@@ -71,224 +73,319 @@ pub fn start(
     println!("LeanRustLisp REPL v0.1.0");
     println!("Type 'exit' or Ctrl-D to quit.");
 
+    match DefaultEditor::new() {
+        Ok(mut rl) => {
+            if let Err(err) = rl.load_history("history.txt") {
+                write_repl_warning(&format!(
+                    "failed to load REPL history (continuing without history): {}",
+                    err
+                ));
+            }
+
+            let fallback_to_stdin = run_readline_loop(
+                &mut rl,
+                &mut env,
+                &mut expander,
+                &mut panic_free,
+                require_axiom_tags,
+                allow_axioms,
+                allow_redefine,
+                &mut last_defined,
+            );
+
+            if let Err(err) = rl.save_history("history.txt") {
+                write_repl_warning(&format!(
+                    "failed to save REPL history (continuing): {}",
+                    err
+                ));
+            }
+
+            if fallback_to_stdin {
+                run_stdin_loop(
+                    &mut env,
+                    &mut expander,
+                    &mut panic_free,
+                    require_axiom_tags,
+                    allow_axioms,
+                    allow_redefine,
+                    &mut last_defined,
+                );
+            }
+        }
+        Err(err) => {
+            write_repl_warning(&format!(
+                "failed to initialize line editor ({}); running in degraded mode without editing/history",
+                err
+            ));
+            run_stdin_loop(
+                &mut env,
+                &mut expander,
+                &mut panic_free,
+                require_axiom_tags,
+                allow_axioms,
+                allow_redefine,
+                &mut last_defined,
+            );
+        }
+    }
+}
+
+fn run_readline_loop(
+    rl: &mut DefaultEditor,
+    env: &mut Env,
+    expander: &mut Expander,
+    panic_free: &mut bool,
+    require_axiom_tags: bool,
+    allow_axioms: bool,
+    allow_redefine: bool,
+    last_defined: &mut Option<String>,
+) -> bool {
     loop {
-        let readline = rl.readline("lrl> ");
-        match readline {
+        match rl.readline("lrl> ") {
             Ok(line) => {
                 let line = line.trim();
-                if line == "exit" {
-                    break;
-                }
                 if line.is_empty() {
                     continue;
                 }
+                if line == "exit" {
+                    return false;
+                }
 
-                rl.add_history_entry(line).unwrap();
+                if let Err(err) = rl.add_history_entry(line) {
+                    write_repl_warning(&format!(
+                        "failed to append REPL history entry (continuing): {}",
+                        err
+                    ));
+                }
 
-                if line.starts_with(':') {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    match parts[0] {
-                        ":quit" | ":exit" => break,
-                        ":help" => {
-                            println!("Available commands:");
-                            println!("  :quit, :exit    Exit the REPL");
-                            println!("  :help           Show this help message");
-                            println!("  :load <file>    Load a file");
-                            println!("  :type <expr>    Check the type of an expression");
-                            println!("  :eval <expr>    Evaluate an expression to WHNF");
-                            println!("  :expand <expr>       Show the macro-expanded syntax (alias for :expand-full)");
-                            println!("  :expand-1 <expr>     Show one step of macro expansion");
-                            println!("  :expand-full <expr>  Show the fully expanded syntax");
-                            println!(
-                                "  :trace-expand <expr> Show expanded syntax with macro trace"
-                            );
-                            println!(
-                                "  :trace-macros [on|off]  Toggle macro trace during processing"
-                            );
-                            println!(
-                                "  :panic-free [on|off]    Toggle panic-free profile (interior mutability forbidden)"
-                            );
-                            println!("  :axioms <name...>  Show axiom dependencies (defaults to last defined)");
-                        }
-                        ":trace-macros" => {
-                            let setting = parts.get(1).map(|s| s.to_ascii_lowercase());
-                            match setting.as_deref() {
-                                Some("on") => {
-                                    expander.trace_verbose = true;
-                                    println!("Macro tracing enabled.");
-                                }
-                                Some("off") => {
-                                    expander.trace_verbose = false;
-                                    println!("Macro tracing disabled.");
-                                }
-                                None => {
-                                    println!(
-                                        "Macro tracing is {}.",
-                                        if expander.trace_verbose { "on" } else { "off" }
-                                    );
-                                }
-                                _ => {
-                                    println!("Usage: :trace-macros [on|off]");
-                                }
-                            }
-                        }
-                        ":axioms" => {
-                            let names: Vec<String> = if parts.len() >= 2 {
-                                parts[1..].iter().map(|s| s.to_string()).collect()
-                            } else if let Some(name) = last_defined.clone() {
-                                vec![name]
-                            } else {
-                                println!("Usage: :axioms <name...>");
-                                continue;
-                            };
+                if matches!(
+                    handle_repl_line(
+                        line,
+                        env,
+                        expander,
+                        panic_free,
+                        require_axiom_tags,
+                        allow_axioms,
+                        allow_redefine,
+                        last_defined,
+                    ),
+                    ReplLineAction::Exit
+                ) {
+                    return false;
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("CTRL-C");
+                return false;
+            }
+            Err(ReadlineError::Eof) => {
+                println!("CTRL-D");
+                return false;
+            }
+            Err(err) => {
+                write_repl_warning(&format!(
+                    "readline failed ({}); continuing in degraded stdin mode",
+                    err
+                ));
+                return true;
+            }
+        }
+    }
+}
 
-                            for (idx, name) in names.iter().enumerate() {
-                                if idx > 0 {
-                                    println!();
-                                }
-                                match env.get_definition(name) {
-                                    Some(def) => {
-                                        let classical = classical_axiom_dependencies(&env, def);
-                                        println!("{}:", name);
-                                        println!("Axioms: {:?}", def.axioms);
-                                        println!("Primitives: {:?}", def.primitive_deps);
-                                        println!("Classical: {:?}", classical);
-                                    }
-                                    None => println!("Unknown definition: {}", name),
-                                }
-                            }
-                        }
-                        ":load" => {
-                            if parts.len() < 2 {
-                                println!("Usage: :load <file>");
-                            } else {
-                                let path = parts[1];
-                                if let Some(name) = run_file(
-                                    path,
-                                    &mut env,
-                                    &mut expander,
-                                    true,
-                                    panic_free,
-                                    require_axiom_tags,
-                                    allow_axioms,
-                                    true,
-                                    allow_redefine,
-                                ) {
-                                    last_defined = Some(name);
-                                }
-                                expander.enter_module("repl");
-                            }
-                        }
-                        ":panic-free" => {
-                            let setting = parts.get(1).map(|s| s.to_ascii_lowercase());
-                            match setting.as_deref() {
-                                Some("on") => {
-                                    panic_free = true;
-                                    println!("Panic-free profile enabled.");
-                                }
-                                Some("off") => {
-                                    panic_free = false;
-                                    println!("Panic-free profile disabled.");
-                                }
-                                None => {
-                                    println!(
-                                        "Panic-free profile is {}.",
-                                        if panic_free { "on" } else { "off" }
-                                    );
-                                }
-                                _ => println!("Usage: :panic-free [on|off]"),
-                            }
-                        }
-                        ":type" => {
-                            if parts.len() < 2 {
-                                println!("Usage: :type <expr>");
-                            } else {
-                                let input_expr = line[parts[0].len()..].trim();
-                                let options = PipelineOptions {
-                                    show_types: true,
-                                    show_eval: false,
-                                    verbose: false,
-                                    collect_artifacts: false,
-                                    panic_free,
-                                    require_axiom_tags,
-                                    allow_axioms,
-                                    prelude_frozen: true,
-                                    allow_redefine,
-                                };
-                                let mut diagnostics = DiagnosticCollector::new();
-                                let result = driver::process_code(
-                                    input_expr,
-                                    "repl",
-                                    &mut env,
-                                    &mut expander,
-                                    &options,
-                                    &mut diagnostics,
-                                );
-                                update_last_defined(&result, &diagnostics, &env, &mut last_defined);
-                                // Diagnostics are printed by driver? No, driver returns/collects them.
-                                // Driver logic needs to print them or return them.
-                                // My driver implementation collected them but processed valid ones.
-                                // Let's check driver implementation.
-                                // Ah, driver *handles* diagnostics but doesn't print them to stdout unless I make it do so?
-                                // Actually, I passed DiagnosticCollector. I need to print them here.
-                                print_diagnostics(&diagnostics, "repl", input_expr);
-                            }
-                        }
-                        ":eval" => {
-                            if parts.len() < 2 {
-                                println!("Usage: :eval <expr>");
-                            } else {
-                                let input_expr = line[parts[0].len()..].trim();
-                                let options = PipelineOptions {
-                                    show_types: false,
-                                    show_eval: true,
-                                    verbose: false,
-                                    collect_artifacts: false,
-                                    panic_free,
-                                    require_axiom_tags,
-                                    allow_axioms,
-                                    prelude_frozen: true,
-                                    allow_redefine,
-                                };
-                                let mut diagnostics = DiagnosticCollector::new();
-                                let result = driver::process_code(
-                                    input_expr,
-                                    "repl",
-                                    &mut env,
-                                    &mut expander,
-                                    &options,
-                                    &mut diagnostics,
-                                );
-                                update_last_defined(&result, &diagnostics, &env, &mut last_defined);
-                                print_diagnostics(&diagnostics, "repl", input_expr);
-                            }
-                        }
-                        ":expand" => {
-                            handle_expand_command(line, parts[0], ExpandMode::Full, &mut expander);
-                        }
-                        ":expand-1" => {
-                            handle_expand_command(
-                                line,
-                                parts[0],
-                                ExpandMode::SingleStep,
-                                &mut expander,
-                            );
-                        }
-                        ":expand-full" => {
-                            handle_expand_command(line, parts[0], ExpandMode::Full, &mut expander);
-                        }
-                        ":trace-expand" => {
-                            handle_expand_command(line, parts[0], ExpandMode::Trace, &mut expander);
-                        }
-                        _ => println!("Unknown command. Type :help for help."),
+fn run_stdin_loop(
+    env: &mut Env,
+    expander: &mut Expander,
+    panic_free: &mut bool,
+    require_axiom_tags: bool,
+    allow_axioms: bool,
+    allow_redefine: bool,
+    last_defined: &mut Option<String>,
+) {
+    let stdin = io::stdin();
+    let mut stdin_lock = stdin.lock();
+    let mut input = String::new();
+    loop {
+        {
+            let mut stdout = io::stdout().lock();
+            let _ = write!(stdout, "lrl> ");
+            let _ = stdout.flush();
+        }
+
+        input.clear();
+        match stdin_lock.read_line(&mut input) {
+            Ok(0) => {
+                println!("CTRL-D");
+                break;
+            }
+            Ok(_) => {
+                let line = input.trim_end_matches(&['\r', '\n'][..]);
+                if matches!(
+                    handle_repl_line(
+                        line,
+                        env,
+                        expander,
+                        panic_free,
+                        require_axiom_tags,
+                        allow_axioms,
+                        allow_redefine,
+                        last_defined,
+                    ),
+                    ReplLineAction::Exit
+                ) {
+                    break;
+                }
+            }
+            Err(err) => {
+                write_repl_warning(&format!(
+                    "failed to read stdin in degraded mode; exiting REPL: {}",
+                    err
+                ));
+                break;
+            }
+        }
+    }
+}
+
+fn handle_repl_line(
+    line: &str,
+    env: &mut Env,
+    expander: &mut Expander,
+    panic_free: &mut bool,
+    require_axiom_tags: bool,
+    allow_axioms: bool,
+    allow_redefine: bool,
+    last_defined: &mut Option<String>,
+) -> ReplLineAction {
+    let line = line.trim();
+    if line == "exit" {
+        return ReplLineAction::Exit;
+    }
+    if line.is_empty() {
+        return ReplLineAction::Continue;
+    }
+
+    if line.starts_with(':') {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        match parts[0] {
+            ":quit" | ":exit" => return ReplLineAction::Exit,
+            ":help" => {
+                println!("Available commands:");
+                println!("  :quit, :exit    Exit the REPL");
+                println!("  :help           Show this help message");
+                println!("  :load <file>    Load a file");
+                println!("  :type <expr>    Check the type of an expression");
+                println!("  :eval <expr>    Evaluate an expression to WHNF");
+                println!("  :expand <expr>       Show the macro-expanded syntax (alias for :expand-full)");
+                println!("  :expand-1 <expr>     Show one step of macro expansion");
+                println!("  :expand-full <expr>  Show the fully expanded syntax");
+                println!("  :trace-expand <expr> Show expanded syntax with macro trace");
+                println!("  :trace-macros [on|off]  Toggle macro trace during processing");
+                println!(
+                    "  :panic-free [on|off]    Toggle panic-free profile (interior mutability forbidden)"
+                );
+                println!("  :axioms <name...>  Show axiom dependencies (defaults to last defined)");
+            }
+            ":trace-macros" => {
+                let setting = parts.get(1).map(|s| s.to_ascii_lowercase());
+                match setting.as_deref() {
+                    Some("on") => {
+                        expander.trace_verbose = true;
+                        println!("Macro tracing enabled.");
                     }
+                    Some("off") => {
+                        expander.trace_verbose = false;
+                        println!("Macro tracing disabled.");
+                    }
+                    None => {
+                        println!(
+                            "Macro tracing is {}.",
+                            if expander.trace_verbose { "on" } else { "off" }
+                        );
+                    }
+                    _ => {
+                        println!("Usage: :trace-macros [on|off]");
+                    }
+                }
+            }
+            ":axioms" => {
+                let names: Vec<String> = if parts.len() >= 2 {
+                    parts[1..].iter().map(|s| s.to_string()).collect()
+                } else if let Some(name) = last_defined.clone() {
+                    vec![name]
                 } else {
+                    println!("Usage: :axioms <name...>");
+                    return ReplLineAction::Continue;
+                };
+
+                for (idx, name) in names.iter().enumerate() {
+                    if idx > 0 {
+                        println!();
+                    }
+                    match env.get_definition(name) {
+                        Some(def) => {
+                            let classical = classical_axiom_dependencies(&*env, def);
+                            println!("{}:", name);
+                            println!("Axioms: {:?}", def.axioms);
+                            println!("Primitives: {:?}", def.primitive_deps);
+                            println!("Classical: {:?}", classical);
+                        }
+                        None => println!("Unknown definition: {}", name),
+                    }
+                }
+            }
+            ":load" => {
+                if parts.len() < 2 {
+                    println!("Usage: :load <file>");
+                } else {
+                    let path = parts[1];
+                    if let Some(name) = run_file(
+                        path,
+                        env,
+                        expander,
+                        true,
+                        *panic_free,
+                        require_axiom_tags,
+                        allow_axioms,
+                        true,
+                        allow_redefine,
+                    ) {
+                        *last_defined = Some(name);
+                    }
+                    expander.enter_module("repl");
+                }
+            }
+            ":panic-free" => {
+                let setting = parts.get(1).map(|s| s.to_ascii_lowercase());
+                match setting.as_deref() {
+                    Some("on") => {
+                        *panic_free = true;
+                        println!("Panic-free profile enabled.");
+                    }
+                    Some("off") => {
+                        *panic_free = false;
+                        println!("Panic-free profile disabled.");
+                    }
+                    None => {
+                        println!(
+                            "Panic-free profile is {}.",
+                            if *panic_free { "on" } else { "off" }
+                        );
+                    }
+                    _ => println!("Usage: :panic-free [on|off]"),
+                }
+            }
+            ":type" => {
+                if parts.len() < 2 {
+                    println!("Usage: :type <expr>");
+                } else {
+                    let input_expr = line[parts[0].len()..].trim();
                     let options = PipelineOptions {
                         show_types: true,
                         show_eval: false,
-                        verbose: true,
+                        verbose: false,
                         collect_artifacts: false,
-                        panic_free,
+                        panic_free: *panic_free,
                         require_axiom_tags,
                         allow_axioms,
                         prelude_frozen: true,
@@ -296,32 +393,79 @@ pub fn start(
                     };
                     let mut diagnostics = DiagnosticCollector::new();
                     let result = driver::process_code(
-                        line,
+                        input_expr,
                         "repl",
-                        &mut env,
-                        &mut expander,
+                        env,
+                        expander,
                         &options,
                         &mut diagnostics,
                     );
-                    update_last_defined(&result, &diagnostics, &env, &mut last_defined);
-                    print_diagnostics(&diagnostics, "repl", line);
+                    update_last_defined(&result, &diagnostics, env, last_defined);
+                    print_diagnostics(&diagnostics, "repl", input_expr);
                 }
             }
-            Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                break;
+            ":eval" => {
+                if parts.len() < 2 {
+                    println!("Usage: :eval <expr>");
+                } else {
+                    let input_expr = line[parts[0].len()..].trim();
+                    let options = PipelineOptions {
+                        show_types: false,
+                        show_eval: true,
+                        verbose: false,
+                        collect_artifacts: false,
+                        panic_free: *panic_free,
+                        require_axiom_tags,
+                        allow_axioms,
+                        prelude_frozen: true,
+                        allow_redefine,
+                    };
+                    let mut diagnostics = DiagnosticCollector::new();
+                    let result = driver::process_code(
+                        input_expr,
+                        "repl",
+                        env,
+                        expander,
+                        &options,
+                        &mut diagnostics,
+                    );
+                    update_last_defined(&result, &diagnostics, env, last_defined);
+                    print_diagnostics(&diagnostics, "repl", input_expr);
+                }
             }
-            Err(ReadlineError::Eof) => {
-                println!("CTRL-D");
-                break;
+            ":expand" => {
+                handle_expand_command(line, parts[0], ExpandMode::Full, expander);
             }
-            Err(err) => {
-                println!("Error: {:?}", err);
-                break;
+            ":expand-1" => {
+                handle_expand_command(line, parts[0], ExpandMode::SingleStep, expander);
             }
+            ":expand-full" => {
+                handle_expand_command(line, parts[0], ExpandMode::Full, expander);
+            }
+            ":trace-expand" => {
+                handle_expand_command(line, parts[0], ExpandMode::Trace, expander);
+            }
+            _ => println!("Unknown command. Type :help for help."),
         }
+    } else {
+        let options = PipelineOptions {
+            show_types: true,
+            show_eval: false,
+            verbose: true,
+            collect_artifacts: false,
+            panic_free: *panic_free,
+            require_axiom_tags,
+            allow_axioms,
+            prelude_frozen: true,
+            allow_redefine,
+        };
+        let mut diagnostics = DiagnosticCollector::new();
+        let result = driver::process_code(line, "repl", env, expander, &options, &mut diagnostics);
+        update_last_defined(&result, &diagnostics, env, last_defined);
+        print_diagnostics(&diagnostics, "repl", line);
     }
-    rl.save_history("history.txt").unwrap();
+
+    ReplLineAction::Continue
 }
 
 pub fn run_file(
@@ -395,6 +539,31 @@ fn print_macro_trace(expander: &mut Expander) {
     expander.expansion_trace.clear();
 }
 
+fn write_repl_warning(message: &str) {
+    let mut stderr = io::stderr().lock();
+    let _ = writeln!(stderr, "Warning: {}", message);
+}
+
+fn write_diagnostic_fallback<W: Write>(
+    writer: &mut W,
+    filename: &str,
+    diag: &Diagnostic,
+    render_error: &io::Error,
+) {
+    let _ = writeln!(
+        writer,
+        "Warning: failed to render diagnostic for {}: {}",
+        filename, render_error
+    );
+    let _ = writeln!(writer, "{:?}: {}", diag.level, diag.message_with_code());
+    if let Some(span) = diag.span {
+        let _ = writeln!(writer, "  --> {}:{}..{}", filename, span.start, span.end);
+    }
+    for (span, label) in &diag.labels {
+        let _ = writeln!(writer, "  = note: {}..{}: {}", span.start, span.end, label);
+    }
+}
+
 fn print_diagnostics(diagnostics: &DiagnosticCollector, filename: &str, content: &str) {
     use ariadne::{Color, Label, Report, ReportKind, Source};
     use frontend::diagnostics::Level;
@@ -430,10 +599,11 @@ fn print_diagnostics(diagnostics: &DiagnosticCollector, filename: &str, content:
             );
         }
 
-        builder
-            .finish()
-            .print((filename, Source::from(content)))
-            .unwrap();
+        let report = builder.finish();
+        if let Err(render_error) = report.print((filename, Source::from(content))) {
+            let mut stderr = io::stderr().lock();
+            write_diagnostic_fallback(&mut stderr, filename, diag, &render_error);
+        }
     }
 }
 
@@ -477,6 +647,7 @@ mod tests {
     use crate::driver::PipelineOptions;
     use frontend::diagnostics::DiagnosticCollector;
     use frontend::macro_expander::Expander;
+    use std::io::{self, Write};
 
     fn run_repl_snippet(
         source: &str,
@@ -539,5 +710,25 @@ mod tests {
         let (result, diagnostics, env) = run_repl_snippet(source);
         let last = extract_last_defined(&result, &diagnostics, &env);
         assert_eq!(last.as_deref(), Some("classical_choice"));
+    }
+
+    #[test]
+    fn repl_diagnostic_fallback_handles_closed_writer() {
+        struct ClosedWriter;
+
+        impl Write for ClosedWriter {
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "writer closed"))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "writer closed"))
+            }
+        }
+
+        let diag = Diagnostic::error("synthetic diagnostic".to_string());
+        let render_error = io::Error::new(io::ErrorKind::BrokenPipe, "stdout closed");
+        let mut writer = ClosedWriter;
+        write_diagnostic_fallback(&mut writer, "repl", &diag, &render_error);
     }
 }

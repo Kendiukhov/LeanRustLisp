@@ -20,6 +20,39 @@
   (ctor false Bool)
 )
 
+;; Core reserved names needed by user programs in typed mode.
+(inductive False (sort 0))
+
+(inductive List (pi T (sort 1) (sort 1))
+  (ctor nil (pi {T (sort 1)} (List T)))
+  (ctor cons (pi {T (sort 1)} (pi h T (pi t (List T) (List T)))))
+)
+
+(inductive Comp (pi A (sort 1) (sort 1))
+  (ctor ret (pi A (sort 1) (pi x A (Comp A))))
+)
+
+(inductive Eq (pi A (sort 1) (pi a A (pi b A (sort 0))))
+  (ctor refl (pi A (sort 1) (pi a A (Eq A a a))))
+)
+
+;; Typed dynamic boundary placeholders.
+(inductive copy Dyn (sort 1)
+  (ctor dyn_nat (pi n Nat Dyn))
+  (ctor dyn_bool (pi b Bool Dyn))
+  (ctor dyn_unit Dyn)
+)
+
+(inductive copy EvalCap (sort 1)
+  (ctor eval_cap EvalCap)
+)
+
+(def eval (pi code Dyn (pi cap EvalCap Dyn))
+  (lam code Dyn
+    (lam cap EvalCap
+      code))
+)
+
 ;; Print helpers (typed backend special-cases these names).
 (def print_nat (pi #[fn] n Nat Nat)
   (lam #[fn] n Nat n)
@@ -31,16 +64,16 @@
 
 ;; Persistent list for typed backend (monomorphic Nat list for Stage 1).
 (inductive copy ListRc (sort 1)
-  (ctor nil ListRc)
-  (ctor cons (pi h Nat (pi t ListRc ListRc)))
+  (ctor nil_rc ListRc)
+  (ctor cons_rc (pi h Nat (pi t ListRc ListRc)))
 )
 
 (def append (pi #[fn] l1 ListRc (pi #[fn] l2 ListRc ListRc))
   (lam #[fn] l1 ListRc
     (lam #[fn] l2 ListRc
       (match l1 ListRc
-        (case (nil) l2)
-        (case (cons h t ih) (cons h ih))
+        (case (nil_rc) l2)
+        (case (cons_rc h t ih) (cons_rc h ih))
       )
     )
   )

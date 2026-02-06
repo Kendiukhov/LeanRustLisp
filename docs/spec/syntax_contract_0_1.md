@@ -217,13 +217,47 @@ Errors:
 - Args must be symbols.
 - Arity must be exactly 3 items after the head.
 
-**(import classical)**
+**(module ...)**
 
 Syntax:
-- `(import classical)` only.
+- `(module std.list)`
+
+Rules:
+- At most one module declaration is allowed per file.
+- Module declarations must appear before other declarations in a file.
+- Unqualified declaration names are recorded under the module path.
+
+**(import ...)**
+
+Syntax:
+- `(import std.list as List)` (recommended)
+- `(import std.list)` (default alias is the last module segment, e.g. `list`)
+- `(import classical)` (special axiom import form)
+
+Rules:
+- Importing modules does not open them into unqualified scope.
+- Qualified lookup can use alias prefixes (`List.map`) or full module paths (`std.list.map`).
+- Importing an unknown module is an error.
 
 Errors:
-- Any other argument is rejected.
+- Invalid shape is rejected; only `(import <module>)`, `(import <module> as <alias>)`, or `(import classical)` are accepted.
+
+**(open ...)**
+
+Syntax:
+- `(open List)` (open alias)
+- `(open std.list)` (open explicit module path)
+- `(open list)` is only legal if it resolves uniquely among imported modules/aliases.
+
+Rules:
+- Opened modules contribute to unqualified resolution in declaration order.
+- If multiple opened modules provide the same unqualified name, unqualified use is an error (no “last open wins”).
+
+Name resolution contract:
+- Unqualified lookup order: local binders > current module > opened modules (ordered) > prelude/global unqualified names.
+- Imported aliases are qualified-only and do not participate in unqualified lookup unless opened.
+- Qualified lookup (`A.x` or `std.list.x`) resolves only through alias/module paths and never falls back to unqualified lookup.
+- Qualified names do not resolve to local binders.
 
 **(import-macros ...)**
 
@@ -483,45 +517,27 @@ Axiom tagging policy:
 
 **Part 2 — Missing Syntax That Should Be Defined Early (Minimal Additions Only)**
 
-Proposed additions below are only to prevent breaking changes or to express already-adopted semantics. Each entry notes whether it should be frozen core or experimental sugar.
+Items below remain intentionally minimal after freezing module/import/open behavior.
 
-1) Minimal module/import system
-- Proposed spelling: `(import "path" [as alias])`
-- Desugars to: load and open module namespace, similar to macro imports but for definitions.
-- Why freeze early: standard library organization and namespacing will depend on this.
-- Status: core frozen.
-
-2) Module/namespace declaration
-- Proposed spelling: `(module Name)` or `(namespace Name)`
-- Desugars to: establish a qualified prefix for contained definitions.
-- Why freeze early: avoids later breaking changes to naming conventions.
-- Status: core frozen.
-
-3) Qualified name resolution
-- Proposed spelling: `Name.subname` (already tokenizable as a symbol)
-- Desugars to: lookup in module/namespace environment.
-- Why freeze early: consumers will depend on stable qualification rules.
-- Status: core frozen.
-
-4) Multi-binder sugar for `lam`/`pi`
+1) Multi-binder sugar for `lam`/`pi`
 - Proposed spelling: `(lam (x A) (y B) body)` and `(pi (x A) (y B) C)`
 - Desugars to: nested `lam`/`pi`.
 - Why freeze early: common in stdlib; avoids later syntax changes.
 - Status: experimental sugar.
 
-5) Arrow sugar for `pi`
+2) Arrow sugar for `pi`
 - Proposed spelling: `(-> A B C)`
 - Desugars to: `(pi _ A (pi _ B C))`.
 - Why freeze early: pervasive in type signatures.
 - Status: experimental sugar.
 
-6) Term-level string literal semantics
+3) Term-level string literal semantics
 - Proposed spelling: existing string literal `"..."` in term position
-- Desugars to: either `String` constructors or `List Nat` (TBD).
+- Desugars to: `List Nat` character-code lists (bootstrap choice for 0.1).
 - Why freeze early: strings already parse; without a contract, future changes are breaking.
-- Status: core frozen (if adopted).
+- Status: core frozen.
 
-7) Struct/record surface sugar
+4) Struct/record surface sugar
 - Proposed spelling: `(struct Name (field T) ...)`
 - Desugars to: `inductive` + projections + constructor.
 - Why freeze early: likely stdlib data modeling; can be optional.
@@ -535,7 +551,7 @@ Proposed additions below are only to prevent breaking changes or to express alre
 - Reader tokens and delimiters: lists `(...)`, braced lists `{...}`, indexing `expr[expr]`, quote tokens `'`, `` ` ``, `,`, `,@`.
 - Literals: non-negative integers, strings, symbols, hole `_`.
 - Macro system: `defmacro`, `quote`, `quasiquote`, `unquote`, `unquote-splicing`, reserved macro heads.
-- Top-level declarations: `def`, `partial`, `unsafe`, `noncomputable`, `opaque`, `transparent`, `axiom`, `inductive`, `instance`, `import classical`.
+- Top-level declarations: `module`, `import` (module + alias + `classical`), `open`, `def`, `partial`, `unsafe`, `noncomputable`, `opaque`, `transparent`, `axiom`, `inductive`, `instance`.
 - Macro import directive: `import-macros`.
 - Term forms: `lam`, `pi`, `let`, `match`, `fix`, `eval`, `quote`, `sort`, `ind`, `ctor`, `rec`.
 - Application and implicit arguments via braced singletons.
@@ -551,7 +567,8 @@ form         ::= decl | term | macro_import
 macro_import ::= "(" "import-macros" string { string } ")"
 
 decl         ::= def | partial | unsafe_def | noncomputable
-              | opaque | transparent | axiom | inductive | instance | import_classical | defmacro
+              | opaque | transparent | axiom | inductive | instance
+              | module_decl | import_decl | open_decl | import_classical | defmacro
 
 def          ::= "(" "def" [transparency] name term term ")"
 partial      ::= "(" "partial" [transparency] name term term ")"
@@ -571,6 +588,10 @@ attr_list    ::= "(" { symbol } ")" | "{" { symbol } "}"
 ctor_spec    ::= "(" symbol term ")" | "(" symbol ":" term ")" | "(" symbol symbol term ")"
 
 instance     ::= "(" "instance" name term { term } ")"
+module_decl  ::= "(" "module" symbol ")"
+import_decl  ::= "(" "import" symbol ")"
+              | "(" "import" symbol "as" symbol ")"
+open_decl    ::= "(" "open" symbol ")"
 import_classical ::= "(" "import" "classical" ")"
 
 defmacro     ::= "(" "defmacro" name "(" { symbol } ")" syntax ")"
@@ -615,42 +636,26 @@ None known after the 2026-02-05 discrepancy fixes.
 
 **Missing Syntax Issues (GitHub-Issue-Ready, 5–15 items)**
 
-1) Add core module import for definitions
-Justification: stdlib and user code need stable module imports beyond `import classical`.
-Likely code locations: `frontend/src/declaration_parser.rs`, `cli/src/driver.rs`.
-
-2) Add module/namespace declaration form
-Justification: without a namespace form, qualification rules will be ad hoc and breaking later.
-Likely code locations: `frontend/src/declaration_parser.rs`, `kernel` env name resolution, `cli/src/driver.rs`.
-
-3) Define qualified-name resolution rules
-Justification: symbols already allow dots; resolution policy must be frozen before stdlib grows.
-Likely code locations: `frontend/src/elaborator.rs` name resolution, `kernel` env.
-
-4) Implement multi-binder sugar for `lam`/`pi`
+1) Implement multi-binder sugar for `lam`/`pi`
 Justification: keeps stdlib readable and avoids later syntactic churn.
 Likely code locations: `frontend/src/desugar.rs`, `frontend/src/parser.rs` (if needed).
 
-5) Implement arrow sugar `(-> A B ...)`
+2) Implement arrow sugar `(-> A B ...)`
 Justification: standard in type signatures; freezes surface syntax early.
 Likely code locations: `frontend/src/desugar.rs`, `frontend/src/parser.rs` (if needed).
 
-6) Define term-level string literal semantics
-Justification: strings already parse; leaving them unbound is a breaking surprise.
-Likely code locations: `frontend/src/desugar.rs`, `kernel` stdlib definitions.
-
-7) Add optional `import` aliasing
-Justification: prevents naming collisions once modules exist.
-Likely code locations: `frontend/src/declaration_parser.rs`, `cli/src/driver.rs`.
-
-8) Add struct/record surface sugar
+3) Add struct/record surface sugar
 Justification: common data modeling; better to stabilize early if planned.
 Likely code locations: `frontend/src/declaration_parser.rs`, `frontend/src/desugar.rs`, `kernel` inductive generation.
 
-9) Clarify or formalize `match_list` as either core or macro
+4) Move `match_list` into prelude sugar/macros and remove core special-case parser/desugar support
 Justification: currently hardcoded and unused; should be either promoted to core or moved to prelude macros.
 Likely code locations: `frontend/src/desugar.rs`, `stdlib/prelude.lrl`.
 
-10) Add explicit syntax for def modifiers as grouped annotations
+5) Add explicit syntax for grouped def modifiers
 Justification: current mix of `(def opaque ...)` and `(opaque ...)` is easy to misuse.
 Likely code locations: `frontend/src/declaration_parser.rs`.
+
+6) Add module export controls (future)
+Justification: current module model exports all names by prefix; explicit export lists may be needed as stdlib scales.
+Likely code locations: `frontend/src/declaration_parser.rs`, `cli/src/driver.rs`, `kernel` env policy hooks.

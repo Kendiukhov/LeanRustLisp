@@ -9,7 +9,7 @@ DefEqConfig
 
 ElaboratedDef choose_nat
   ty: Pi(Ind("Bool", []), Pi(Ind("Nat", []), Ind("Nat", []), Default, FnOnce), Default, FnOnce)
-  val: Lam(Ind("Bool", []), Lam(Ind("Nat", []), App(App(App(Const("if_once", []), Var(1)), Var(0)), Const("zero", [])), Default, FnOnce), Default, FnOnce)
+  val: Lam(Ind("Bool", []), Lam(Ind("Nat", []), App(App(App(Const("if_once", []), Var(1)), Var(0)), Ctor("Nat", 0, [])), Default, FnOnce), Default, FnOnce)
 
 ElaboratedDef if_once
   ty: Pi(Ind("Bool", []), Pi(Ind("Nat", []), Pi(Ind("Nat", []), Ind("Nat", []), Default, FnOnce), Default, FnOnce), Default, FnOnce)

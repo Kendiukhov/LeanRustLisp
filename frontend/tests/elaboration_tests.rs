@@ -200,6 +200,45 @@ fn env_with_ambiguous_ctor() -> Env {
     env
 }
 
+fn env_with_ambiguous_ctor_reversed() -> Env {
+    let mut env = Env::new();
+    let type0 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
+
+    let bar_ind = Rc::new(Term::Ind("Bar".to_string(), vec![]));
+    env.add_inductive(InductiveDecl::new_copy(
+        "Bar".to_string(),
+        type0.clone(),
+        vec![Constructor {
+            name: "mk".to_string(),
+            ty: bar_ind.clone(),
+        }],
+    ))
+    .expect("Failed to add Bar");
+
+    let foo_ind = Rc::new(Term::Ind("Foo".to_string(), vec![]));
+    env.add_inductive(InductiveDecl::new_copy(
+        "Foo".to_string(),
+        type0,
+        vec![Constructor {
+            name: "mk".to_string(),
+            ty: foo_ind.clone(),
+        }],
+    ))
+    .expect("Failed to add Foo");
+
+    env
+}
+
+fn env_with_ambiguous_ctor_and_global_mk_def() -> Env {
+    let mut env = env_with_ambiguous_ctor();
+    env.add_definition(Definition::axiom(
+        "mk".to_string(),
+        Rc::new(Term::Ind("Foo".to_string(), vec![])),
+    ))
+    .expect("Failed to add mk definition");
+    env
+}
+
 fn env_with_qualified_defs() -> Env {
     let mut env = env_with_nat();
     let nat = Rc::new(Term::Ind("Nat".to_string(), vec![]));
@@ -793,6 +832,107 @@ fn elaboration_ambiguous_constructor_rejected() {
         }
         other => panic!("Expected AmbiguousConstructor error, got {:?}", other),
     }
+}
+
+#[test]
+fn elaboration_ambiguous_constructor_deterministic_across_decl_order() {
+    let source = "(def use_mk Foo mk)";
+    let collect = |env: Env| -> (Vec<String>, usize, usize) {
+        let (_name, ty, val) = parse_single_def(source);
+        let mut elab = Elaborator::new(&env);
+        let (ty_core, ty_ty) = elab.infer(ty).expect("Type should elaborate");
+        let ty_ty_whnf = whnf(&env, ty_ty, Transparency::All).expect("whnf failed");
+        assert!(
+            matches!(&*ty_ty_whnf, Term::Sort(_)),
+            "Definition type must be a Sort"
+        );
+
+        let err = elab
+            .check(val, &ty_core)
+            .expect_err("Ambiguous constructor should be rejected");
+        match err {
+            ElabError::AmbiguousConstructor {
+                name,
+                candidates,
+                span,
+            } => {
+                assert_eq!(name, "mk");
+                (candidates, span.start, span.end)
+            }
+            other => panic!("Expected AmbiguousConstructor error, got {:?}", other),
+        }
+    };
+
+    let (forward_candidates, forward_start, forward_end) = collect(env_with_ambiguous_ctor());
+    let (reverse_candidates, reverse_start, reverse_end) =
+        collect(env_with_ambiguous_ctor_reversed());
+
+    assert_eq!(
+        forward_candidates,
+        vec!["Bar.mk".to_string(), "Foo.mk".to_string()]
+    );
+    assert_eq!(forward_candidates, reverse_candidates);
+    assert!(
+        forward_start < forward_end,
+        "Expected a non-empty source span"
+    );
+    assert!(
+        reverse_start < reverse_end,
+        "Expected a non-empty source span"
+    );
+}
+
+#[test]
+fn elaboration_constructor_collision_not_masked_by_global_name() {
+    let env = env_with_ambiguous_ctor_and_global_mk_def();
+    let source = "(def use_mk Foo mk)";
+
+    let (_name, ty, val) = parse_single_def(source);
+    let mut elab = Elaborator::new(&env);
+
+    let (ty_core, ty_ty) = elab.infer(ty).expect("Type should elaborate");
+    let ty_ty_whnf = whnf(&env, ty_ty, Transparency::All).expect("whnf failed");
+    assert!(
+        matches!(&*ty_ty_whnf, Term::Sort(_)),
+        "Definition type must be a Sort"
+    );
+
+    let err = elab
+        .check(val, &ty_core)
+        .expect_err("Constructor collision should require qualification");
+    match err {
+        ElabError::AmbiguousConstructor {
+            name,
+            candidates,
+            span,
+        } => {
+            assert_eq!(name, "mk");
+            assert_eq!(candidates, vec!["Bar.mk".to_string(), "Foo.mk".to_string()]);
+            assert!(span.start < span.end, "Expected a non-empty source span");
+        }
+        other => panic!("Expected AmbiguousConstructor error, got {:?}", other),
+    }
+}
+
+#[test]
+fn elaboration_qualified_constructor_resolves_under_ambiguity() {
+    let env = env_with_ambiguous_ctor();
+    let source = "(def use_mk Foo Foo.mk)";
+
+    let (_name, ty, val) = parse_single_def(source);
+    let mut elab = Elaborator::new(&env);
+
+    let (ty_core, ty_ty) = elab.infer(ty).expect("Type should elaborate");
+    let ty_ty_whnf = whnf(&env, ty_ty, Transparency::All).expect("whnf failed");
+    assert!(
+        matches!(&*ty_ty_whnf, Term::Sort(_)),
+        "Definition type must be a Sort"
+    );
+
+    let value = elab
+        .check(val, &ty_core)
+        .expect("Qualified constructor should resolve");
+    assert_eq!(&*value, &Term::Ctor("Foo".to_string(), 0, vec![]));
 }
 
 #[test]

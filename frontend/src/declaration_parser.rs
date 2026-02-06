@@ -118,11 +118,7 @@ impl<'a> DeclarationParser<'a> {
     }
 
     fn parse_decl(&mut self, syntax: Syntax) -> Result<Option<Declaration>, DeclarationParseError> {
-        let result = self.parse_decl_inner(syntax.clone());
-        if let Err(ref e) = result {
-            println!("Failed to parse decl: {:?}\nSyntax: {:?}", e, syntax.kind);
-        }
-        result
+        self.parse_decl_inner(syntax)
     }
 
     fn parse_decl_inner(
@@ -329,29 +325,101 @@ impl<'a> DeclarationParser<'a> {
                             let ty = self.desugarer.desugar(ty_syntax.clone())?;
                             Ok(Some(Declaration::Axiom { name, ty, tags }))
                         }
-                        "import" => {
+                        "module" => {
                             if items.len() != 2 {
                                 return Err(ExpansionError::ArgumentCountMismatch(
-                                    "import".to_string(),
+                                    "module".to_string(),
                                     1,
                                     items.len() - 1,
                                 )
                                 .into());
                             }
-
-                            match &items[1].kind {
+                            let name = if let SyntaxKind::Symbol(name) = &items[1].kind {
+                                name.clone()
+                            } else {
+                                return Err(ExpansionError::InvalidSyntax(
+                                    "module".to_string(),
+                                    "Module name must be a symbol".to_string(),
+                                )
+                                .into());
+                            };
+                            Ok(Some(Declaration::Module { name }))
+                        }
+                        "import" => match items.len() {
+                            2 => match &items[1].kind {
                                 SyntaxKind::Symbol(tag) if tag == "classical" => {
                                     Ok(Some(Declaration::ImportClassical))
                                 }
                                 SyntaxKind::Symbol(module) => Ok(Some(Declaration::ImportModule {
                                     module: module.clone(),
+                                    alias: None,
                                 })),
                                 _ => Err(ExpansionError::InvalidSyntax(
                                     "import".to_string(),
                                     "Expected 'classical' or a module name".to_string(),
                                 )
                                 .into()),
+                            },
+                            4 => {
+                                let module = if let SyntaxKind::Symbol(module) = &items[1].kind {
+                                    module.clone()
+                                } else {
+                                    return Err(ExpansionError::InvalidSyntax(
+                                        "import".to_string(),
+                                        "Import target must be a module symbol".to_string(),
+                                    )
+                                    .into());
+                                };
+                                match &items[2].kind {
+                                    SyntaxKind::Symbol(as_kw) if as_kw == "as" => {}
+                                    _ => {
+                                        return Err(ExpansionError::InvalidSyntax(
+                                            "import".to_string(),
+                                            "Expected '(import <module> as <alias>)'".to_string(),
+                                        )
+                                        .into())
+                                    }
+                                }
+                                let alias = if let SyntaxKind::Symbol(alias) = &items[3].kind {
+                                    alias.clone()
+                                } else {
+                                    return Err(ExpansionError::InvalidSyntax(
+                                        "import".to_string(),
+                                        "Alias must be a symbol".to_string(),
+                                    )
+                                    .into());
+                                };
+                                Ok(Some(Declaration::ImportModule {
+                                    module,
+                                    alias: Some(alias),
+                                }))
                             }
+                            _ => Err(ExpansionError::InvalidSyntax(
+                                "import".to_string(),
+                                "Expected '(import <module>)' or '(import <module> as <alias>)'"
+                                    .to_string(),
+                            )
+                            .into()),
+                        },
+                        "open" => {
+                            if items.len() != 2 {
+                                return Err(ExpansionError::ArgumentCountMismatch(
+                                    "open".to_string(),
+                                    1,
+                                    items.len() - 1,
+                                )
+                                .into());
+                            }
+                            let target = if let SyntaxKind::Symbol(target) = &items[1].kind {
+                                target.clone()
+                            } else {
+                                return Err(ExpansionError::InvalidSyntax(
+                                    "open".to_string(),
+                                    "Open target must be a symbol".to_string(),
+                                )
+                                .into());
+                            };
+                            Ok(Some(Declaration::OpenModule { target }))
                         }
                         "instance" => self.parse_instance_at(items, "instance", 1, false),
                         "inductive" => {
@@ -653,15 +721,4 @@ impl<'a> DeclarationParser<'a> {
             noncomputable,
         }))
     }
-
-    // Add context to error if possible?
-    // No, I'll just print it for now.
-    /*
-    fn handle_err<T>(&self, res: Result<T, ExpansionError>, syntax: &Syntax) -> Result<T, DeclarationParseError> {
-        res.map_err(|e| {
-            println!("Error parsing decl: {:?} \n Syntax: {:?}", e, syntax);
-            e.into()
-        })
-    }
-    */
 }

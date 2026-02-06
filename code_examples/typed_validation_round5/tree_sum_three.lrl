@@ -1,0 +1,23 @@
+(inductive copy NatTree (sort 1)
+  (ctor leaf (pi n Nat NatTree))
+  (ctor node (pi l NatTree (pi r NatTree NatTree))))
+
+(def add_nat (pi a Nat (pi b Nat Nat))
+  (lam a Nat
+    (lam b Nat
+      (match a Nat
+        (case (zero) b)
+        (case (succ x ih) (succ ih))))))
+
+(def sum_tree (pi t NatTree Nat)
+  (lam t NatTree
+    (match t Nat
+      (case (leaf n) n)
+      (case (node l lsum r rsum) (add_nat lsum rsum)))))
+
+(def entry Nat
+  (print_nat
+    (sum_tree
+      (node
+        (leaf (succ zero))
+        (node (leaf (succ (succ zero))) (leaf (succ zero)))))))
