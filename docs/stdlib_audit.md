@@ -9,8 +9,6 @@ This audit reflects the current `stdlib/` tree and current CLI/backend behavior.
 | `stdlib/prelude_api.lrl` | working | none | Shared API contract (types, primitives, print/file surface, core constructors). |
 | `stdlib/prelude_impl_dynamic.lrl` | working | `prelude_api` | Dynamic-only platform shim (`Dyn`, `EvalCap`, `eval`). |
 | `stdlib/prelude_impl_typed.lrl` | working | `prelude_api` | Typed-only platform shim (`Dyn`, `EvalCap`, `eval`). |
-| `stdlib/prelude.lrl` | partial | legacy standalone prelude | Legacy monolithic prelude; not the primary backend stack. |
-| `stdlib/prelude_typed.lrl` | partial | legacy typed prelude | Legacy typed Stage-1 prelude; not the primary backend stack. |
 | `stdlib/std/core/nat.lrl` | working | `prelude_api` (`Nat`, `Bool`, `add`) | `nat_pred`, `nat_sub`, `nat_{eq,lt,le,gt,ge}` implemented and covered in overlap tests. |
 | `stdlib/std/core/nat_literals.lrl` | working | `prelude_api` (`Nat`) | Generated Nat literal cache for text-literal desugaring. |
 | `stdlib/std/core/bool.lrl` | working | `prelude_api` (`Bool`, `not`) | `if_bool`, `xor`, `implies`, `bool_eq`. |

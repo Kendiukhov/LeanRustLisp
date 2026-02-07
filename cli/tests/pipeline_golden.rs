@@ -1,4 +1,6 @@
+use cli::compiler::{prelude_stack_for_backend, BackendMode};
 use cli::driver::{process_code, Artifact, PipelineOptions};
+use cli::{driver::module_id_for_source, set_prelude_macro_boundary_allowlist};
 use frontend::diagnostics::DiagnosticCollector;
 use frontend::macro_expander::{Expander, MacroBoundaryPolicy};
 use insta::assert_snapshot;
@@ -7,6 +9,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::thread;
 
 fn run_pipeline_inner(
     source: &str,
@@ -14,6 +18,9 @@ fn run_pipeline_inner(
     macro_boundary_policy: MacroBoundaryPolicy,
     allow_axioms: bool,
 ) -> String {
+    let _guard = pipeline_golden_test_lock()
+        .lock()
+        .expect("pipeline golden test lock poisoned");
     let mut env = Env::new();
     let mut expander = Expander::new();
     expander.set_macro_boundary_policy(macro_boundary_policy);
@@ -25,30 +32,59 @@ fn run_pipeline_inner(
         allow_axioms,
         ..Default::default()
     };
+    let prelude_options = PipelineOptions {
+        prelude_frozen: false,
+        allow_redefine: false,
+        allow_axioms: true,
+        ..Default::default()
+    };
 
     if load_prelude {
-        let prelude_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../stdlib/prelude.lrl");
-        let prelude = fs::read_to_string(&prelude_path)
-            .unwrap_or_else(|e| panic!("failed to read prelude {:?}: {}", prelude_path, e));
-        let mut prelude_diagnostics = DiagnosticCollector::new();
+        let mut prelude_modules = Vec::new();
         let allow_reserved = env.allows_reserved_primitives();
         env.set_allow_reserved_primitives(true);
-        expander.set_macro_boundary_policy(MacroBoundaryPolicy::Warn);
-        process_code(
-            &prelude,
-            "prelude",
-            &mut env,
-            &mut expander,
-            &PipelineOptions::default(),
-            &mut prelude_diagnostics,
-        )
-        .expect("prelude processing failed");
+        for prelude_source in prelude_stack_for_backend(BackendMode::Dynamic) {
+            let prelude_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(prelude_source);
+            let prelude = fs::read_to_string(&prelude_path)
+                .unwrap_or_else(|e| panic!("failed to read prelude {:?}: {}", prelude_path, e));
+            let prelude_module = module_id_for_source(prelude_source);
+            if !prelude_modules.is_empty() {
+                expander.set_default_imports(prelude_modules.clone());
+            }
+            expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
+            set_prelude_macro_boundary_allowlist(&mut expander, &prelude_module);
+            let mut prelude_diagnostics = DiagnosticCollector::new();
+            process_code(
+                &prelude,
+                prelude_source,
+                &mut env,
+                &mut expander,
+                &prelude_options,
+                &mut prelude_diagnostics,
+            )
+            .expect("prelude processing failed");
+            expander.clear_macro_boundary_allowlist();
+            assert!(
+                !prelude_diagnostics.has_errors(),
+                "prelude diagnostics contained errors for {}:\n{}",
+                prelude_source,
+                prelude_diagnostics
+                    .diagnostics
+                    .iter()
+                    .map(|d| format!("- {:?}: {}", d.level, d.message_with_code()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            prelude_modules.push(prelude_module);
+        }
+        if let Err(err) = env.init_marker_registry() {
+            panic!("failed to initialize marker registry: {}", err);
+        }
+        expander.set_default_imports(prelude_modules);
         env.set_allow_reserved_primitives(allow_reserved);
         expander.set_macro_boundary_policy(macro_boundary_policy);
-        assert!(
-            !prelude_diagnostics.has_errors(),
-            "prelude diagnostics contained errors"
-        );
     }
 
     let allow_reserved = env.allows_reserved_primitives();
@@ -141,7 +177,10 @@ fn run_pipeline(source: &str) -> String {
 }
 
 fn run_pipeline_with_prelude(source: &str) -> String {
-    run_pipeline_inner(source, true, MacroBoundaryPolicy::Deny, false)
+    let source = source.to_string();
+    run_with_large_stack(move || {
+        run_pipeline_inner(&source, true, MacroBoundaryPolicy::Deny, false)
+    })
 }
 
 fn run_pipeline_with_macro_boundary_warn(source: &str) -> String {
@@ -150,6 +189,24 @@ fn run_pipeline_with_macro_boundary_warn(source: &str) -> String {
 
 fn run_pipeline_with_allow_axioms(source: &str) -> String {
     run_pipeline_inner(source, false, MacroBoundaryPolicy::Deny, true)
+}
+
+fn run_with_large_stack<F>(f: F) -> String
+where
+    F: FnOnce() -> String + Send + 'static,
+{
+    thread::Builder::new()
+        .name("pipeline-golden-large-stack".to_string())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(f)
+        .expect("failed to spawn pipeline golden worker")
+        .join()
+        .expect("pipeline golden worker panicked")
+}
+
+fn pipeline_golden_test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn hash_output(output: &str) -> u64 {

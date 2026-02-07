@@ -1,5 +1,5 @@
 use crate::ast::{BinderInfo, DefId, Term};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 use thiserror::Error;
@@ -88,6 +88,114 @@ pub fn map_capture_modes_to_closures(
         if let Some(closure_id) = closure_ids.get(term_key) {
             mapped.insert(*closure_id, modes.clone());
         }
+    }
+    mapped
+}
+
+fn collect_free_vars(term: &Rc<Term>, depth: usize, acc: &mut HashSet<usize>) {
+    match &**term {
+        Term::Var(idx) => {
+            if *idx >= depth {
+                acc.insert(*idx - depth);
+            }
+        }
+        Term::App(f, a, _) => {
+            collect_free_vars(f, depth, acc);
+            collect_free_vars(a, depth, acc);
+        }
+        Term::Lam(ty, body, _, _) | Term::Pi(ty, body, _, _) => {
+            collect_free_vars(ty, depth, acc);
+            collect_free_vars(body, depth + 1, acc);
+        }
+        Term::LetE(ty, val, body) => {
+            collect_free_vars(ty, depth, acc);
+            collect_free_vars(val, depth, acc);
+            collect_free_vars(body, depth + 1, acc);
+        }
+        Term::Fix(ty, body) => {
+            collect_free_vars(ty, depth, acc);
+            collect_free_vars(body, depth + 1, acc);
+        }
+        Term::Sort(_)
+        | Term::Const(_, _)
+        | Term::Ind(_, _)
+        | Term::Ctor(_, _, _)
+        | Term::Rec(_, _)
+        | Term::Meta(_) => {}
+    }
+}
+
+pub fn collect_closure_free_vars(term: &Rc<Term>) -> HashMap<usize, HashSet<usize>> {
+    let mut free_vars_by_ptr = HashMap::new();
+
+    fn term_key(term: &Rc<Term>) -> usize {
+        Rc::as_ptr(term) as usize
+    }
+
+    fn walk(term: &Rc<Term>, free_vars_by_ptr: &mut HashMap<usize, HashSet<usize>>) {
+        match &**term {
+            Term::Lam(ty, body, _, _) | Term::Fix(ty, body) => {
+                let mut free_vars = HashSet::new();
+                collect_free_vars(body, 1, &mut free_vars);
+                free_vars_by_ptr.insert(term_key(term), free_vars);
+                walk(ty, free_vars_by_ptr);
+                walk(body, free_vars_by_ptr);
+            }
+            Term::App(f, a, _) => {
+                walk(f, free_vars_by_ptr);
+                walk(a, free_vars_by_ptr);
+            }
+            Term::Pi(ty, body, _, _) => {
+                walk(ty, free_vars_by_ptr);
+                walk(body, free_vars_by_ptr);
+            }
+            Term::LetE(ty, val, body) => {
+                walk(ty, free_vars_by_ptr);
+                walk(val, free_vars_by_ptr);
+                walk(body, free_vars_by_ptr);
+            }
+            Term::Sort(_)
+            | Term::Const(_, _)
+            | Term::Ind(_, _)
+            | Term::Ctor(_, _, _)
+            | Term::Rec(_, _)
+            | Term::Var(_)
+            | Term::Meta(_) => {}
+        }
+    }
+
+    walk(term, &mut free_vars_by_ptr);
+    free_vars_by_ptr
+}
+
+pub fn map_capture_modes_to_closures_filtered(
+    closure_ids: &HashMap<usize, ClosureId>,
+    closure_free_vars: &HashMap<usize, HashSet<usize>>,
+    pointer_modes: &HashMap<usize, CaptureModes>,
+) -> DefCaptureModeMap {
+    let mut mapped: DefCaptureModeMap = closure_ids
+        .values()
+        .copied()
+        .map(|closure_id| (closure_id, CaptureModes::new()))
+        .collect();
+    for (term_key, modes) in pointer_modes {
+        let Some(closure_id) = closure_ids.get(term_key) else {
+            continue;
+        };
+        let Some(free_vars) = closure_free_vars.get(term_key) else {
+            continue;
+        };
+        let filtered_modes: CaptureModes = modes
+            .iter()
+            .filter_map(|(idx, mode)| {
+                if free_vars.contains(idx) {
+                    Some((*idx, *mode))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        mapped.insert(*closure_id, filtered_modes);
     }
     mapped
 }
@@ -268,5 +376,28 @@ mod tests {
 
         let mapped = map_capture_modes_to_closures(&closure_ids, &pointer_modes);
         assert!(mapped.is_empty());
+    }
+
+    #[test]
+    fn test_filtered_capture_modes_drop_invalid_indices() {
+        let term = Term::lam(
+            Term::sort(Level::Zero),
+            Term::lam(Term::sort(Level::Zero), Term::var(1), BinderInfo::Default),
+            BinderInfo::Default,
+        );
+
+        let closure_ids = collect_closure_ids(&term, "capture_test");
+        let free_vars = collect_closure_free_vars(&term);
+        let mut pointer_modes = HashMap::new();
+
+        let outer_ptr = Rc::as_ptr(&term) as usize;
+        let mut stale = HashMap::new();
+        stale.insert(1usize, UsageMode::Consuming);
+        pointer_modes.insert(outer_ptr, stale);
+
+        let filtered =
+            map_capture_modes_to_closures_filtered(&closure_ids, &free_vars, &pointer_modes);
+        assert_eq!(filtered.len(), closure_ids.len());
+        assert!(filtered.values().all(|modes| modes.is_empty()));
     }
 }

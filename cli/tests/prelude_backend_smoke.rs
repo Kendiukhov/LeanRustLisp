@@ -207,3 +207,60 @@ fn backend_smoke_append_nat_matches_outputs_across_backends() {
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn backend_smoke_prefix_arithmetic_operators_match_outputs_across_backends() {
+    let temp_dir = unique_temp_dir("backend_smoke_prefix_ops");
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .canonicalize()
+        .expect("failed to resolve repository root");
+
+    let cases: [(&str, &str, u64); 4] = [
+        ("plus", "(def entry Nat (+ 1 2))", 3),
+        ("minus", "(def entry Nat (- 5 2))", 3),
+        ("multiply", "(def entry Nat (* 3 4))", 12),
+        ("divide", "(def entry Nat (/ 9 2))", 4),
+    ];
+
+    for (name, source, expected) in cases {
+        let source_path = temp_dir.join(format!("{}_ops.lrl", name));
+        fs::write(&source_path, source).expect("failed to write prefix operator source file");
+
+        let dynamic_bin = temp_dir.join(format!("{}_dynamic", name));
+        let typed_bin = temp_dir.join(format!("{}_typed", name));
+
+        let dynamic_stdout = compile_and_run(
+            &repo_root,
+            &source_path,
+            &dynamic_bin,
+            "dynamic",
+            &format!("dynamic backend / prefix {}", name),
+        );
+        let typed_stdout = compile_and_run(
+            &repo_root,
+            &source_path,
+            &typed_bin,
+            "typed",
+            &format!("typed backend / prefix {}", name),
+        );
+
+        let dynamic_result = normalize_nat_result(&dynamic_stdout)
+            .expect("dynamic backend output missing numeric Result line");
+        let typed_result = normalize_nat_result(&typed_stdout)
+            .expect("typed backend output missing numeric Result line");
+
+        assert_eq!(
+            dynamic_result, typed_result,
+            "prefix operator '{}' should match across backends",
+            name
+        );
+        assert_eq!(
+            dynamic_result, expected,
+            "prefix operator '{}' expected Result: {}",
+            name, expected
+        );
+    }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

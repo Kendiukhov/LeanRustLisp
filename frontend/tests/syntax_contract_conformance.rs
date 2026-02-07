@@ -108,7 +108,7 @@ fn decode_text_codes(term: &SurfaceTerm) -> Option<Vec<usize>> {
 fn parser_enforces_numeric_and_symbol_rules() {
     let nodes = parse_syntax("-1 42");
     assert_eq!(nodes.len(), 2);
-    assert!(matches!(&nodes[0].kind, SyntaxKind::Symbol(s) if s == "-1"));
+    assert!(matches!(nodes[0].kind, SyntaxKind::Int(-1)));
     assert!(matches!(nodes[1].kind, SyntaxKind::Int(42)));
 }
 

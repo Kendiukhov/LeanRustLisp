@@ -114,7 +114,7 @@ pub enum SyntaxKind {
     Index(Box<Syntax>, Box<Syntax>),
     Symbol(String),
     String(String),
-    Int(usize),
+    Int(i64),
     Hole,
 }
 

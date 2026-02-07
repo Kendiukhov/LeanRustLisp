@@ -23,6 +23,8 @@ struct LoweredDef {
     derived_bodies: Vec<mir::Body>,
 }
 
+const TYPED_PRELUDE_STACK_CSV: &str = "tests/fixtures/typed_backend_min_fixture.lrl";
+
 fn run_with_large_stack<F>(f: F)
 where
     F: FnOnce() + Send + 'static,
@@ -42,7 +44,7 @@ fn lower_program(
     check_closure_bodies: bool,
 ) -> (Env, IdRegistry, Vec<LoweredDef>, Option<String>) {
     let prelude = if load_prelude {
-        Some("stdlib/prelude.lrl")
+        Some(TYPED_PRELUDE_STACK_CSV)
     } else {
         None
     };
@@ -1416,7 +1418,7 @@ fn typed_backend_executes_comp_constructor_from_typed_prelude() {
     "#;
 
     let (env, ids, defs, main_name) =
-        lower_program_with_prelude(source, Some("stdlib/prelude_typed.lrl"), false);
+        lower_program_with_prelude(source, Some(TYPED_PRELUDE_STACK_CSV), false);
     let program = build_typed_program(&defs, main_name);
     let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
     let output = compile_and_run(&code);
@@ -1444,7 +1446,7 @@ fn typed_backend_executes_eval_with_capability_token_from_typed_prelude() {
     "#;
 
     let (env, ids, defs, main_name) =
-        lower_program_with_prelude(source, Some("stdlib/prelude_typed.lrl"), false);
+        lower_program_with_prelude(source, Some(TYPED_PRELUDE_STACK_CSV), false);
     let program = build_typed_program(&defs, main_name);
     let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
     let output = compile_and_run(&code);
@@ -2058,7 +2060,7 @@ fn typed_backend_matches_dynamic_output_for_higher_order_program() {
 fn typed_backend_round5_corpus_compiles_runs_and_stays_typed() {
     for (name, source) in collect_round5_sources() {
         let (env, ids, defs, main_name) =
-            lower_program_with_prelude(&source, Some("stdlib/prelude_typed.lrl"), false);
+            lower_program_with_prelude(&source, Some(TYPED_PRELUDE_STACK_CSV), false);
         let program = build_typed_program(&defs, main_name);
         let code = codegen_program(&env, &ids, &program)
             .unwrap_or_else(|e| panic!("typed codegen failed for {}: {}", name, e));
@@ -2103,7 +2105,7 @@ fn typed_backend_tb_guards_are_unreachable_for_well_typed_code_examples() {
                 continue;
             }
             let (env, ids, defs, main_name) =
-                lower_program_with_prelude(&source, Some("stdlib/prelude_typed.lrl"), true);
+                lower_program_with_prelude(&source, Some(TYPED_PRELUDE_STACK_CSV), true);
             let program = build_typed_program(&defs, main_name);
             assert_program_guard_invariants(&program, &ids, &label);
             codegen_program(&env, &ids, &program).unwrap_or_else(|e| {
@@ -2117,7 +2119,7 @@ fn typed_backend_tb_guards_are_unreachable_for_well_typed_code_examples() {
 fn typed_backend_round5_corpus_is_deterministic() {
     for (name, source) in collect_round5_sources() {
         let (env, ids, defs, main_name) =
-            lower_program_with_prelude(&source, Some("stdlib/prelude_typed.lrl"), false);
+            lower_program_with_prelude(&source, Some(TYPED_PRELUDE_STACK_CSV), false);
         let program = build_typed_program(&defs, main_name);
         let code1 = codegen_program(&env, &ids, &program)
             .unwrap_or_else(|e| panic!("typed codegen failed for {}: {}", name, e));
@@ -2175,7 +2177,7 @@ fn typed_backend_differential_parity_for_deterministic_nat_subset() {
         (
             "generated_nat_chain_17",
             generated_nat_chain_source(17),
-            Some("stdlib/prelude_typed.lrl"),
+            Some(TYPED_PRELUDE_STACK_CSV),
             ScalarResultKind::Nat,
         ),
     ];
@@ -2207,7 +2209,7 @@ fn typed_backend_generated_nat_chain_cases_match_dynamic() {
     for depth in [0usize, 1, 2, 5, 9, 17] {
         let source = generated_nat_chain_source(depth);
         let (env, ids, defs, main_name) =
-            lower_program_with_prelude(&source, Some("stdlib/prelude_typed.lrl"), false);
+            lower_program_with_prelude(&source, Some(TYPED_PRELUDE_STACK_CSV), false);
         let program = build_typed_program(&defs, main_name.clone());
         let typed_code = codegen_program(&env, &ids, &program).unwrap_or_else(|e| {
             panic!("typed codegen failed for generated depth {}: {}", depth, e)
@@ -2284,14 +2286,14 @@ fn typed_backend_generated_rust_is_warning_free_under_deny_warnings() {
             (
                 format!("round5/{}", name),
                 source,
-                Some("stdlib/prelude_typed.lrl"),
+                Some(TYPED_PRELUDE_STACK_CSV),
             )
         })
         .collect();
     cases.push((
         "generated_nat_chain_11".to_string(),
         generated_nat_chain_source(11),
-        Some("stdlib/prelude_typed.lrl"),
+        Some(TYPED_PRELUDE_STACK_CSV),
     ));
     cases.push((
         "inline_higher_order_nat".to_string(),

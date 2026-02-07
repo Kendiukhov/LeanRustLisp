@@ -87,7 +87,7 @@ CLI (cli/) - REPL and file compilation
 
 ## Project Resources
 
-- `stdlib/prelude.lrl` - Standard library (Nat, Bool, List, basic functions)
+- `stdlib/prelude_api.lrl` + `stdlib/prelude_impl_{dynamic,typed}.lrl` - Split prelude contract and backend shims
 - `docs/spec/` - Formal specifications (core_calculus.md, kernel_definition.md, ownership_model.md)
 - `mechanization/` - Lean proofs of language soundness
 - `tests/` - Integration test files (.lrl)

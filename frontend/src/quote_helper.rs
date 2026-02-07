@@ -42,16 +42,37 @@
                 term
             },
             SyntaxKind::Int(n) => {
-                // Return Nat literal? We don't have Nat literal in SurfaceTermKind yet? 
-                // We do have `Rec` / `Zero` / `Succ`.
-                // Let's produce the Nat term chain.
-                let mut t = mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 0), span); // Zero
-                let succ = mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 1), span); // Succ
-                for _ in 0..*n {
-                    t = mk_term(SurfaceTermKind::App(Box::new(succ.clone()), Box::new(t), true), span);
+                if *n >= 0 {
+                    let mut t = mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 0), span); // Zero
+                    let succ = mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 1), span); // Succ
+                    for _ in 0..(*n as usize) {
+                        t = mk_term(
+                            SurfaceTermKind::App(Box::new(succ.clone()), Box::new(t), true),
+                            span,
+                        );
+                    }
+                    t
+                } else {
+                    let mut magnitude =
+                        mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 0), span); // Zero
+                    let succ = mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 1), span); // Succ
+                    for _ in 0..(n.unsigned_abs() as usize) {
+                        magnitude = mk_term(
+                            SurfaceTermKind::App(
+                                Box::new(succ.clone()),
+                                Box::new(magnitude),
+                                true,
+                            ),
+                            span,
+                        );
+                    }
+                    let neg_ctor = mk_term(SurfaceTermKind::Ctor("Int".to_string(), 1), span);
+                    mk_term(
+                        SurfaceTermKind::App(Box::new(neg_ctor), Box::new(magnitude), true),
+                        span,
+                    )
                 }
-                t
-            },
+            }
             SyntaxKind::String(s) => {
                 // Do we have String? No. 
                 // Treat as error or maybe dummy?

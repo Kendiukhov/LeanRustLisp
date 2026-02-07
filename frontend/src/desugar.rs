@@ -686,8 +686,14 @@ impl Desugarer {
                                 ));
                             }
                             if let SyntaxKind::Int(n) = &list[1].kind {
+                                let level_usize = usize::try_from(*n).map_err(|_| {
+                                    ExpansionError::InvalidSyntax(
+                                        "sort".to_string(),
+                                        "Expected non-negative integer level".to_string(),
+                                    )
+                                })?;
                                 let mut level = kernel::ast::Level::Zero;
-                                for _ in 0..*n {
+                                for _ in 0..level_usize {
                                     level = kernel::ast::Level::Succ(Box::new(level));
                                 }
                                 Ok(mk_term(SurfaceTermKind::Sort(level), span))
@@ -733,7 +739,12 @@ impl Desugarer {
                                 ));
                             };
                             let idx = if let SyntaxKind::Int(i) = &list[2].kind {
-                                *i
+                                usize::try_from(*i).map_err(|_| {
+                                    ExpansionError::InvalidSyntax(
+                                        "ctor".to_string(),
+                                        "Expected non-negative index".to_string(),
+                                    )
+                                })?
                             } else {
                                 return Err(ExpansionError::InvalidSyntax(
                                     "ctor".to_string(),
@@ -1228,9 +1239,17 @@ impl Desugarer {
                 ))
             }
             SyntaxKind::Hole => Ok(mk_term(SurfaceTermKind::Hole, span)),
-            SyntaxKind::Int(n) => Ok(Self::nat_literal_term(n, span)),
+            SyntaxKind::Int(n) => Ok(Self::number_literal_term(n, span)),
             SyntaxKind::String(s) => Ok(Self::text_literal_term(&s, span)),
             _ => Err(ExpansionError::UnknownForm(format!("{:?}", syntax.kind))),
+        }
+    }
+
+    fn number_literal_term(value: i64, span: Span) -> SurfaceTerm {
+        if value >= 0 {
+            Self::nat_literal_term(value as usize, span)
+        } else {
+            Self::int_literal_term(value, span)
         }
     }
 
@@ -1282,6 +1301,16 @@ impl Desugarer {
                 Box::new(half_term),
                 Box::new(body),
             ),
+            span,
+        )
+    }
+
+    fn int_literal_term(value: i64, span: Span) -> SurfaceTerm {
+        let magnitude = value.unsigned_abs() as usize;
+        let magnitude_term = Self::compact_nat_literal_term(magnitude, span);
+        let neg_ctor = mk_term(SurfaceTermKind::Ctor("Int".to_string(), 1), span);
+        mk_term(
+            SurfaceTermKind::App(Box::new(neg_ctor), Box::new(magnitude_term), true),
             span,
         )
     }
@@ -1423,7 +1452,7 @@ impl Desugarer {
                     .collect();
                 build_list(items)
             }
-            SyntaxKind::Int(n) => Self::nat_literal_term(*n, span),
+            SyntaxKind::Int(n) => Self::number_literal_term(*n, span),
             SyntaxKind::String(s) => {
                 let items = s
                     .chars()

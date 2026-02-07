@@ -976,13 +976,56 @@ pub fn codegen_constant(lit: &Literal, closure_base: usize) -> String {
 }
 
 pub fn sanitize_name(name: &str) -> String {
-    match name {
+    let mut sanitized = String::new();
+
+    for (idx, ch) in name.chars().enumerate() {
+        let is_ident_char = if idx == 0 {
+            ch.is_ascii_alphabetic() || ch == '_'
+        } else {
+            ch.is_ascii_alphanumeric() || ch == '_'
+        };
+
+        if is_ident_char {
+            sanitized.push(ch);
+        } else {
+            if sanitized.is_empty() {
+                sanitized.push('_');
+            }
+            sanitized.push_str(&format!("u{:X}", ch as u32));
+            sanitized.push('_');
+        }
+    }
+
+    if sanitized.is_empty() {
+        sanitized.push('_');
+    }
+
+    match sanitized.as_str() {
         "true" | "false" | "if" | "else" | "match" | "let" | "fn" | "struct" | "enum" | "type"
         | "return" | "loop" | "while" | "for" | "in" | "use" | "mod" | "crate" | "pub" | "impl"
         | "trait" | "where" | "as" | "break" | "continue" | "unsafe" | "async" | "await"
         | "move" | "ref" | "mut" | "static" | "const" => {
-            format!("r#{}", name)
+            format!("r#{}", sanitized)
         }
-        _ => name.replace('.', "_"),
+        _ => sanitized,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_name;
+
+    #[test]
+    fn sanitize_name_supports_symbol_operators() {
+        assert_eq!(sanitize_name("+"), "_u2B_");
+        assert_eq!(sanitize_name("-"), "_u2D_");
+        assert_eq!(sanitize_name("*"), "_u2A_");
+        assert_eq!(sanitize_name("/"), "_u2F_");
+    }
+
+    #[test]
+    fn sanitize_name_preserves_plain_identifiers() {
+        assert_eq!(sanitize_name("entry"), "entry");
+        assert_eq!(sanitize_name("foo.bar"), "foou2E_bar");
     }
 }

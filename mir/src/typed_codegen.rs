@@ -1774,10 +1774,7 @@ fn runtime_write_file_text(path: {text_ty}, contents: {text_ty}) -> {text_ty} {{
                         if let Some(tag_expr) = self.adt_variant_tag_expr(adt_id, "result") {
                             Expr::MacroCall {
                                 name: "println".to_string(),
-                                args: vec![
-                                    Expr::Lit(Lit::Str("Result: {}".to_string())),
-                                    tag_expr,
-                                ],
+                                args: vec![Expr::Lit(Lit::Str("Result: {}".to_string())), tag_expr],
                             }
                         } else {
                             Expr::MacroCall {

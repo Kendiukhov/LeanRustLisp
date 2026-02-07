@@ -494,6 +494,12 @@ impl<'a> Elaborator<'a> {
         &self.capture_mode_map
     }
 
+    /// Capture-mode metadata is attached to elaborated core terms by pointer identity.
+    /// Clear it between independent elaboration phases to avoid stale pointer-key collisions.
+    pub fn clear_capture_mode_map(&mut self) {
+        self.capture_mode_map.clear();
+    }
+
     fn extract_lifetime_label(term: &SurfaceTerm) -> Option<String> {
         match &term.kind {
             SurfaceTermKind::Index(base, index) => match (&base.kind, &index.kind) {

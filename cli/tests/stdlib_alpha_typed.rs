@@ -95,7 +95,10 @@ fn run_binary(output_bin: &Path) -> String {
 fn stdlib_alpha_typed_smoke_programs() {
     let repo = repo_root();
     let cases = [
-        ("tests/stdlib_alpha_typed/option_unwrap_some.lrl", "Result: 1"),
+        (
+            "tests/stdlib_alpha_typed/option_unwrap_some.lrl",
+            "Result: 1",
+        ),
         ("tests/stdlib_alpha_typed/result_unwrap_ok.lrl", "Result: 1"),
         ("tests/stdlib_alpha_typed/pair_match_sum.lrl", "Result: 3"),
     ];

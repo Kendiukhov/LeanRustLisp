@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - `Cargo.toml` defines a Rust workspace with crates: `kernel/` (type checker + core), `frontend/` (parser/macro expansion/elaboration), `mir/` (mid-level IR + borrow checking), `codegen/` (Rust code generation), `cli/` (compiler/REPL entrypoint).
-- `stdlib/` contains the LRL standard library and `prelude.lrl` (auto-loaded by the CLI).
+- `stdlib/` contains the split prelude stack: `prelude_api.lrl`, backend impl shims (`prelude_impl_dynamic.lrl`, `prelude_impl_typed.lrl`), and shared `std/` modules.
 - `tests/` holds `.lrl` programs used for integration/regression checks.
 - `docs/` contains design notes and test plans; `report*.md` are historical reports.
 - Build artifacts live in `target/` and should not be committed.
@@ -12,7 +12,7 @@
 - `cargo test --all` -- run Rust unit/integration tests across crates.
 - `cargo test -p frontend` / `cargo test -p cli` -- focus tests for a single crate.
 - `cargo test -p mir --lib` / `cargo test -p frontend --lib` / `cargo test -p cli --lib` -- run fast unit-test slices for MIR lowering, elaboration, and CLI compiler logic.
-- `cargo run -p cli -- tests/ownership_test.lrl` -- run a program in the interpreter (loads `stdlib/prelude.lrl`).
+- `cargo run -p cli -- tests/ownership_test.lrl` -- run a program in the interpreter (loads the default dynamic prelude stack: `prelude_api + std/core + std/data + prelude_impl_dynamic`).
 - `cargo run -p cli -- compile tests/ownership_test.lrl` -- compile to Rust (optionally `-o/--output <path>`).
 - `cargo run -p cli -- compile-mir tests/ownership_test.lrl` -- lower to MIR for inspection.
 

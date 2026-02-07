@@ -92,6 +92,10 @@ fn assert_api_surface(env: &Env) {
 
     for name in [
         "add",
+        "+",
+        "-",
+        "*",
+        "/",
         "append",
         "not",
         "if_nat",

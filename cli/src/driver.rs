@@ -1049,6 +1049,9 @@ pub fn process_code(
                 }
 
                 // Check Value
+                // Capture-mode metadata is keyed by raw term pointers; reset after type
+                // elaboration so definition capture analysis only sees this value graph.
+                elab.clear_capture_mode_map();
                 let val_core = match elab.check(val, &ty_core) {
                     Ok(t) => {
                         if let Err(e) = elab.solve_constraints() {
@@ -1095,8 +1098,10 @@ pub fn process_code(
                 };
 
                 let closure_ids = kernel::ownership::collect_closure_ids(&val_core, &name);
-                let def_capture_modes = kernel::ownership::map_capture_modes_to_closures(
+                let closure_free_vars = kernel::ownership::collect_closure_free_vars(&val_core);
+                let def_capture_modes = kernel::ownership::map_capture_modes_to_closures_filtered(
                     &closure_ids,
+                    &closure_free_vars,
                     elab.capture_mode_map(),
                 );
 

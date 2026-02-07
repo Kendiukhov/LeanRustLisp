@@ -14,7 +14,7 @@ pub enum ParseError {
     UnmatchedParen(Span),
     #[error("Invalid integer literal: {0}")]
     InvalidIntegerLiteral(String, Span),
-    #[error("Integer literal out of range for usize: {0}")]
+    #[error("Integer literal out of range for i64: {0}")]
     IntegerOverflow(String, Span),
 }
 
@@ -365,7 +365,7 @@ impl<'a> Parser<'a> {
                     line: start_span.line,
                     col: start_span.col,
                 };
-                let parsed = s.parse::<usize>().map_err(|err| match err.kind() {
+                let parsed = s.parse::<i64>().map_err(|err| match err.kind() {
                     IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => {
                         ParseError::IntegerOverflow(s.clone(), literal_span)
                     }
@@ -404,7 +404,25 @@ impl<'a> Parser<'a> {
                         start_span,
                     ));
                 }
-                if s == "_" {
+                if Self::looks_like_integer_token(&s) {
+                    let literal_span = Span {
+                        start: start_span.start,
+                        end: end_span.end,
+                        line: start_span.line,
+                        col: start_span.col,
+                    };
+                    let parsed = s.parse::<i64>().map_err(|err| match err.kind() {
+                        IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => {
+                            ParseError::IntegerOverflow(s.clone(), literal_span)
+                        }
+                        _ => ParseError::InvalidIntegerLiteral(s.clone(), literal_span),
+                    })?;
+                    Ok(Syntax {
+                        kind: SyntaxKind::Int(parsed),
+                        span: literal_span,
+                        scopes: Vec::new(),
+                    })
+                } else if s == "_" {
                     Ok(Syntax {
                         kind: SyntaxKind::Hole,
                         span: Span {
@@ -429,6 +447,17 @@ impl<'a> Parser<'a> {
                 }
             }
             None => Err(ParseError::UnexpectedEof(start_span)),
+        }
+    }
+
+    fn looks_like_integer_token(token: &str) -> bool {
+        if token.is_empty() {
+            return false;
+        }
+        if let Some(rest) = token.strip_prefix('-') {
+            !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+        } else {
+            token.chars().all(|c| c.is_ascii_digit())
         }
     }
 }

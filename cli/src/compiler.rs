@@ -110,6 +110,34 @@ fn escape_json_string(input: &str) -> String {
         .replace('\n', "\\n")
 }
 
+fn move_compiled_binary(staged_binary: &Path, destination: &Path) -> io::Result<()> {
+    if destination.exists() && destination.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("destination '{}' is a directory", destination.display()),
+        ));
+    }
+
+    // Try an atomic rename first.
+    match fs::rename(staged_binary, destination) {
+        Ok(()) => Ok(()),
+        Err(rename_error) => {
+            // If atomic rename is unavailable (for example across filesystems), copy+remove.
+            fs::copy(staged_binary, destination).map_err(|copy_error| {
+                io::Error::new(
+                    copy_error.kind(),
+                    format!(
+                        "failed to move binary (rename error: {}; copy error: {})",
+                        rename_error, copy_error
+                    ),
+                )
+            })?;
+            fs::remove_file(staged_binary)?;
+            Ok(())
+        }
+    }
+}
+
 fn format_executable_axiom_warning(backend: SelectedBackend, axiom_stubs: &[AxiomStub]) -> String {
     let backend_label = match backend {
         SelectedBackend::Dynamic => "dynamic",
@@ -744,6 +772,13 @@ fn compile_with_mir(
         .unwrap_or(0);
     let source_file = build_dir.join(format!("output_{}_{}.rs", std::process::id(), unique_tag));
     let binary_file = output_path.unwrap_or_else(|| "output".to_string());
+    let staged_binary_file =
+        build_dir.join(format!("output_{}_{}.bin", std::process::id(), unique_tag));
+    let incremental_dir = build_dir.join("incremental");
+    if let Err(e) = fs::create_dir_all(&incremental_dir) {
+        println!("Error creating incremental cache directory: {:?}", e);
+        return;
+    }
 
     if let Err(e) = fs::write(&source_file, backend_selection.code) {
         println!("Error writing output file: {:?}", e);
@@ -788,14 +823,23 @@ fn compile_with_mir(
     let status = std::process::Command::new("rustc")
         .arg(&source_file)
         .arg("-o")
-        .arg(&binary_file)
+        .arg(&staged_binary_file)
         .arg("-C")
-        .arg("incremental=incremental")
+        .arg(format!("incremental={}", incremental_dir.display()))
         .status();
 
     match status {
         Ok(s) => {
             if s.success() {
+                if let Err(e) =
+                    move_compiled_binary(&staged_binary_file, &PathBuf::from(&binary_file))
+                {
+                    println!(
+                        "Compilation succeeded, but failed to place binary '{}': {}",
+                        binary_file, e
+                    );
+                    return;
+                }
                 println!("Compilation successful. Binary '{}' created.", binary_file);
             } else {
                 println!("Compilation failed.");

@@ -1,9 +1,10 @@
-;; Minimal prelude for typed backend Stage 1
+;; Minimal typed-backend prelude fixture used by typed_backend.rs tests.
+;; This keeps legacy Stage-1 typed surface coverage without relying on
+;; removed stdlib prelude files.
 
 (defmacro id (x) x)
 
 ;; Marker attributes (resolved during elaboration).
-;; These are unsafe axioms defined explicitly in the prelude.
 (axiom unsafe interior_mutable Type)
 (axiom unsafe may_panic_on_borrow_violation Type)
 (axiom unsafe concurrency_primitive Type)
@@ -20,7 +21,6 @@
   (ctor false Bool)
 )
 
-;; Core reserved names needed by user programs in typed mode.
 (inductive False (sort 0))
 
 (inductive List (pi T (sort 1) (sort 1))
@@ -36,7 +36,6 @@
   (ctor refl (pi A (sort 1) (pi a A (Eq A a a))))
 )
 
-;; Typed dynamic boundary placeholders.
 (inductive copy Dyn (sort 1)
   (ctor dyn_nat (pi n Nat Dyn))
   (ctor dyn_bool (pi b Bool Dyn))
@@ -53,7 +52,6 @@
       code))
 )
 
-;; Print helpers (typed backend special-cases these names).
 (def print_nat (pi #[fn] n Nat Nat)
   (lam #[fn] n Nat n)
 )
@@ -62,7 +60,6 @@
   (lam #[fn] b Bool b)
 )
 
-;; Persistent list for typed backend (monomorphic Nat list for Stage 1).
 (inductive copy ListRc (sort 1)
   (ctor nil_rc ListRc)
   (ctor cons_rc (pi h Nat (pi t ListRc ListRc)))
