@@ -113,10 +113,19 @@ pub fn codegen_recursors(inductives: &HashMap<String, InductiveDecl>, env: &Env)
                 curr = b;
             }
 
-            code.push_str(&format!(
-                "                    let mut curr_fn = arg_{}.clone();\n",
-                minor_idx
-            ));
+            // Only require mutability when constructor arguments are present and
+            // the recursor pipeline actually rewrites `curr_fn`.
+            if arg_types.is_empty() {
+                code.push_str(&format!(
+                    "                    let curr_fn = arg_{}.clone();\n",
+                    minor_idx
+                ));
+            } else {
+                code.push_str(&format!(
+                    "                    let mut curr_fn = arg_{}.clone();\n",
+                    minor_idx
+                ));
+            }
 
             for (a_i, a_ty) in arg_types.iter().enumerate() {
                 code.push_str(&format!(
@@ -283,6 +292,61 @@ fn container_len(container: &Value) -> Option<usize> {
             }
         }
         _ => None,
+    }
+}
+
+fn runtime_discriminant(value: &Value) -> u64 {
+    match value {
+        Value::Nat(0) => 0,
+        Value::Nat(_) => 1,
+        Value::Bool(true) => 0,
+        Value::Bool(false) => 1,
+        Value::List(list) => match &**list {
+            List::Nil => 0,
+            List::Cons(_, _) => 1,
+        },
+        Value::Inductive(_, idx, _) => *idx as u64,
+        _ => 0,
+    }
+}
+
+fn runtime_project_field(value: &Value, downcast_idx: Option<usize>, field_idx: usize) -> Value {
+    match value {
+        Value::Nat(n) => {
+            if let Some(idx) = downcast_idx {
+                if idx != 1 {
+                    panic!("Nat downcast mismatch: expected succ ctor");
+                }
+            }
+            if field_idx == 0 && *n > 0 {
+                Value::Nat(*n - 1)
+            } else {
+                panic!("Nat field projection out of shape");
+            }
+        }
+        Value::List(list) => {
+            if let Some(idx) = downcast_idx {
+                if idx != 1 {
+                    panic!("List downcast mismatch: expected cons ctor");
+                }
+            }
+            match (&**list, field_idx) {
+                (List::Cons(head, _), 0) => head.clone(),
+                (List::Cons(_, tail), 1) => Value::List(tail.clone()),
+                _ => panic!("List field projection out of shape"),
+            }
+        }
+        Value::Inductive(_, idx, args) => {
+            if let Some(expected) = downcast_idx {
+                if expected != *idx {
+                    panic!("inductive downcast mismatch");
+                }
+            }
+            args.get(field_idx)
+                .cloned()
+                .unwrap_or_else(|| panic!("inductive field out of bounds"))
+        }
+        _ => panic!("Field access on unsupported runtime value"),
     }
 }
 
@@ -512,10 +576,7 @@ fn codegen_terminator(term: &Terminator, is_closure: bool, closure_base: usize) 
         Terminator::SwitchInt { discr, targets } => {
             // Switch on discriminant
             let val = codegen_operand(discr, is_closure, closure_base);
-            let mut code = format!(
-                "                match (match &{} {{ Value::Nat(n) => *n, _ => 0 }}) {{\n",
-                val
-            );
+            let mut code = format!("                match runtime_discriminant(&{}) {{\n", val);
             for (v_idx, val) in targets.values.iter().enumerate() {
                 let target = targets.targets[v_idx];
                 code.push_str(&format!(
@@ -593,14 +654,21 @@ fn codegen_place_read(place: &Place, is_closure: bool) -> String {
     }
 
     let mut s = format!("_{}", local_idx);
+    let mut pending_downcast: Option<usize> = None;
     for proj in &place.projection {
         match proj {
             PlaceElem::Field(i) => {
-                // For Inductive types, access args vector
-                s = format!("(match &{} {{ Value::Inductive(_, _, args) => args[{}].clone(), _ => panic!(\"Field access on non-inductive\") }})", s, i);
+                let downcast = match pending_downcast {
+                    Some(idx) => format!("Some({})", idx),
+                    None => "None".to_string(),
+                };
+                s = format!("runtime_project_field(&{}, {}, {})", s, downcast, i);
+                pending_downcast = None;
             }
-            PlaceElem::Downcast(_) => {
-                // Ignore downcast - we handle via discriminant separately
+            PlaceElem::Downcast(idx) => {
+                // Keep the downcast ctor index so field projections on builtin
+                // representations (Nat/List) can be interpreted soundly.
+                pending_downcast = Some(*idx);
             }
             PlaceElem::Deref => {
                 // Deref - just clone the value
@@ -609,6 +677,7 @@ fn codegen_place_read(place: &Place, is_closure: bool) -> String {
             PlaceElem::Index(index_local) => {
                 let idx = codegen_place_read(&Place::from(*index_local), is_closure);
                 s = format!("runtime_index(&{}, &{})", s, idx);
+                pending_downcast = None;
             }
         }
     }
@@ -619,13 +688,15 @@ fn codegen_rvalue(rvalue: &Rvalue, is_closure: bool, closure_base: usize) -> Str
     match rvalue {
         Rvalue::Use(op) => codegen_operand(op, is_closure, closure_base),
         Rvalue::Ref(_, place) => {
-            // Value is Clone, so we just copy
-            codegen_place_read(place, is_closure)
+            // Dynamic backend models references as value snapshots.
+            // Always clone so repeated borrows across loop iterations do not move locals.
+            let value = codegen_place_read(place, is_closure);
+            format!("{}.clone()", value)
         }
         Rvalue::Discriminant(place) => {
             // Return discriminant value as Nat for SwitchInt
             let p = codegen_place_read(place, is_closure);
-            format!("(match &{} {{ Value::Nat(n) => Value::Nat(*n), Value::Bool(true) => Value::Nat(1), Value::Bool(false) => Value::Nat(0), Value::Inductive(_, idx, _) => Value::Nat(*idx as u64), _ => Value::Nat(0) }})", p)
+            format!("Value::Nat(runtime_discriminant(&{}))", p)
         }
     }
 }
@@ -800,6 +871,6 @@ pub fn sanitize_name(name: &str) -> String {
         | "move" | "ref" | "mut" | "static" | "const" => {
             format!("r#{}", name)
         }
-        _ => name.replace(".", "_"),
+        _ => name.replace('.', "_"),
     }
 }

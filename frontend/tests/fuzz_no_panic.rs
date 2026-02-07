@@ -109,7 +109,7 @@ fn fuzz_parser_and_expander_no_panic() {
 
 #[test]
 fn fuzz_parser_expander_elaborator_no_panic() {
-    let mut rng = Lcg::new(0xC0FF_EE);
+    let mut rng = Lcg::new(0xC0_FF_EE);
 
     for _ in 0..200 {
         let input = random_program(&mut rng);

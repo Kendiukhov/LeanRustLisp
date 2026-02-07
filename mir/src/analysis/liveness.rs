@@ -195,11 +195,11 @@ fn for_each_successor(term: &Terminator, mut f: impl FnMut(BasicBlock)) {
                 f(*target);
             }
         }
-        Terminator::Call { target, .. } => {
-            if let Some(t) = target {
-                f(*t);
-            }
-        }
+        Terminator::Call {
+            target: Some(target),
+            ..
+        } => f(*target),
+        Terminator::Call { target: None, .. } => {}
         _ => {}
     }
 }

@@ -9,6 +9,16 @@ fn parser_hardening_test_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+fn is_libtest_noise_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    (trimmed.starts_with("running ") && trimmed.ends_with(" tests"))
+        || trimmed.starts_with("test result:")
+        || trimmed.starts_with("test ")
+            && (trimmed.ends_with(" ... ok")
+                || trimmed.ends_with(" ... FAILED")
+                || trimmed.ends_with(" ... ignored"))
+}
+
 #[cfg(unix)]
 fn capture_stdout<F: FnOnce()>(f: F) -> String {
     use std::io::Write;
@@ -114,8 +124,13 @@ fn declaration_parse_failure_does_not_emit_stdout_debug_noise() {
         assert!(result.is_err(), "declaration parse should fail");
     });
 
+    let unexpected_lines: Vec<&str> = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !is_libtest_noise_line(line))
+        .collect();
     assert!(
-        output.trim().is_empty(),
+        unexpected_lines.is_empty(),
         "unexpected stdout from declaration parser: {:?}",
         output
     );

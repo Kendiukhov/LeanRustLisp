@@ -140,7 +140,7 @@ impl<'a> TypingChecker<'a> {
         let mut param_subst: HashMap<usize, MirType> = HashMap::new();
         for arg in args {
             self.check_operand_copy(arg, location);
-            current_ty = self.substitute_type_params(&current_ty, &param_subst);
+            current_ty = Self::substitute_type_params(&current_ty, &param_subst);
             let (kind, region_params, param_tys, ret_ty) = match &current_ty {
                 MirType::Fn(kind, region_params, param_tys, ret_ty) => {
                     (kind, region_params, param_tys, ret_ty)
@@ -164,7 +164,7 @@ impl<'a> TypingChecker<'a> {
 
             let param_ty = &param_tys[0];
             let arg_ty = self.operand_type(arg);
-            if !self.types_compatible_call(param_ty, &arg_ty, &mut param_subst, false) {
+            if !self.types_compatible_call(param_ty, &arg_ty, &mut param_subst) {
                 self.errors.push(TypingError::new(
                     format!(
                         "Call argument type mismatch: expected {:?}, got {:?}",
@@ -186,9 +186,9 @@ impl<'a> TypingChecker<'a> {
             };
         }
 
-        let expected_ret = self.substitute_type_params(&current_ty, &param_subst);
+        let expected_ret = Self::substitute_type_params(&current_ty, &param_subst);
         let dest_ty = self.place_type(destination);
-        if !self.types_compatible_call(&expected_ret, &dest_ty, &mut param_subst, false) {
+        if !self.types_compatible_call(&expected_ret, &dest_ty, &mut param_subst) {
             let arg_types: Vec<MirType> = args.iter().map(|arg| self.operand_type(arg)).collect();
             let has_erased_arg = arg_types.iter().any(|ty| matches!(ty, MirType::Unit));
             if has_erased_arg && matches!(expected_ret, MirType::Fn(_, _, _, _)) {
@@ -244,12 +244,12 @@ impl<'a> TypingChecker<'a> {
         func: &CallOperand,
         location: MirSpan,
     ) {
-        let ok = match (kind, func) {
-            (FunctionKind::Fn, CallOperand::Borrow(BorrowKind::Shared, _)) => true,
-            (FunctionKind::FnMut, CallOperand::Borrow(BorrowKind::Mut, _)) => true,
-            (FunctionKind::FnOnce, CallOperand::Operand(Operand::Move(_))) => true,
-            _ => false,
-        };
+        let ok = matches!(
+            (kind, func),
+            (FunctionKind::Fn, CallOperand::Borrow(BorrowKind::Shared, _))
+                | (FunctionKind::FnMut, CallOperand::Borrow(BorrowKind::Mut, _))
+                | (FunctionKind::FnOnce, CallOperand::Operand(Operand::Move(_)))
+        );
 
         if !ok {
             self.errors.push(TypingError::new(
@@ -379,7 +379,7 @@ impl<'a> TypingChecker<'a> {
             RuntimeCheckKind::RefCellBorrow { local } => {
                 let local_ty = &self.body.local_decls[local.index()].ty;
                 if !matches!(local_ty, MirType::Unit)
-                    && !self.contains_interior_mutability(local_ty, IMKind::RefCell)
+                    && !Self::contains_interior_mutability(local_ty, IMKind::RefCell)
                 {
                     self.errors.push(TypingError::new(
                         format!(
@@ -393,7 +393,7 @@ impl<'a> TypingChecker<'a> {
             RuntimeCheckKind::MutexLock { local } => {
                 let local_ty = &self.body.local_decls[local.index()].ty;
                 if !matches!(local_ty, MirType::Unit)
-                    && !self.contains_interior_mutability(local_ty, IMKind::Mutex)
+                    && !Self::contains_interior_mutability(local_ty, IMKind::Mutex)
                 {
                     self.errors.push(TypingError::new(
                         format!(
@@ -436,15 +436,15 @@ impl<'a> TypingChecker<'a> {
         )
     }
 
-    fn contains_interior_mutability(&self, ty: &MirType, kind: IMKind) -> bool {
+    fn contains_interior_mutability(ty: &MirType, kind: IMKind) -> bool {
         match ty {
             MirType::InteriorMutable(inner, inner_kind) => {
-                *inner_kind == kind || self.contains_interior_mutability(inner, kind)
+                *inner_kind == kind || Self::contains_interior_mutability(inner, kind)
             }
-            MirType::Ref(_, inner, _) => self.contains_interior_mutability(inner, kind),
+            MirType::Ref(_, inner, _) => Self::contains_interior_mutability(inner, kind),
             MirType::Adt(_, args) => args
                 .iter()
-                .any(|arg| self.contains_interior_mutability(arg, kind)),
+                .any(|arg| Self::contains_interior_mutability(arg, kind)),
             _ => false,
         }
     }
@@ -491,7 +491,7 @@ impl<'a> TypingChecker<'a> {
                 }
                 PlaceElem::Index(_) => {
                     if let MirType::Adt(_, args) = &ty {
-                        if let Some(elem_ty) = args.get(0).cloned() {
+                        if let Some(elem_ty) = args.first().cloned() {
                             ty = elem_ty;
                         }
                     }
@@ -530,7 +530,7 @@ impl<'a> TypingChecker<'a> {
             return ty.clone();
         }
         let subst = self.instantiate_region_params(region_params);
-        self.substitute_regions(ty, &subst)
+        Self::substitute_regions(ty, &subst)
     }
 
     fn instantiate_region_params(&mut self, region_params: &[Region]) -> HashMap<Region, Region> {
@@ -544,17 +544,17 @@ impl<'a> TypingChecker<'a> {
         map
     }
 
-    fn substitute_regions(&self, ty: &MirType, map: &HashMap<Region, Region>) -> MirType {
+    fn substitute_regions(ty: &MirType, map: &HashMap<Region, Region>) -> MirType {
         match ty {
             MirType::Ref(region, inner, mutability) => {
                 let region = map.get(region).copied().unwrap_or(*region);
-                let inner_renumbered = self.substitute_regions(inner, map);
+                let inner_renumbered = Self::substitute_regions(inner, map);
                 MirType::Ref(region, Box::new(inner_renumbered), *mutability)
             }
             MirType::Adt(id, args) => {
                 let new_args = args
                     .iter()
-                    .map(|a| self.substitute_regions(a, map))
+                    .map(|a| Self::substitute_regions(a, map))
                     .collect();
                 MirType::Adt(id.clone(), new_args)
             }
@@ -566,9 +566,9 @@ impl<'a> TypingChecker<'a> {
                     .collect();
                 let new_args = args
                     .iter()
-                    .map(|a| self.substitute_regions(a, map))
+                    .map(|a| Self::substitute_regions(a, map))
                     .collect();
-                let new_ret = self.substitute_regions(ret, map);
+                let new_ret = Self::substitute_regions(ret, map);
                 MirType::Fn(*kind, new_region_params, new_args, Box::new(new_ret))
             }
             MirType::FnItem(def_id, kind, region_params, args, ret) => {
@@ -579,9 +579,9 @@ impl<'a> TypingChecker<'a> {
                     .collect();
                 let new_args = args
                     .iter()
-                    .map(|a| self.substitute_regions(a, map))
+                    .map(|a| Self::substitute_regions(a, map))
                     .collect();
-                let new_ret = self.substitute_regions(ret, map);
+                let new_ret = Self::substitute_regions(ret, map);
                 MirType::FnItem(
                     *def_id,
                     *kind,
@@ -598,9 +598,9 @@ impl<'a> TypingChecker<'a> {
                     .collect();
                 let new_args = args
                     .iter()
-                    .map(|a| self.substitute_regions(a, map))
+                    .map(|a| Self::substitute_regions(a, map))
                     .collect();
-                let new_ret = self.substitute_regions(ret, map);
+                let new_ret = Self::substitute_regions(ret, map);
                 let new_self_region = map.get(self_region).copied().unwrap_or(*self_region);
                 MirType::Closure(
                     *kind,
@@ -611,67 +611,67 @@ impl<'a> TypingChecker<'a> {
                 )
             }
             MirType::RawPtr(inner, mutability) => {
-                MirType::RawPtr(Box::new(self.substitute_regions(inner, map)), *mutability)
+                MirType::RawPtr(Box::new(Self::substitute_regions(inner, map)), *mutability)
             }
             MirType::InteriorMutable(inner, kind) => {
-                MirType::InteriorMutable(Box::new(self.substitute_regions(inner, map)), *kind)
+                MirType::InteriorMutable(Box::new(Self::substitute_regions(inner, map)), *kind)
             }
             MirType::IndexTerm(term) => MirType::IndexTerm(term.clone()),
             _ => ty.clone(),
         }
     }
 
-    fn substitute_type_params(&self, ty: &MirType, map: &HashMap<usize, MirType>) -> MirType {
+    fn substitute_type_params(ty: &MirType, map: &HashMap<usize, MirType>) -> MirType {
         match ty {
             MirType::Param(idx) => match map.get(idx) {
                 Some(bound) if !matches!(bound, MirType::Param(bound_idx) if *bound_idx == *idx) => {
-                    self.substitute_type_params(bound, map)
+                    Self::substitute_type_params(bound, map)
                 }
                 _ => MirType::Param(*idx),
             },
             MirType::Adt(id, args) => MirType::Adt(
                 id.clone(),
                 args.iter()
-                    .map(|arg| self.substitute_type_params(arg, map))
+                    .map(|arg| Self::substitute_type_params(arg, map))
                     .collect(),
             ),
             MirType::Ref(region, inner, mutability) => MirType::Ref(
                 *region,
-                Box::new(self.substitute_type_params(inner, map)),
+                Box::new(Self::substitute_type_params(inner, map)),
                 *mutability,
             ),
             MirType::Fn(kind, region_params, args, ret) => MirType::Fn(
                 *kind,
                 region_params.clone(),
                 args.iter()
-                    .map(|arg| self.substitute_type_params(arg, map))
+                    .map(|arg| Self::substitute_type_params(arg, map))
                     .collect(),
-                Box::new(self.substitute_type_params(ret, map)),
+                Box::new(Self::substitute_type_params(ret, map)),
             ),
             MirType::FnItem(def_id, kind, region_params, args, ret) => MirType::FnItem(
                 *def_id,
                 *kind,
                 region_params.clone(),
                 args.iter()
-                    .map(|arg| self.substitute_type_params(arg, map))
+                    .map(|arg| Self::substitute_type_params(arg, map))
                     .collect(),
-                Box::new(self.substitute_type_params(ret, map)),
+                Box::new(Self::substitute_type_params(ret, map)),
             ),
             MirType::Closure(kind, self_region, region_params, args, ret) => MirType::Closure(
                 *kind,
                 *self_region,
                 region_params.clone(),
                 args.iter()
-                    .map(|arg| self.substitute_type_params(arg, map))
+                    .map(|arg| Self::substitute_type_params(arg, map))
                     .collect(),
-                Box::new(self.substitute_type_params(ret, map)),
+                Box::new(Self::substitute_type_params(ret, map)),
             ),
             MirType::RawPtr(inner, mutability) => MirType::RawPtr(
-                Box::new(self.substitute_type_params(inner, map)),
+                Box::new(Self::substitute_type_params(inner, map)),
                 *mutability,
             ),
             MirType::InteriorMutable(inner, kind) => {
-                MirType::InteriorMutable(Box::new(self.substitute_type_params(inner, map)), *kind)
+                MirType::InteriorMutable(Box::new(Self::substitute_type_params(inner, map)), *kind)
             }
             MirType::IndexTerm(term) => MirType::IndexTerm(term.clone()),
             MirType::Opaque { reason } => MirType::Opaque {
@@ -686,10 +686,9 @@ impl<'a> TypingChecker<'a> {
         expected: &MirType,
         actual: &MirType,
         map: &mut HashMap<usize, MirType>,
-        in_ref: bool,
     ) -> bool {
-        let expected = self.substitute_type_params(expected, map);
-        let actual = self.substitute_type_params(actual, map);
+        let expected = Self::substitute_type_params(expected, map);
+        let actual = Self::substitute_type_params(actual, map);
 
         if let MirType::Param(idx) = expected {
             if matches!(&actual, MirType::Param(other) if *other == idx) {
@@ -699,7 +698,7 @@ impl<'a> TypingChecker<'a> {
                 if matches!(bound, MirType::Param(other) if other == idx) {
                     return true;
                 }
-                return self.types_compatible_call(&bound, &actual, map, in_ref);
+                return self.types_compatible_call(&bound, &actual, map);
             }
             map.insert(idx, actual);
             return true;
@@ -731,15 +730,15 @@ impl<'a> TypingChecker<'a> {
         match (&expected, &actual) {
             (MirType::Bool, MirType::Bool) | (MirType::Nat, MirType::Nat) => true,
             (MirType::Ref(_, e_inner, e_mut), MirType::Ref(_, a_inner, a_mut)) => {
-                e_mut == a_mut && self.types_compatible_call(e_inner, a_inner, map, true)
+                e_mut == a_mut && self.types_compatible_call(e_inner, a_inner, map)
             }
             (MirType::RawPtr(e_inner, e_mut), MirType::RawPtr(a_inner, a_mut)) => {
-                e_mut == a_mut && self.types_compatible_call(e_inner, a_inner, map, false)
+                e_mut == a_mut && self.types_compatible_call(e_inner, a_inner, map)
             }
             (
                 MirType::InteriorMutable(e_inner, e_kind),
                 MirType::InteriorMutable(a_inner, a_kind),
-            ) => e_kind == a_kind && self.types_compatible_call(e_inner, a_inner, map, false),
+            ) => e_kind == a_kind && self.types_compatible_call(e_inner, a_inner, map),
             (MirType::IndexTerm(e_term), MirType::IndexTerm(a_term)) => {
                 self.call_index_terms_compatible(e_term, a_term)
             }
@@ -750,7 +749,7 @@ impl<'a> TypingChecker<'a> {
                     && e_args
                         .iter()
                         .zip(a_args.iter())
-                        .all(|(e, a)| self.types_compatible_call(e, a, map, false))
+                        .all(|(e, a)| self.types_compatible_call(e, a, map))
             }
             _ => {
                 if let (Some((e_kind, e_args, e_ret)), Some((a_kind, a_args, a_ret))) =
@@ -761,8 +760,8 @@ impl<'a> TypingChecker<'a> {
                         && e_args
                             .iter()
                             .zip(a_args.iter())
-                            .all(|(e, a)| self.types_compatible_call(e, a, map, false))
-                        && self.types_compatible_call(e_ret, a_ret, map, false)
+                            .all(|(e, a)| self.types_compatible_call(e, a, map))
+                        && self.types_compatible_call(e_ret, a_ret, map)
                 } else {
                     false
                 }

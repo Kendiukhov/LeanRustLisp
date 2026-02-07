@@ -16,24 +16,33 @@ use std::rc::Rc;
 
 const CODE_DRIVER_LINT_PANIC_FREE: &str = "C0006";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
 pub enum BackendMode {
     Dynamic,
     Typed,
+    #[default]
     Auto,
 }
 
-impl Default for BackendMode {
-    fn default() -> Self {
-        BackendMode::Auto
-    }
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CompileOptions {
+    pub trace_macros: bool,
+    pub panic_free: bool,
+    pub require_axiom_tags: bool,
+    pub macro_boundary_warn: bool,
+    pub allow_redefine: bool,
+    pub allow_axioms: bool,
+    pub backend: BackendMode,
 }
 
-fn prelude_for_backend(backend: BackendMode) -> &'static str {
+pub const PRELUDE_API_PATH: &str = "stdlib/prelude_api.lrl";
+pub const PRELUDE_IMPL_DYNAMIC_PATH: &str = "stdlib/prelude_impl_dynamic.lrl";
+pub const PRELUDE_IMPL_TYPED_PATH: &str = "stdlib/prelude_impl_typed.lrl";
+
+pub fn prelude_stack_for_backend(backend: BackendMode) -> &'static [&'static str] {
     match backend {
-        BackendMode::Typed => "stdlib/prelude_typed.lrl",
-        BackendMode::Auto => "stdlib/prelude_typed.lrl",
-        BackendMode::Dynamic => "stdlib/prelude.lrl",
+        BackendMode::Typed | BackendMode::Auto => &[PRELUDE_API_PATH, PRELUDE_IMPL_TYPED_PATH],
+        BackendMode::Dynamic => &[PRELUDE_API_PATH, PRELUDE_IMPL_DYNAMIC_PATH],
     }
 }
 
@@ -48,11 +57,64 @@ struct AxiomStub {
     original_name: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectedBackend {
+    Dynamic,
+    Typed,
+}
+
+#[derive(Debug)]
+struct BackendSelection {
+    code: String,
+    warning: Option<String>,
+    selected_backend: SelectedBackend,
+    executable_axiom_stubs: Vec<String>,
+}
+
+fn escape_json_string(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
+fn format_executable_axiom_warning(backend: SelectedBackend, axiom_stubs: &[AxiomStub]) -> String {
+    let backend_label = match backend {
+        SelectedBackend::Dynamic => "dynamic",
+        SelectedBackend::Typed => "typed",
+    };
+    let mut names: Vec<&str> = axiom_stubs
+        .iter()
+        .map(|stub| stub.original_name.as_str())
+        .collect();
+    names.sort();
+    format!(
+        "WARNING: executable axioms enabled for {} backend; runtime panic stubs emitted for: {}. Runtime may panic if any listed axiom is executed.",
+        backend_label,
+        names.join(", ")
+    )
+}
+
+fn append_typed_axiom_stubs(mut typed_code: String, axiom_stubs: &[AxiomStub]) -> String {
+    if axiom_stubs.is_empty() {
+        return typed_code;
+    }
+    typed_code.push('\n');
+    for stub in axiom_stubs {
+        typed_code.push_str(&format!(
+            "fn {}<T>() -> T {{ panic!(\"Axiom accessed at runtime (enabled via --allow-axioms): {}\") }}\n",
+            stub.safe_name,
+            stub.original_name
+        ));
+    }
+    typed_code
+}
+
 fn dump_mir_if_enabled(label: &str, body: &mir::Body) {
     if std::env::var("LRL_DUMP_MIR").ok().is_none() {
         return;
     }
-    let safe = label.replace('/', "_").replace('\\', "_").replace(' ', "_");
+    let safe = label.replace(['/', '\\', ' '], "_");
     let mut path = PathBuf::from("build");
     path.push(format!("mir_dump_{}.txt", safe));
     let text = mir::pretty::pretty_print_body(body);
@@ -100,79 +162,31 @@ fn write_diagnostic_fallback<W: Write>(
     }
 }
 
-pub fn compile_file(
-    path: &str,
-    output_path: Option<String>,
-    trace_macros: bool,
-    panic_free: bool,
-    require_axiom_tags: bool,
-    macro_boundary_warn: bool,
-    allow_redefine: bool,
-    allow_axioms: bool,
-    backend: BackendMode,
-) {
+pub fn compile_file(path: &str, output_path: Option<String>, options: CompileOptions) {
     compile_with_mir(
         path,
         output_path,
-        trace_macros,
-        panic_free,
-        require_axiom_tags,
-        macro_boundary_warn,
-        allow_redefine,
-        allow_axioms,
-        backend,
-        prelude_for_backend(backend),
+        options,
+        prelude_stack_for_backend(options.backend),
     );
 }
 
 pub fn compile_file_with_prelude(
     path: &str,
     output_path: Option<String>,
-    trace_macros: bool,
-    panic_free: bool,
-    require_axiom_tags: bool,
-    macro_boundary_warn: bool,
-    allow_redefine: bool,
-    allow_axioms: bool,
-    backend: BackendMode,
+    options: CompileOptions,
     prelude_path: &str,
 ) {
-    compile_with_mir(
-        path,
-        output_path,
-        trace_macros,
-        panic_free,
-        require_axiom_tags,
-        macro_boundary_warn,
-        allow_redefine,
-        allow_axioms,
-        backend,
-        prelude_path,
-    );
+    compile_with_mir(path, output_path, options, &[prelude_path]);
 }
 
 // Deprecated alias
-pub fn compile_file_to_mir(
-    path: &str,
-    trace_macros: bool,
-    panic_free: bool,
-    require_axiom_tags: bool,
-    macro_boundary_warn: bool,
-    allow_redefine: bool,
-    allow_axioms: bool,
-    backend: BackendMode,
-) {
+pub fn compile_file_to_mir(path: &str, options: CompileOptions) {
     compile_with_mir(
         path,
         None,
-        trace_macros,
-        panic_free,
-        require_axiom_tags,
-        macro_boundary_warn,
-        allow_redefine,
-        allow_axioms,
-        backend,
-        prelude_for_backend(backend),
+        options,
+        prelude_stack_for_backend(options.backend),
     );
 }
 
@@ -180,59 +194,41 @@ pub fn compile_file_to_mir(
 pub fn compile_file_to_mir_with_output(
     path: &str,
     output_path: Option<String>,
-    trace_macros: bool,
-    panic_free: bool,
-    require_axiom_tags: bool,
-    macro_boundary_warn: bool,
-    allow_redefine: bool,
-    allow_axioms: bool,
-    backend: BackendMode,
+    options: CompileOptions,
 ) {
     compile_with_mir(
         path,
         output_path,
-        trace_macros,
-        panic_free,
-        require_axiom_tags,
-        macro_boundary_warn,
-        allow_redefine,
-        allow_axioms,
-        backend,
-        prelude_for_backend(backend),
+        options,
+        prelude_stack_for_backend(options.backend),
     );
 }
 
 fn compile_with_mir(
     path: &str,
     output_path: Option<String>,
-    trace_macros: bool,
-    panic_free: bool,
-    require_axiom_tags: bool,
-    macro_boundary_warn: bool,
-    allow_redefine: bool,
-    allow_axioms: bool,
-    backend: BackendMode,
-    prelude_path: &str,
+    compile_options: CompileOptions,
+    prelude_paths: &[&str],
 ) {
     let mut env = Env::new();
     let mut expander = Expander::new();
-    expander.trace_verbose = trace_macros;
-    let user_policy = if macro_boundary_warn {
+    expander.trace_verbose = compile_options.trace_macros;
+    let user_policy = if compile_options.macro_boundary_warn {
         frontend::macro_expander::MacroBoundaryPolicy::Warn
     } else {
         frontend::macro_expander::MacroBoundaryPolicy::Deny
     };
     expander.set_macro_boundary_policy(user_policy);
-    let options = crate::driver::PipelineOptions {
-        panic_free,
-        require_axiom_tags,
-        allow_axioms,
+    let pipeline_options = crate::driver::PipelineOptions {
+        panic_free: compile_options.panic_free,
+        require_axiom_tags: compile_options.require_axiom_tags,
+        allow_axioms: compile_options.allow_axioms,
         prelude_frozen: true,
-        allow_redefine,
+        allow_redefine: compile_options.allow_redefine,
         ..Default::default()
     };
     let prelude_options = crate::driver::PipelineOptions {
-        panic_free,
+        panic_free: compile_options.panic_free,
         require_axiom_tags: false,
         allow_axioms: true,
         prelude_frozen: false,
@@ -285,39 +281,51 @@ fn compile_with_mir(
         }
     };
 
-    // Load Prelude
-    if Path::new(prelude_path).exists() {
-        if let Ok(content) = fs::read_to_string(prelude_path) {
-            let prelude_module = crate::driver::module_id_for_source(prelude_path);
-            expander.set_macro_boundary_policy(frontend::macro_expander::MacroBoundaryPolicy::Deny);
-            crate::set_prelude_macro_boundary_allowlist(&mut expander, &prelude_module);
-            let allow_reserved = env.allows_reserved_primitives();
-            env.set_allow_reserved_primitives(true);
-            let _ = crate::driver::process_code(
-                &content,
-                prelude_path,
-                &mut env,
-                &mut expander,
-                &prelude_options,
-                &mut diagnostics,
-            );
-            expander.clear_macro_boundary_allowlist();
-            env.set_allow_reserved_primitives(allow_reserved);
-            expander.set_macro_boundary_policy(user_policy);
-            if diagnostics.has_errors() {
-                print_diagnostics(&diagnostics, prelude_path, &content);
-                println!("Prelude compilation failed.");
-                return;
-            }
-            if let Err(err) = env.init_marker_registry() {
-                println!("Failed to initialize marker registry: {}", err);
-                return;
-            }
-            expander.set_default_imports(vec![prelude_module]);
+    // Load Prelude stack (public API first, then backend-specific implementation layer).
+    let mut prelude_modules = Vec::new();
+    for prelude_path in prelude_paths {
+        if !Path::new(prelude_path).exists() {
+            continue;
         }
+        let content = match fs::read_to_string(prelude_path) {
+            Ok(content) => content,
+            Err(err) => {
+                println!("Error reading prelude {}: {:?}", prelude_path, err);
+                return;
+            }
+        };
+        let prelude_module = crate::driver::module_id_for_source(prelude_path);
+        expander.set_macro_boundary_policy(frontend::macro_expander::MacroBoundaryPolicy::Deny);
+        crate::set_prelude_macro_boundary_allowlist(&mut expander, &prelude_module);
+        let allow_reserved = env.allows_reserved_primitives();
+        env.set_allow_reserved_primitives(true);
+        let _ = crate::driver::process_code(
+            &content,
+            prelude_path,
+            &mut env,
+            &mut expander,
+            &prelude_options,
+            &mut diagnostics,
+        );
+        expander.clear_macro_boundary_allowlist();
+        env.set_allow_reserved_primitives(allow_reserved);
+        expander.set_macro_boundary_policy(user_policy);
+        if diagnostics.has_errors() {
+            print_diagnostics(&diagnostics, prelude_path, &content);
+            println!("Prelude compilation failed.");
+            return;
+        }
+        prelude_modules.push(prelude_module);
+    }
+    if !prelude_modules.is_empty() {
+        if let Err(err) = env.init_marker_registry() {
+            println!("Failed to initialize marker registry: {}", err);
+            return;
+        }
+        expander.set_default_imports(prelude_modules);
     }
 
-    env.set_allow_redefinition(allow_redefine);
+    env.set_allow_redefinition(compile_options.allow_redefine);
 
     // Load Main File
     let content = match fs::read_to_string(path) {
@@ -333,7 +341,7 @@ fn compile_with_mir(
         path,
         &mut env,
         &mut expander,
-        &options,
+        &pipeline_options,
         &mut diagnostics,
     ) {
         Ok(res) => res,
@@ -349,7 +357,7 @@ fn compile_with_mir(
         return;
     }
 
-    if !allow_axioms {
+    if !compile_options.allow_axioms {
         let mut blocked = Vec::new();
         for name in &result.deployed_definitions {
             if let Some(def) = env.definitions().get(name) {
@@ -396,12 +404,24 @@ fn compile_with_mir(
     let mut lowered_defs = Vec::new();
     let mut axiom_stubs = Vec::new();
 
-    let is_marker_axiom = |name: &str| {
+    let is_builtin_nonexecutable_axiom = |name: &str| {
         name == marker_name(TypeMarker::InteriorMutable)
             || name == marker_name(TypeMarker::MayPanicOnBorrowViolation)
             || name == marker_name(TypeMarker::ConcurrencyPrimitive)
             || name == marker_name(TypeMarker::AtomicPrimitive)
             || name == marker_name(TypeMarker::Indexable)
+            || name == "Shared"
+            || name == "Mut"
+            || name == "Ref"
+            || name == "borrow_shared"
+            || name == "borrow_mut"
+            || name == "index_vec_dyn"
+            || name == "index_slice"
+            || name == "index_array"
+            || name == "append"
+            || name == "eval"
+            || name == "Dyn"
+            || name == "EvalCap"
     };
 
     for name in names {
@@ -414,7 +434,7 @@ fn compile_with_mir(
 
             if def.value.is_none() {
                 if def.totality == kernel::ast::Totality::Axiom {
-                    if is_marker_axiom(&name) {
+                    if is_builtin_nonexecutable_axiom(&name) {
                         continue;
                     }
                     axiom_stubs.push(AxiomStub {
@@ -507,7 +527,7 @@ fn compile_with_mir(
                 diagnostics.handle(diagnostic);
             }
             let panic_free_runtime_checks =
-                options.panic_free && !nll_result.runtime_checks.is_empty();
+                compile_options.panic_free && !nll_result.runtime_checks.is_empty();
             if panic_free_runtime_checks {
                 diagnostics.handle(
                     Diagnostic::error(format!(
@@ -522,7 +542,7 @@ fn compile_with_mir(
                 nll_result.inject_runtime_checks(&mut ctx.body);
             }
 
-            if options.panic_free {
+            if compile_options.panic_free {
                 let mut linter = mir::lints::PanicFreeLinter::new(&ctx.body);
                 linter.check();
                 for e in linter.errors {
@@ -582,7 +602,7 @@ fn compile_with_mir(
                     diagnostics.handle(diagnostic);
                 }
                 let panic_free_runtime_checks =
-                    options.panic_free && !nll_result.runtime_checks.is_empty();
+                    compile_options.panic_free && !nll_result.runtime_checks.is_empty();
                 if panic_free_runtime_checks {
                     diagnostics.handle(
                         Diagnostic::error(format!(
@@ -597,7 +617,7 @@ fn compile_with_mir(
                 if nll_result.is_ok() && !panic_free_runtime_checks {
                     nll_result.inject_runtime_checks(body);
                 }
-                if options.panic_free {
+                if compile_options.panic_free {
                     let mut linter = mir::lints::PanicFreeLinter::new(body);
                     linter.check();
                     for e in linter.errors {
@@ -657,8 +677,9 @@ fn compile_with_mir(
         return;
     }
 
-    let (all_code, warning) = match select_backend_code(
-        backend,
+    let backend_selection = match select_backend_code(
+        compile_options.backend,
+        compile_options.allow_axioms,
         &env,
         &ids,
         &lowered_defs,
@@ -672,35 +693,74 @@ fn compile_with_mir(
             return;
         }
     };
-    if let Some(warning) = warning {
+    if let Some(warning) = backend_selection.warning.as_deref() {
         println!("{}", warning);
     }
 
-    // Write output
-    let build_dir = "build";
-    fs::create_dir_all(build_dir).ok();
-    let source_file = format!("{}/output.rs", build_dir);
+    // Write output source to a unique file to avoid races across concurrent compiles.
+    let build_dir = Path::new("build");
+    if let Err(e) = fs::create_dir_all(build_dir) {
+        println!("Error creating build directory: {:?}", e);
+        return;
+    }
+    let unique_tag = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let source_file = build_dir.join(format!("output_{}_{}.rs", std::process::id(), unique_tag));
     let binary_file = output_path.unwrap_or_else(|| "output".to_string());
 
-    if let Err(e) = fs::write(&source_file, &all_code) {
+    if let Err(e) = fs::write(&source_file, backend_selection.code) {
         println!("Error writing output file: {:?}", e);
         return;
     }
 
-    println!("Compiling {} to {}...", source_file, binary_file);
+    if !backend_selection.executable_axiom_stubs.is_empty() {
+        let artifact_file = build_dir.join(format!(
+            "output_{}_{}.artifacts.json",
+            std::process::id(),
+            unique_tag
+        ));
+        let backend_name = match backend_selection.selected_backend {
+            SelectedBackend::Dynamic => "dynamic",
+            SelectedBackend::Typed => "typed",
+        };
+        let axiom_list = backend_selection
+            .executable_axiom_stubs
+            .iter()
+            .map(|name| format!("\"{}\"", escape_json_string(name)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let metadata = format!(
+            "{{\n  \"selected_backend\": \"{}\",\n  \"contains_executable_axioms\": true,\n  \"axiom_stubs\": [{}],\n  \"safety_note\": \"axioms are non-executable by default; --allow-axioms opted into panic stubs\"\n}}\n",
+            backend_name, axiom_list
+        );
+        if let Err(err) = fs::write(&artifact_file, metadata) {
+            println!(
+                "Warning: failed to write axiom artifact metadata {}: {}",
+                artifact_file.display(),
+                err
+            );
+        } else {
+            println!(
+                "WARNING: executable axiom metadata written to {}",
+                artifact_file.display()
+            );
+        }
+    }
+
+    println!("Compiling {} to {}...", source_file.display(), binary_file);
     let status = std::process::Command::new("rustc")
-        .arg("output.rs")
+        .arg(&source_file)
         .arg("-o")
         .arg(&binary_file)
         .arg("-C")
         .arg("incremental=incremental")
-        .current_dir(build_dir)
         .status();
 
     match status {
         Ok(s) => {
             if s.success() {
-                let _ = fs::rename(format!("{}/{}", build_dir, binary_file), &binary_file);
                 println!("Compilation successful. Binary '{}' created.", binary_file);
             } else {
                 println!("Compilation failed.");
@@ -712,49 +772,143 @@ fn compile_with_mir(
 
 fn select_backend_code(
     backend: BackendMode,
+    allow_axioms: bool,
     env: &Env,
     ids: &mir::types::IdRegistry,
     lowered_defs: &[LoweredDef],
     axiom_stubs: &[AxiomStub],
     main_def_name: &Option<String>,
-) -> Result<(String, Option<String>), String> {
+) -> Result<BackendSelection, String> {
     match backend {
-        BackendMode::Dynamic => Ok((
-            build_dynamic_code(env, ids, lowered_defs, axiom_stubs, main_def_name),
-            None,
-        )),
+        BackendMode::Dynamic => {
+            if !axiom_stubs.is_empty() && !allow_axioms {
+                let mut names: Vec<&str> = axiom_stubs
+                    .iter()
+                    .map(|stub| stub.original_name.as_str())
+                    .collect();
+                names.sort();
+                return Err(
+                    format!(
+                        "Dynamic backend encountered axiom stubs ({}); rerun with --allow-axioms to opt in to executable panic stubs.",
+                        names.join(", ")
+                    ),
+                );
+            }
+            let warning = if allow_axioms && !axiom_stubs.is_empty() {
+                Some(format_executable_axiom_warning(
+                    SelectedBackend::Dynamic,
+                    axiom_stubs,
+                ))
+            } else {
+                None
+            };
+            Ok(BackendSelection {
+                code: build_dynamic_code(env, ids, lowered_defs, axiom_stubs, main_def_name),
+                warning,
+                selected_backend: SelectedBackend::Dynamic,
+                executable_axiom_stubs: if allow_axioms {
+                    axiom_stubs
+                        .iter()
+                        .map(|stub| stub.original_name.clone())
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+            })
+        }
         BackendMode::Typed => {
             if !axiom_stubs.is_empty() {
+                if !allow_axioms {
+                    return Err(
+                        "Typed backend does not support axiom stubs unless --allow-axioms is enabled; use --backend dynamic/auto or rerun with --allow-axioms"
+                            .to_string(),
+                    );
+                }
+            }
+            let program = build_typed_program(lowered_defs, main_def_name.clone());
+            let typed_code = mir::typed_codegen::codegen_program(env, ids, &program)
+                .map_err(|err| format!("Typed backend unsupported: {}", err))?;
+            let warning = if !axiom_stubs.is_empty() && allow_axioms {
+                Some(format_executable_axiom_warning(
+                    SelectedBackend::Typed,
+                    axiom_stubs,
+                ))
+            } else {
+                None
+            };
+            Ok(BackendSelection {
+                code: append_typed_axiom_stubs(typed_code, axiom_stubs),
+                warning,
+                selected_backend: SelectedBackend::Typed,
+                executable_axiom_stubs: if allow_axioms {
+                    axiom_stubs
+                        .iter()
+                        .map(|stub| stub.original_name.clone())
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+            })
+        }
+        BackendMode::Auto => {
+            if !axiom_stubs.is_empty() && !allow_axioms {
                 return Err(
-                    "Typed backend does not support axiom stubs; use --backend dynamic or --backend auto"
+                    "Program requires axiom stubs, but executable axioms are disabled. Rerun with --allow-axioms (typed emits typed panic stubs; dynamic fallback emits Value panic stubs)."
                         .to_string(),
                 );
             }
-            let program = build_typed_program(lowered_defs, main_def_name.clone());
-            let code = mir::typed_codegen::codegen_program(env, ids, &program)
-                .map_err(|err| format!("Typed backend unsupported: {}", err))?;
-            Ok((code, None))
-        }
-        BackendMode::Auto => {
-            if !axiom_stubs.is_empty() {
-                return Ok((
-                    build_dynamic_code(env, ids, lowered_defs, axiom_stubs, main_def_name),
-                    Some(
-                        "Warning: typed backend does not support axiom stubs; falling back to dynamic."
-                            .to_string(),
-                    ),
-                ));
+            if !axiom_stubs.is_empty() && allow_axioms {
+                let program = build_typed_program(lowered_defs, main_def_name.clone());
+                return match mir::typed_codegen::codegen_program(env, ids, &program) {
+                    Ok(code) => Ok(BackendSelection {
+                        code: append_typed_axiom_stubs(code, axiom_stubs),
+                        warning: Some(format_executable_axiom_warning(
+                            SelectedBackend::Typed,
+                            axiom_stubs,
+                        )),
+                        selected_backend: SelectedBackend::Typed,
+                        executable_axiom_stubs: axiom_stubs
+                            .iter()
+                            .map(|stub| stub.original_name.clone())
+                            .collect(),
+                    }),
+                    Err(err) => Ok(BackendSelection {
+                        code: build_dynamic_code(
+                            env,
+                            ids,
+                            lowered_defs,
+                            axiom_stubs,
+                            main_def_name,
+                        ),
+                        warning: Some(format!(
+                            "Warning: typed backend unsupported: {}; falling back to dynamic.",
+                            err
+                        )),
+                        selected_backend: SelectedBackend::Dynamic,
+                        executable_axiom_stubs: axiom_stubs
+                            .iter()
+                            .map(|stub| stub.original_name.clone())
+                            .collect(),
+                    }),
+                };
             }
             let program = build_typed_program(lowered_defs, main_def_name.clone());
             match mir::typed_codegen::codegen_program(env, ids, &program) {
-                Ok(code) => Ok((code, None)),
-                Err(err) => Ok((
-                    build_dynamic_code(env, ids, lowered_defs, axiom_stubs, main_def_name),
-                    Some(format!(
+                Ok(code) => Ok(BackendSelection {
+                    code,
+                    warning: None,
+                    selected_backend: SelectedBackend::Typed,
+                    executable_axiom_stubs: Vec::new(),
+                }),
+                Err(err) => Ok(BackendSelection {
+                    code: build_dynamic_code(env, ids, lowered_defs, axiom_stubs, main_def_name),
+                    warning: Some(format!(
                         "Warning: typed backend unsupported: {}; falling back to dynamic.",
                         err
                     )),
-                )),
+                    selected_backend: SelectedBackend::Dynamic,
+                    executable_axiom_stubs: Vec::new(),
+                }),
             }
         }
     }
@@ -1027,6 +1181,7 @@ mod tests {
     use super::*;
     use frontend::diagnostics::DiagnosticCollector;
     use frontend::macro_expander::{Expander, MacroBoundaryPolicy};
+    use kernel::ast::FunctionKind;
     use kernel::checker::Env;
     use std::io::{self, Write};
 
@@ -1047,6 +1202,62 @@ inductive copy Nat (sort 1)
         (case (succ m' ih) (succ ih))))))
 "#;
 
+    fn local(name: &str, ty: mir::types::MirType) -> mir::LocalDecl {
+        mir::LocalDecl::new(ty, Some(name.to_string()))
+    }
+
+    fn nat_const(value: u64) -> mir::Operand {
+        mir::Operand::Constant(Box::new(mir::Constant {
+            literal: mir::Literal::Nat(value),
+            ty: mir::types::MirType::Nat,
+        }))
+    }
+
+    fn build_body(
+        arg_count: usize,
+        local_decls: Vec<mir::LocalDecl>,
+        statements: Vec<mir::Statement>,
+        terminator: mir::Terminator,
+    ) -> mir::Body {
+        let mut body = mir::Body::new(arg_count);
+        body.local_decls = local_decls;
+        body.basic_blocks.push(mir::BasicBlockData {
+            statements,
+            terminator: Some(terminator),
+        });
+        body
+    }
+
+    fn auto_fallback_warning_for_body(body: mir::Body) -> String {
+        let env = Env::new();
+        let ids = mir::types::IdRegistry::from_env(&env);
+        let lowered_defs = vec![LoweredDef {
+            name: "entry".to_string(),
+            body,
+            derived_bodies: Vec::new(),
+        }];
+
+        let backend = select_backend_code(
+            BackendMode::Auto,
+            false,
+            &env,
+            &ids,
+            &lowered_defs,
+            &Vec::new(),
+            &Some("entry".to_string()),
+        )
+        .expect("auto backend should succeed via dynamic fallback");
+
+        assert!(
+            backend.code.contains("enum Value"),
+            "expected dynamic fallback code, got:\n{}",
+            backend.code
+        );
+        backend
+            .warning
+            .expect("auto fallback warning should be present")
+    }
+
     #[test]
     fn backend_mode_default_is_auto() {
         assert_eq!(BackendMode::default(), BackendMode::Auto);
@@ -1055,21 +1266,21 @@ inductive copy Nat (sort 1)
     #[test]
     fn backend_mode_uses_expected_preludes() {
         assert_eq!(
-            prelude_for_backend(BackendMode::Typed),
-            "stdlib/prelude_typed.lrl"
+            prelude_stack_for_backend(BackendMode::Typed),
+            &[PRELUDE_API_PATH, PRELUDE_IMPL_TYPED_PATH]
         );
         assert_eq!(
-            prelude_for_backend(BackendMode::Auto),
-            "stdlib/prelude_typed.lrl"
+            prelude_stack_for_backend(BackendMode::Auto),
+            &[PRELUDE_API_PATH, PRELUDE_IMPL_TYPED_PATH]
         );
         assert_eq!(
-            prelude_for_backend(BackendMode::Dynamic),
-            "stdlib/prelude.lrl"
+            prelude_stack_for_backend(BackendMode::Dynamic),
+            &[PRELUDE_API_PATH, PRELUDE_IMPL_DYNAMIC_PATH]
         );
     }
 
     #[test]
-    fn auto_backend_fallback_warns_for_axiom_stubs() {
+    fn auto_backend_rejects_axiom_stubs_without_allow_axioms() {
         let env = Env::new();
         let ids = mir::types::IdRegistry::from_env(&env);
         let lowered_defs = Vec::new();
@@ -1078,25 +1289,21 @@ inductive copy Nat (sort 1)
             original_name: "axiom_stub".to_string(),
         }];
 
-        let (code, warning) = select_backend_code(
+        let err = select_backend_code(
             BackendMode::Auto,
+            false,
             &env,
             &ids,
             &lowered_defs,
             &axiom_stubs,
             &None,
         )
-        .expect("auto backend should fall back to dynamic");
+        .expect_err("auto backend should reject executable axioms without --allow-axioms");
 
         assert!(
-            code.contains("enum Value"),
-            "auto fallback should emit dynamic backend runtime"
-        );
-        assert!(
-            warning
-                .as_deref()
-                .is_some_and(|msg| msg.contains("falling back to dynamic")),
-            "expected explicit auto-fallback warning"
+            err.contains("Program requires axiom stubs"),
+            "expected explicit allow-axioms diagnostic, got: {}",
+            err
         );
     }
 
@@ -1112,6 +1319,7 @@ inductive copy Nat (sort 1)
 
         let err = select_backend_code(
             BackendMode::Typed,
+            false,
             &env,
             &ids,
             &lowered_defs,
@@ -1123,6 +1331,379 @@ inductive copy Nat (sort 1)
         assert!(
             err.contains("Typed backend does not support axiom stubs"),
             "expected typed backend axiom stub diagnostic"
+        );
+    }
+
+    #[test]
+    fn dynamic_backend_rejects_axiom_stubs_without_allow_axioms() {
+        let env = Env::new();
+        let ids = mir::types::IdRegistry::from_env(&env);
+        let lowered_defs = Vec::new();
+        let axiom_stubs = vec![AxiomStub {
+            safe_name: "axiom_stub".to_string(),
+            original_name: "axiom_stub".to_string(),
+        }];
+
+        let err = select_backend_code(
+            BackendMode::Dynamic,
+            false,
+            &env,
+            &ids,
+            &lowered_defs,
+            &axiom_stubs,
+            &None,
+        )
+        .expect_err("dynamic backend should reject stubs unless --allow-axioms");
+
+        assert!(
+            err.contains("Dynamic backend encountered axiom stubs"),
+            "expected dynamic backend axiom stub diagnostic, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn typed_backend_emits_axiom_stubs_with_allow_axioms() {
+        let env = Env::new();
+        let ids = mir::types::IdRegistry::from_env(&env);
+        let lowered_defs = Vec::new();
+        let axiom_stubs = vec![AxiomStub {
+            safe_name: "axiom_stub".to_string(),
+            original_name: "axiom_stub".to_string(),
+        }];
+
+        let backend = select_backend_code(
+            BackendMode::Typed,
+            true,
+            &env,
+            &ids,
+            &lowered_defs,
+            &axiom_stubs,
+            &None,
+        )
+        .expect("typed backend should emit allow-axioms stubs");
+
+        assert!(
+            backend.code.contains("fn axiom_stub<T>() -> T"),
+            "expected typed axiom panic stub in generated code"
+        );
+        let warning = backend
+            .warning
+            .expect("expected loud warning for executable axioms");
+        assert!(
+            warning.contains("WARNING: executable axioms enabled"),
+            "expected executable-axiom warning"
+        );
+        assert_eq!(backend.selected_backend, SelectedBackend::Typed);
+        assert_eq!(
+            backend.executable_axiom_stubs,
+            vec!["axiom_stub".to_string()]
+        );
+    }
+
+    #[test]
+    fn auto_backend_prefers_typed_with_allow_axioms() {
+        let env = Env::new();
+        let ids = mir::types::IdRegistry::from_env(&env);
+        let lowered_defs = Vec::new();
+        let axiom_stubs = vec![AxiomStub {
+            safe_name: "axiom_stub".to_string(),
+            original_name: "axiom_stub".to_string(),
+        }];
+
+        let backend = select_backend_code(
+            BackendMode::Auto,
+            true,
+            &env,
+            &ids,
+            &lowered_defs,
+            &axiom_stubs,
+            &None,
+        )
+        .expect("auto backend should use typed stubs when --allow-axioms is enabled");
+
+        assert_eq!(backend.selected_backend, SelectedBackend::Typed);
+        assert!(
+            !backend.code.contains("enum Value"),
+            "auto+allow-axioms should not force dynamic fallback when typed is available"
+        );
+        assert!(
+            backend.code.contains("fn axiom_stub<T>() -> T"),
+            "expected typed axiom panic stub in generated code"
+        );
+    }
+
+    #[test]
+    fn auto_backend_fallback_includes_typed_reason_code() {
+        let env = Env::new();
+        let ids = mir::types::IdRegistry::from_env(&env);
+        let axiom_stubs = Vec::new();
+
+        let body = build_body(
+            0,
+            vec![
+                local("_0", mir::types::MirType::Unit),
+                local("_1", mir::types::MirType::Nat),
+            ],
+            Vec::new(),
+            mir::Terminator::Call {
+                func: mir::CallOperand::Borrow(
+                    mir::BorrowKind::Shared,
+                    mir::Place::from(mir::Local(1)),
+                ),
+                args: vec![nat_const(0)],
+                destination: mir::Place::from(mir::Local(0)),
+                target: None,
+            },
+        );
+
+        let backend = select_backend_code(
+            BackendMode::Auto,
+            false,
+            &env,
+            &ids,
+            &[LoweredDef {
+                name: "entry".to_string(),
+                body,
+                derived_bodies: Vec::new(),
+            }],
+            &axiom_stubs,
+            &Some("entry".to_string()),
+        )
+        .expect("auto backend should fall back to dynamic when typed is unsupported");
+
+        assert!(
+            backend.code.contains("enum Value"),
+            "auto fallback should emit dynamic backend runtime"
+        );
+        let warning = backend
+            .warning
+            .expect("expected explicit auto-fallback warning");
+        assert!(
+            warning.contains("[TB003]"),
+            "expected typed reason code in fallback warning, got: {}",
+            warning
+        );
+    }
+
+    #[test]
+    fn auto_backend_fallback_covers_typed_reason_codes_matrix() {
+        let tb002 = build_body(
+            0,
+            vec![
+                local("_0", mir::types::MirType::Unit),
+                local(
+                    "_1",
+                    mir::types::MirType::Fn(
+                        FunctionKind::Fn,
+                        Vec::new(),
+                        vec![mir::types::MirType::Nat, mir::types::MirType::Nat],
+                        Box::new(mir::types::MirType::Nat),
+                    ),
+                ),
+            ],
+            Vec::new(),
+            mir::Terminator::Return,
+        );
+
+        let tb003 = build_body(
+            0,
+            vec![
+                local("_0", mir::types::MirType::Unit),
+                local("_1", mir::types::MirType::Nat),
+            ],
+            Vec::new(),
+            mir::Terminator::Call {
+                func: mir::CallOperand::Borrow(
+                    mir::BorrowKind::Shared,
+                    mir::Place::from(mir::Local(1)),
+                ),
+                args: vec![nat_const(0)],
+                destination: mir::Place::from(mir::Local(0)),
+                target: None,
+            },
+        );
+
+        let tb004 = build_body(
+            0,
+            vec![
+                local("_0", mir::types::MirType::Unit),
+                local("_1", mir::types::MirType::Nat),
+            ],
+            vec![mir::Statement::Assign(
+                mir::Place {
+                    local: mir::Local(1),
+                    projection: vec![mir::PlaceElem::Downcast(1), mir::PlaceElem::Field(0)],
+                },
+                mir::Rvalue::Use(nat_const(1)),
+            )],
+            mir::Terminator::Return,
+        );
+
+        let tb005 = build_body(
+            0,
+            vec![
+                local("_0", mir::types::MirType::Unit),
+                local("_1", mir::types::MirType::Nat),
+            ],
+            vec![mir::Statement::Assign(
+                mir::Place::from(mir::Local(0)),
+                mir::Rvalue::Use(mir::Operand::Copy(mir::Place {
+                    local: mir::Local(1),
+                    projection: vec![mir::PlaceElem::Field(0)],
+                })),
+            )],
+            mir::Terminator::Return,
+        );
+
+        let tb006 = build_body(
+            2,
+            vec![
+                local("_0", mir::types::MirType::Unit),
+                local("_1", mir::types::MirType::Unit),
+                local("_2", mir::types::MirType::Unit),
+            ],
+            vec![mir::Statement::Assign(
+                mir::Place::from(mir::Local(0)),
+                mir::Rvalue::Use(mir::Operand::Copy(mir::Place {
+                    local: mir::Local(1),
+                    projection: vec![mir::PlaceElem::Deref],
+                })),
+            )],
+            mir::Terminator::Return,
+        );
+
+        let tb007 = build_body(
+            0,
+            vec![local("_0", mir::types::MirType::Unit)],
+            vec![mir::Statement::Assign(
+                mir::Place::from(mir::Local(0)),
+                mir::Rvalue::Use(mir::Operand::Constant(Box::new(mir::Constant {
+                    literal: mir::Literal::Closure(0, Vec::new()),
+                    ty: mir::types::MirType::Unit,
+                }))),
+            )],
+            mir::Terminator::Return,
+        );
+
+        let tb008 = build_body(
+            0,
+            vec![local("_0", mir::types::MirType::Unit)],
+            vec![mir::Statement::Assign(
+                mir::Place::from(mir::Local(0)),
+                mir::Rvalue::Use(mir::Operand::Constant(Box::new(mir::Constant {
+                    literal: mir::Literal::Fix(0, Vec::new()),
+                    ty: mir::types::MirType::Unit,
+                }))),
+            )],
+            mir::Terminator::Return,
+        );
+
+        let tb001_legacy = build_body(
+            0,
+            vec![
+                local("_0", mir::types::MirType::Unit),
+                local(
+                    "_1",
+                    mir::types::MirType::Fn(
+                        FunctionKind::FnMut,
+                        Vec::new(),
+                        vec![mir::types::MirType::Nat],
+                        Box::new(mir::types::MirType::Nat),
+                    ),
+                ),
+            ],
+            Vec::new(),
+            mir::Terminator::Return,
+        );
+
+        let poly_fn_ty = mir::types::MirType::Fn(
+            FunctionKind::Fn,
+            Vec::new(),
+            vec![mir::types::MirType::Param(0)],
+            Box::new(mir::types::MirType::Param(0)),
+        );
+        let tb009 = build_body(
+            0,
+            vec![local("_0", poly_fn_ty.clone())],
+            vec![mir::Statement::Assign(
+                mir::Place::from(mir::Local(0)),
+                mir::Rvalue::Use(mir::Operand::Constant(Box::new(mir::Constant {
+                    literal: mir::Literal::Closure(0, Vec::new()),
+                    ty: poly_fn_ty,
+                }))),
+            )],
+            mir::Terminator::Return,
+        );
+
+        let cases = vec![
+            ("TB002", tb002),
+            ("TB003", tb003),
+            ("TB004", tb004),
+            ("TB005", tb005),
+            ("TB006", tb006),
+            ("TB007", tb007),
+            ("TB008", tb008),
+        ];
+
+        for (expected_code, body) in cases {
+            let warning = auto_fallback_warning_for_body(body);
+            assert!(
+                warning.contains(expected_code),
+                "expected warning to include {} but got: {}",
+                expected_code,
+                warning
+            );
+        }
+
+        let env = Env::new();
+        let ids = mir::types::IdRegistry::from_env(&env);
+        let backend = select_backend_code(
+            BackendMode::Auto,
+            false,
+            &env,
+            &ids,
+            &[LoweredDef {
+                name: "entry".to_string(),
+                body: tb009,
+                derived_bodies: Vec::new(),
+            }],
+            &Vec::new(),
+            &Some("entry".to_string()),
+        )
+        .expect("auto backend should support previously-polymorphic function-value case");
+        assert!(
+            backend.warning.is_none(),
+            "did not expect fallback warning for TB009 scenario, got: {:?}",
+            backend.warning
+        );
+        assert!(
+            !backend.code.contains("enum Value"),
+            "expected typed backend output for TB009 scenario"
+        );
+
+        let backend = select_backend_code(
+            BackendMode::Auto,
+            false,
+            &env,
+            &ids,
+            &[LoweredDef {
+                name: "entry".to_string(),
+                body: tb001_legacy,
+                derived_bodies: Vec::new(),
+            }],
+            &Vec::new(),
+            &Some("entry".to_string()),
+        )
+        .expect("auto backend should support former TB001 fnmut scenario");
+        assert!(
+            backend.warning.is_none(),
+            "did not expect fallback warning for former TB001 scenario, got: {:?}",
+            backend.warning
+        );
+        assert!(
+            !backend.code.contains("enum Value"),
+            "expected typed backend output for former TB001 scenario"
         );
     }
 

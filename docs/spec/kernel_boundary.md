@@ -54,10 +54,11 @@ The kernel is the minimal set of components that must be correct for the system 
     validator.
 
 ### Prelude and Macro Boundary
-*   **Prelude is trusted**: `stdlib/prelude.lrl` is part of the TCB and is compiled before user code
-    with reserved primitives enabled. It may define unsafe/classical axioms that user code cannot
-    introduce silently.
-*   **Macro boundary is strict for prelude**: the prelude is compiled with
+*   **Prelude stack is trusted**: compile paths load `stdlib/prelude_api.lrl` plus a backend platform
+    layer (`stdlib/prelude_impl_dynamic.lrl` or `stdlib/prelude_impl_typed.lrl`) before user code.
+    These prelude files are part of the TCB and are compiled with reserved primitives enabled.
+    They may define unsafe/classical axioms that user code cannot introduce silently.
+*   **Macro boundary is strict for prelude stack**: prelude files are compiled with
     `MacroBoundaryPolicy::Deny`, so macro expansion cannot introduce unsafe/classical forms unless
     the macro is explicitly allowlisted in the compiler. Any such forms must appear explicitly in
     the prelude source or via an allowlisted macro.

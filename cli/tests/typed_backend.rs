@@ -3,7 +3,7 @@ use cli::set_prelude_macro_boundary_allowlist;
 use frontend::diagnostics::DiagnosticCollector;
 use frontend::macro_expander::{Expander, MacroBoundaryPolicy};
 use kernel::ast::Term;
-use kernel::checker::Env;
+use kernel::checker::{Builtin, Env};
 use mir::codegen::{
     codegen_body, codegen_constant, codegen_prelude, codegen_recursors, sanitize_name,
 };
@@ -11,7 +11,7 @@ use mir::typed_codegen::{codegen_program, TypedBody, TypedProgram};
 use mir::types::{AdtId, CtorId, IdRegistry, MirType};
 use mir::Literal;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -350,7 +350,496 @@ fn extract_nat_result(output: &str) -> Option<u64> {
     }
 }
 
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .canonicalize()
+        .expect("failed to resolve repository root")
+}
+
+#[derive(Clone, Copy)]
+enum ScalarResultKind {
+    Nat,
+}
+
+fn assert_scalar_result_parity(
+    case_name: &str,
+    kind: ScalarResultKind,
+    typed_output: &str,
+    dynamic_output: &str,
+) {
+    match kind {
+        ScalarResultKind::Nat => {
+            let typed = extract_nat_result(typed_output);
+            let dynamic = extract_nat_result(dynamic_output);
+            assert!(
+                typed.is_some() && dynamic.is_some(),
+                "expected nat result for {}. typed output:\n{}\ndynamic output:\n{}",
+                case_name,
+                typed_output,
+                dynamic_output
+            );
+            assert_eq!(
+                typed, dynamic,
+                "typed/dynamic nat result mismatch for {}. typed output:\n{}\ndynamic output:\n{}",
+                case_name, typed_output, dynamic_output
+            );
+        }
+    }
+}
+
+fn collect_round5_sources() -> Vec<(String, String)> {
+    let root = repo_root().join("code_examples/typed_validation_round5");
+    let entries =
+        fs::read_dir(&root).unwrap_or_else(|e| panic!("failed to read {:?}: {}", root, e));
+
+    let mut paths: Vec<_> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("lrl"))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .map(|name| !name.starts_with("._"))
+                .unwrap_or(false)
+        })
+        .collect();
+    paths.sort();
+
+    paths
+        .into_iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("<unknown>")
+                .to_string();
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("failed to read {:?}: {}", path, e));
+            (name, source)
+        })
+        .collect()
+}
+
+fn collect_lrl_sources_recursively(root: &Path) -> Vec<(String, String)> {
+    let mut dirs = vec![root.to_path_buf()];
+    let mut paths: Vec<PathBuf> = Vec::new();
+
+    while let Some(dir) = dirs.pop() {
+        let entries =
+            fs::read_dir(&dir).unwrap_or_else(|e| panic!("failed to read {:?}: {}", dir, e));
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            if path.extension().and_then(|s| s.to_str()) != Some("lrl") {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if name.starts_with("._") {
+                continue;
+            }
+            paths.push(path);
+        }
+    }
+
+    paths.sort();
+    let repo = repo_root();
+    paths
+        .into_iter()
+        .map(|path| {
+            let label = path
+                .strip_prefix(&repo)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("failed to read {:?}: {}", path, e));
+            (label, source)
+        })
+        .collect()
+}
+
+fn is_unary_fn_type(ty: &MirType) -> bool {
+    matches!(
+        ty,
+        MirType::Fn(_, _, args, _) | MirType::FnItem(_, _, _, args, _) | MirType::Closure(_, _, _, args, _)
+            if args.len() == 1
+    )
+}
+
+fn is_fn_type(ty: &MirType) -> bool {
+    matches!(
+        ty,
+        MirType::Fn(_, _, _, _) | MirType::FnItem(_, _, _, _, _) | MirType::Closure(_, _, _, _, _)
+    )
+}
+
+fn field_type_without_downcast(
+    body: &mir::Body,
+    adt_id: &AdtId,
+    field_idx: usize,
+    args: &[MirType],
+) -> Option<MirType> {
+    let layout = body.adt_layouts.get(adt_id)?;
+    let mut field_ty: Option<MirType> = None;
+    for variant in &layout.variants {
+        if let Some(ty_template) = variant.fields.get(field_idx) {
+            let ty = ty_template.substitute_params(args);
+            if let Some(existing) = &field_ty {
+                if existing != &ty {
+                    return None;
+                }
+            } else {
+                field_ty = Some(ty);
+            }
+        }
+    }
+    field_ty
+}
+
+fn index_item_type_from_field_shallow(ids: &IdRegistry, field_ty: &MirType) -> Option<MirType> {
+    let MirType::Adt(field_adt, field_args) = field_ty else {
+        return None;
+    };
+    let list_builtin = ids.builtin_adt(Builtin::List);
+    if list_builtin.as_ref().is_some_and(|id| id == field_adt) {
+        return field_args.first().cloned();
+    }
+    if ids.is_indexable_adt(field_adt) {
+        return field_args.first().cloned();
+    }
+    None
+}
+
+fn infer_monomorphic_index_item_type(
+    ids: &IdRegistry,
+    body: &mir::Body,
+    adt_id: &AdtId,
+) -> Option<MirType> {
+    let layout = body.adt_layouts.get(adt_id)?;
+    let mut candidate: Option<MirType> = None;
+    for variant in &layout.variants {
+        for field_ty in &variant.fields {
+            let mut field_candidate = index_item_type_from_field_shallow(ids, field_ty);
+            if field_candidate.is_none() && variant.fields.len() == 1 {
+                field_candidate = Some(field_ty.clone());
+            }
+            if let Some(item_ty) = field_candidate {
+                if let Some(existing) = &candidate {
+                    if existing != &item_ty {
+                        return None;
+                    }
+                } else {
+                    candidate = Some(item_ty);
+                }
+            }
+        }
+    }
+    candidate
+}
+
+fn index_item_type_for_container(
+    ids: &IdRegistry,
+    body: &mir::Body,
+    ty: &MirType,
+) -> Option<MirType> {
+    let MirType::Adt(adt_id, args) = ty else {
+        return None;
+    };
+    let list_builtin = ids.builtin_adt(Builtin::List);
+    if list_builtin.as_ref().is_some_and(|id| id == adt_id) {
+        return args.first().cloned();
+    }
+    if !ids.is_indexable_adt(adt_id) {
+        return None;
+    }
+    if let Some(first) = args.first() {
+        return Some(first.clone());
+    }
+    infer_monomorphic_index_item_type(ids, body, adt_id)
+}
+
+fn project_type_from(
+    body: &mir::Body,
+    ids: &IdRegistry,
+    mut current_ty: MirType,
+    projections: &[mir::PlaceElem],
+) -> Option<MirType> {
+    let mut variant = None;
+    for proj in projections {
+        match proj {
+            mir::PlaceElem::Downcast(idx) => variant = Some(*idx),
+            mir::PlaceElem::Field(field_idx) => {
+                if matches!(current_ty, MirType::Nat) {
+                    if variant == Some(1) && *field_idx == 0 {
+                        current_ty = MirType::Nat;
+                        variant = None;
+                        continue;
+                    }
+                    return None;
+                }
+                current_ty = match &current_ty {
+                    MirType::Adt(adt_id, args) => body
+                        .adt_layouts
+                        .field_type(adt_id, variant, *field_idx, args)
+                        .or_else(|| field_type_without_downcast(body, adt_id, *field_idx, args))?,
+                    _ => return None,
+                };
+                variant = None;
+            }
+            mir::PlaceElem::Deref => {
+                current_ty = match current_ty {
+                    MirType::Ref(_, inner, _) | MirType::RawPtr(inner, _) => *inner,
+                    _ => return None,
+                };
+                variant = None;
+            }
+            mir::PlaceElem::Index(_) => {
+                current_ty = index_item_type_for_container(ids, body, &current_ty)?;
+                variant = None;
+            }
+        }
+    }
+    Some(current_ty)
+}
+
+fn typed_place_type_for_body(
+    body: &mir::Body,
+    ids: &IdRegistry,
+    place: &mir::Place,
+) -> Option<MirType> {
+    if body.arg_count == 2 && body.local_decls.len() >= 3 && place.local.index() == 1 {
+        if place.projection.is_empty() {
+            return body.local_decls.get(1).map(|decl| decl.ty.clone());
+        }
+        let mir::PlaceElem::Field(capture_idx) = place.projection[0] else {
+            return None;
+        };
+        let captures = &body.local_decls.get(1)?.closure_captures;
+        let capture_ty = captures.get(capture_idx)?.clone();
+        return project_type_from(body, ids, capture_ty, &place.projection[1..]);
+    }
+
+    let base_ty = body.local_decls.get(place.local.index())?.ty.clone();
+    project_type_from(body, ids, base_ty, &place.projection)
+}
+
+fn assert_constant_guard_invariants(constant: &mir::Constant, context: &str) {
+    match &constant.literal {
+        Literal::Closure(_, _) => {
+            assert!(
+                is_unary_fn_type(&constant.ty),
+                "{}: closure literal must carry unary function type (TB007/TB002 invariant), got {:?}",
+                context,
+                constant.ty
+            );
+        }
+        Literal::Fix(_, _) => {
+            assert!(
+                is_unary_fn_type(&constant.ty),
+                "{}: fix literal must carry unary function type (TB008/TB002 invariant), got {:?}",
+                context,
+                constant.ty
+            );
+        }
+        _ => {}
+    }
+}
+
+fn assert_place_guard_invariants(
+    body: &mir::Body,
+    ids: &IdRegistry,
+    place: &mir::Place,
+    context: &str,
+) {
+    assert!(
+        typed_place_type_for_body(body, ids, place).is_some(),
+        "{}: place must be lowerable by typed backend (TB005/TB006 invariant), got {:?}",
+        context,
+        place
+    );
+}
+
+fn assert_operand_guard_invariants(
+    body: &mir::Body,
+    ids: &IdRegistry,
+    op: &mir::Operand,
+    context: &str,
+) {
+    match op {
+        mir::Operand::Copy(place) | mir::Operand::Move(place) => {
+            assert_place_guard_invariants(body, ids, place, context);
+        }
+        mir::Operand::Constant(constant) => {
+            assert_constant_guard_invariants(constant, context);
+        }
+    }
+}
+
+fn assert_call_operand_guard_invariants(
+    body: &mir::Body,
+    ids: &IdRegistry,
+    call_op: &mir::CallOperand,
+    context: &str,
+) {
+    match call_op {
+        mir::CallOperand::Operand(op) => assert_operand_guard_invariants(body, ids, op, context),
+        mir::CallOperand::Borrow(_, place) => {
+            assert_place_guard_invariants(body, ids, place, context);
+            let ty = typed_place_type_for_body(body, ids, place)
+                .expect("borrow call operand place type should exist after place invariant");
+            assert!(
+                is_fn_type(&ty),
+                "{}: borrowed call operand must be function typed (TB003 invariant), got {:?}",
+                context,
+                ty
+            );
+        }
+    }
+}
+
+fn assert_rvalue_guard_invariants(
+    body: &mir::Body,
+    ids: &IdRegistry,
+    rv: &mir::Rvalue,
+    context: &str,
+) {
+    match rv {
+        mir::Rvalue::Use(op) => assert_operand_guard_invariants(body, ids, op, context),
+        mir::Rvalue::Discriminant(place) | mir::Rvalue::Ref(_, place) => {
+            assert_place_guard_invariants(body, ids, place, context);
+        }
+    }
+}
+
+fn assert_body_guard_invariants(body: &mir::Body, ids: &IdRegistry, body_label: &str) {
+    for (local_idx, decl) in body.local_decls.iter().enumerate() {
+        if is_fn_type(&decl.ty) {
+            assert!(
+                is_unary_fn_type(&decl.ty),
+                "{} local _{} must be unary function typed (TB002 invariant), got {:?}",
+                body_label,
+                local_idx,
+                decl.ty
+            );
+        }
+        for (capture_idx, cap_ty) in decl.closure_captures.iter().enumerate() {
+            if is_fn_type(cap_ty) {
+                assert!(
+                    is_unary_fn_type(cap_ty),
+                    "{} local _{} capture[{}] must be unary function typed (TB002 invariant), got {:?}",
+                    body_label,
+                    local_idx,
+                    capture_idx,
+                    cap_ty
+                );
+            }
+        }
+    }
+
+    for (bb_idx, block) in body.basic_blocks.iter().enumerate() {
+        for (stmt_idx, stmt) in block.statements.iter().enumerate() {
+            let context = format!("{} block {} stmt {}", body_label, bb_idx, stmt_idx);
+            match stmt {
+                mir::Statement::Assign(place, rv) => {
+                    assert!(
+                        place.projection.is_empty(),
+                        "{}: assignment destination must be local-only (TB004 invariant), got {:?}",
+                        context,
+                        place
+                    );
+                    assert_place_guard_invariants(body, ids, place, &context);
+                    assert_rvalue_guard_invariants(body, ids, rv, &context);
+                }
+                mir::Statement::RuntimeCheck(check) => match check {
+                    mir::RuntimeCheckKind::RefCellBorrow { local }
+                    | mir::RuntimeCheckKind::MutexLock { local } => {
+                        assert!(
+                            body.local_decls.get(local.index()).is_some(),
+                            "{}: runtime-check local must exist",
+                            context
+                        );
+                    }
+                    mir::RuntimeCheckKind::BoundsCheck { local, index } => {
+                        assert!(
+                            body.local_decls.get(local.index()).is_some()
+                                && body.local_decls.get(index.index()).is_some(),
+                            "{}: bounds-check locals must exist",
+                            context
+                        );
+                    }
+                },
+                mir::Statement::StorageLive(local) | mir::Statement::StorageDead(local) => {
+                    assert!(
+                        body.local_decls.get(local.index()).is_some(),
+                        "{}: storage marker local must exist",
+                        context
+                    );
+                }
+                mir::Statement::Nop => {}
+            }
+        }
+
+        if let Some(term) = &block.terminator {
+            let context = format!("{} block {} term", body_label, bb_idx);
+            match term {
+                mir::Terminator::Return
+                | mir::Terminator::Goto { .. }
+                | mir::Terminator::Unreachable => {}
+                mir::Terminator::SwitchInt { discr, .. } => {
+                    assert_operand_guard_invariants(body, ids, discr, &context);
+                }
+                mir::Terminator::Call {
+                    func,
+                    args,
+                    destination,
+                    ..
+                } => {
+                    assert_call_operand_guard_invariants(body, ids, func, &context);
+                    for arg in args {
+                        assert_operand_guard_invariants(body, ids, arg, &context);
+                    }
+                    assert_place_guard_invariants(body, ids, destination, &context);
+                }
+            }
+        }
+    }
+}
+
+fn assert_program_guard_invariants(program: &TypedProgram, ids: &IdRegistry, case_label: &str) {
+    for body in &program.defs {
+        let label = format!("{}::def::{}", case_label, body.name);
+        assert_body_guard_invariants(&body.body, ids, &label);
+    }
+    for body in &program.closures {
+        let label = format!("{}::closure::{}", case_label, body.name);
+        assert_body_guard_invariants(&body.body, ids, &label);
+    }
+}
+
+fn generated_nat_chain_source(depth: usize) -> String {
+    let mut nat_expr = "zero".to_string();
+    for _ in 0..depth {
+        nat_expr = format!("(succ {})", nat_expr);
+    }
+
+    format!(
+        "(def entry Nat
+  (print_nat {}))",
+        nat_expr
+    )
+}
+
 fn compile_rust_to_temp_bin(code: &str) -> PathBuf {
+    compile_rust_to_temp_bin_with_args(code, &[])
+}
+
+fn compile_rust_to_temp_bin_with_args(code: &str, extra_args: &[&str]) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("time went backwards")
@@ -365,8 +854,12 @@ fn compile_rust_to_temp_bin(code: &str) -> PathBuf {
     let bin_path = temp_dir.join("main_bin");
 
     fs::write(&src_path, code).expect("failed to write rust source");
-    let status = Command::new("rustc")
-        .arg(&src_path)
+    let mut cmd = Command::new("rustc");
+    cmd.arg(&src_path);
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    let status = cmd
         .arg("-O")
         .arg("-o")
         .arg(&bin_path)
@@ -377,15 +870,25 @@ fn compile_rust_to_temp_bin(code: &str) -> PathBuf {
     bin_path
 }
 
+fn compile_with_deny_warnings(code: &str) {
+    let _ = compile_rust_to_temp_bin_with_args(code, &["-D", "warnings"]);
+}
+
 fn compile_and_run(code: &str) -> String {
+    compile_and_run_with_context(code, "compiled binary")
+}
+
+fn compile_and_run_with_context(code: &str, context: &str) -> String {
     let bin_path = compile_rust_to_temp_bin(code);
-    let output = Command::new(&bin_path)
+    let output = Command::new(bin_path)
         .output()
         .expect("failed to run compiled binary");
     assert!(
         output.status.success(),
-        "compiled binary failed: {:?}",
-        output
+        "{} failed. stdout:\n{}\nstderr:\n{}",
+        context,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 
     String::from_utf8_lossy(&output.stdout).to_string()
@@ -393,7 +896,7 @@ fn compile_and_run(code: &str) -> String {
 
 fn compile_and_run_allow_failure(code: &str) -> std::process::Output {
     let bin_path = compile_rust_to_temp_bin(code);
-    Command::new(&bin_path)
+    Command::new(bin_path)
         .output()
         .expect("failed to run compiled binary")
 }
@@ -508,7 +1011,7 @@ fn typed_backend_supports_parametric_adts() {
 }
 
 #[test]
-fn typed_backend_rejects_monomorphic_wrapper_over_polymorphic_function_value() {
+fn typed_backend_executes_monomorphic_wrapper_over_polymorphic_function_value() {
     let source = r#"
         (inductive copy Nat (sort 1)
           (ctor zero Nat)
@@ -528,12 +1031,13 @@ fn typed_backend_rejects_monomorphic_wrapper_over_polymorphic_function_value() {
 
     let (env, ids, defs, main_name) = lower_program(source, false, false);
     let program = build_typed_program(&defs, main_name);
-    let err = codegen_program(&env, &ids, &program).expect_err("expected typed codegen failure");
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let output = compile_and_run(&code);
+
     assert!(
-        err.message
-            .contains("polymorphic function-value specialization is not yet supported"),
-        "unexpected error: {}",
-        err.message
+        output.contains("Result: 1"),
+        "expected output to contain Result: 1, got {}",
+        output
     );
 }
 
@@ -1172,6 +1676,109 @@ fn typed_backend_codegen_is_deterministic_for_slice_index_program() {
 }
 
 #[test]
+fn typed_backend_executes_index_projection_for_nested_indexable_shapes() {
+    let source = r#"
+        (axiom unsafe interior_mutable Type)
+        (axiom unsafe may_panic_on_borrow_violation Type)
+        (axiom unsafe concurrency_primitive Type)
+        (axiom unsafe atomic_primitive Type)
+        (axiom unsafe indexable Type)
+
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (inductive (indexable) VecDyn (pi T (sort 1) (sort 1))
+          (ctor empty_vec (pi (T (sort 1)) (VecDyn T)))
+          (ctor singleton_vec (pi (T (sort 1)) (pi meta Nat (pi x T (VecDyn T)))))
+        )
+
+        (inductive (indexable) Slice (pi T (sort 1) (sort 1))
+          (ctor mk_slice (pi (T (sort 1)) (pi meta Nat (pi data (VecDyn T) (Slice T)))))
+        )
+
+        (axiom unsafe index_vec_dyn (pi {T (sort 1)} (pi v (VecDyn T) (pi i Nat T))))
+        (axiom unsafe index_slice (pi {T (sort 1)} (pi v (Slice T) (pi i Nat T))))
+
+        (unsafe entry Nat
+          (let xs (VecDyn Nat)
+            (singleton_vec Nat zero (succ zero))
+            (let s (Slice Nat)
+              (mk_slice Nat zero xs)
+              s[0])))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let output = compile_and_run(&code);
+
+    assert!(
+        !code.contains("Value::"),
+        "typed backend should not emit dynamic Value runtime for nested indexable shapes"
+    );
+    assert!(
+        code.contains("runtime_index("),
+        "expected runtime_index lowering for nested indexable shapes"
+    );
+    assert!(
+        output.contains("Result: 1"),
+        "expected output to contain Result: 1, got {}",
+        output
+    );
+}
+
+#[test]
+fn typed_backend_index_projection_without_index_source_field_panics_at_runtime() {
+    let source = r#"
+        (axiom unsafe interior_mutable Type)
+        (axiom unsafe may_panic_on_borrow_violation Type)
+        (axiom unsafe concurrency_primitive Type)
+        (axiom unsafe atomic_primitive Type)
+        (axiom unsafe indexable Type)
+
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (inductive copy Bool (sort 1)
+          (ctor true Bool)
+          (ctor false Bool))
+
+        (inductive (indexable) VecDyn (pi T (sort 1) (sort 1))
+          (ctor empty_vec (pi (T (sort 1)) (VecDyn T)))
+          (ctor tagged_vec (pi (T (sort 1)) (pi meta Nat (VecDyn T))))
+        )
+
+        (axiom unsafe index_vec_dyn (pi {T (sort 1)} (pi v (VecDyn T) (pi i Nat T))))
+
+        (unsafe entry Bool
+          (let xs (VecDyn Bool)
+            (tagged_vec Bool zero)
+            xs[0]))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    assert!(
+        !code.contains("Value::"),
+        "typed backend should not emit dynamic Value runtime"
+    );
+    let output = compile_and_run_allow_failure(&code);
+    assert!(
+        !output.status.success(),
+        "expected runtime panic for source-less index shape"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("index out of bounds"),
+        "expected index panic, got stderr:\n{}",
+        stderr
+    );
+}
+
+#[test]
 fn typed_backend_emits_rawptr_and_interior_mutable_local_types() {
     let env = Env::new();
     let ids = IdRegistry::from_env(&env);
@@ -1287,6 +1894,47 @@ fn typed_backend_executes_higher_order_returned_closure_capture() {
 }
 
 #[test]
+fn typed_backend_executes_explicit_fnmut_higher_order_calls() {
+    let source = r#"
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (def use_twice
+          (pi f (pi fnmut n Nat Nat)
+            (pi fnmut x Nat Nat))
+          (lam f (pi fnmut n Nat Nat)
+            (lam fnmut x Nat
+              (let y Nat (f x)
+                (f y)))))
+
+        (def mk_fnmut
+          (pi bias Nat (pi fnmut n Nat Nat))
+          (lam bias Nat
+            (lam fnmut n Nat
+              n)))
+
+        (def entry Nat
+          (use_twice (mk_fnmut zero) (succ zero)))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let output = compile_and_run(&code);
+
+    assert!(
+        !code.contains("Value::"),
+        "typed backend should not emit dynamic Value runtime for fnmut subset"
+    );
+    assert!(
+        output.contains("Result: 1"),
+        "expected output to contain Result: 1, got {}",
+        output
+    );
+}
+
+#[test]
 fn typed_backend_executes_higher_order_match_selects_function() {
     let source = r#"
         (inductive copy Nat (sort 1)
@@ -1372,4 +2020,278 @@ fn typed_backend_matches_dynamic_output_for_higher_order_program() {
         "typed and dynamic outputs differ for higher-order program: typed {:?}, dynamic {:?}",
         typed_output, dynamic_output
     );
+}
+
+#[test]
+fn typed_backend_round5_corpus_compiles_runs_and_stays_typed() {
+    for (name, source) in collect_round5_sources() {
+        let (env, ids, defs, main_name) =
+            lower_program_with_prelude(&source, Some("stdlib/prelude_typed.lrl"), false);
+        let program = build_typed_program(&defs, main_name);
+        let code = codegen_program(&env, &ids, &program)
+            .unwrap_or_else(|e| panic!("typed codegen failed for {}: {}", name, e));
+
+        assert!(
+            !code.contains("Value::"),
+            "typed backend emitted dynamic Value runtime for {}",
+            name
+        );
+        assert!(
+            !code.contains("Expected Func"),
+            "typed backend emitted function tag-check panic for {}",
+            name
+        );
+        let output = compile_and_run(&code);
+        assert!(
+            extract_result_value(&output).is_some(),
+            "expected result line for {}, got:\n{}",
+            name,
+            output
+        );
+    }
+}
+
+#[test]
+fn typed_backend_tb_guards_are_unreachable_for_well_typed_code_examples() {
+    let root = repo_root().join("code_examples");
+    let sources = collect_lrl_sources_recursively(&root);
+    assert!(
+        !sources.is_empty(),
+        "expected at least one source in {:?}",
+        root
+    );
+
+    for (label, source) in sources {
+        let (env, ids, defs, main_name) =
+            lower_program_with_prelude(&source, Some("stdlib/prelude_typed.lrl"), true);
+        let program = build_typed_program(&defs, main_name);
+        assert_program_guard_invariants(&program, &ids, &label);
+        codegen_program(&env, &ids, &program).unwrap_or_else(|e| {
+            panic!("typed codegen unexpectedly failed for {} with {}", label, e)
+        });
+    }
+}
+
+#[test]
+fn typed_backend_round5_corpus_is_deterministic() {
+    for (name, source) in collect_round5_sources() {
+        let (env, ids, defs, main_name) =
+            lower_program_with_prelude(&source, Some("stdlib/prelude_typed.lrl"), false);
+        let program = build_typed_program(&defs, main_name);
+        let code1 = codegen_program(&env, &ids, &program)
+            .unwrap_or_else(|e| panic!("typed codegen failed for {}: {}", name, e));
+        let code2 = codegen_program(&env, &ids, &program)
+            .unwrap_or_else(|e| panic!("typed codegen failed for {}: {}", name, e));
+        assert_eq!(
+            code1, code2,
+            "typed backend output is nondeterministic for {}",
+            name
+        );
+    }
+}
+
+#[test]
+fn typed_backend_differential_parity_for_deterministic_nat_subset() {
+    let cases: Vec<(&str, String, Option<&str>, ScalarResultKind)> = vec![
+        (
+            "inline_stage1_nat",
+            r#"
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (def entry Nat
+          (succ (succ zero)))
+    "#
+            .to_string(),
+            None,
+            ScalarResultKind::Nat,
+        ),
+        (
+            "inline_higher_order_nat",
+            r#"
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (def succ1 (pi n Nat Nat)
+          (lam n Nat (succ n)))
+
+        (def apply_twice
+          (pi f (pi n Nat Nat)
+            (pi n Nat Nat))
+          (lam f (pi n Nat Nat)
+            (lam n Nat
+              (f (f n)))))
+
+        (def entry Nat
+          (apply_twice succ1 (succ zero)))
+    "#
+            .to_string(),
+            None,
+            ScalarResultKind::Nat,
+        ),
+        (
+            "generated_nat_chain_17",
+            generated_nat_chain_source(17),
+            Some("stdlib/prelude_typed.lrl"),
+            ScalarResultKind::Nat,
+        ),
+    ];
+
+    for (case_name, source, prelude, kind) in cases {
+        let (env, ids, defs, main_name) = lower_program_with_prelude(&source, prelude, false);
+        let program = build_typed_program(&defs, main_name.clone());
+        let typed_code = codegen_program(&env, &ids, &program)
+            .unwrap_or_else(|e| panic!("typed codegen failed for {}: {}", case_name, e));
+        let dynamic_code = build_dynamic_code(&env, &ids, &defs, main_name);
+
+        assert!(
+            !typed_code.contains("Value::"),
+            "typed backend emitted dynamic runtime for {}",
+            case_name
+        );
+        let typed_output =
+            compile_and_run_with_context(&typed_code, &format!("typed binary for {}", case_name));
+        let dynamic_output = compile_and_run_with_context(
+            &dynamic_code,
+            &format!("dynamic binary for {}", case_name),
+        );
+        assert_scalar_result_parity(case_name, kind, &typed_output, &dynamic_output);
+    }
+}
+
+#[test]
+fn typed_backend_generated_nat_chain_cases_match_dynamic() {
+    for depth in [0usize, 1, 2, 5, 9, 17] {
+        let source = generated_nat_chain_source(depth);
+        let (env, ids, defs, main_name) =
+            lower_program_with_prelude(&source, Some("stdlib/prelude_typed.lrl"), false);
+        let program = build_typed_program(&defs, main_name.clone());
+        let typed_code = codegen_program(&env, &ids, &program).unwrap_or_else(|e| {
+            panic!("typed codegen failed for generated depth {}: {}", depth, e)
+        });
+        let dynamic_code = build_dynamic_code(&env, &ids, &defs, main_name);
+        let typed_output = compile_and_run(&typed_code);
+        let dynamic_output = compile_and_run(&dynamic_code);
+
+        assert_scalar_result_parity(
+            &format!("generated_nat_depth_{}", depth),
+            ScalarResultKind::Nat,
+            &typed_output,
+            &dynamic_output,
+        );
+    }
+}
+
+#[test]
+fn typed_backend_panics_on_out_of_bounds_nested_index_projection() {
+    let source = r#"
+        (axiom unsafe interior_mutable Type)
+        (axiom unsafe may_panic_on_borrow_violation Type)
+        (axiom unsafe concurrency_primitive Type)
+        (axiom unsafe atomic_primitive Type)
+        (axiom unsafe indexable Type)
+
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (inductive (indexable) VecDyn (pi T (sort 1) (sort 1))
+          (ctor empty_vec (pi (T (sort 1)) (VecDyn T)))
+          (ctor singleton_vec (pi (T (sort 1)) (pi meta Nat (pi x T (VecDyn T)))))
+        )
+
+        (inductive (indexable) Slice (pi T (sort 1) (sort 1))
+          (ctor mk_slice (pi (T (sort 1)) (pi meta Nat (pi data (VecDyn T) (Slice T)))))
+        )
+
+        (axiom unsafe index_vec_dyn (pi {T (sort 1)} (pi v (VecDyn T) (pi i Nat T))))
+        (axiom unsafe index_slice (pi {T (sort 1)} (pi v (Slice T) (pi i Nat T))))
+
+        (unsafe entry Nat
+          (let xs (VecDyn Nat)
+            (singleton_vec Nat zero (succ zero))
+            (let s (Slice Nat)
+              (mk_slice Nat zero xs)
+              s[1])))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    let output = compile_and_run_allow_failure(&code);
+    assert!(
+        !output.status.success(),
+        "expected runtime failure for out-of-bounds nested index projection"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{}\n{}", stdout, stderr);
+    assert!(
+        combined.contains("index out of bounds"),
+        "expected out-of-bounds panic text, got:\n{}",
+        combined
+    );
+}
+
+#[test]
+fn typed_backend_generated_rust_is_warning_free_under_deny_warnings() {
+    let mut cases: Vec<(String, String, Option<&str>)> = collect_round5_sources()
+        .into_iter()
+        .map(|(name, source)| {
+            (
+                format!("round5/{}", name),
+                source,
+                Some("stdlib/prelude_typed.lrl"),
+            )
+        })
+        .collect();
+    cases.push((
+        "generated_nat_chain_11".to_string(),
+        generated_nat_chain_source(11),
+        Some("stdlib/prelude_typed.lrl"),
+    ));
+    cases.push((
+        "inline_higher_order_nat".to_string(),
+        r#"
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (def succ1 (pi n Nat Nat)
+          (lam n Nat (succ n)))
+
+        (def apply_twice
+          (pi f (pi n Nat Nat)
+            (pi n Nat Nat))
+          (lam f (pi n Nat Nat)
+            (lam n Nat
+              (f (f n)))))
+
+        (def entry Nat
+          (apply_twice succ1 (succ zero)))
+    "#
+        .to_string(),
+        None,
+    ));
+
+    for (name, source, prelude) in cases {
+        let (env, ids, defs, main_name) = lower_program_with_prelude(&source, prelude, false);
+        let program = build_typed_program(&defs, main_name);
+        let code = codegen_program(&env, &ids, &program)
+            .unwrap_or_else(|e| panic!("typed codegen failed for {}: {}", name, e));
+
+        assert!(
+            !code.contains("Value::"),
+            "typed backend emitted dynamic runtime in {}",
+            name
+        );
+        assert!(
+            !code.contains("Expected Func"),
+            "typed backend emitted tag-check panic path in {}",
+            name
+        );
+        compile_with_deny_warnings(&code);
+    }
 }

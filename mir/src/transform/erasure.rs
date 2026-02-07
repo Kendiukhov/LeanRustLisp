@@ -18,9 +18,7 @@ fn collect_prop_adts(body: &Body) -> HashSet<AdtId> {
 fn is_function_like(ty: &MirType) -> bool {
     matches!(
         ty,
-        MirType::Fn(_, _, _, _)
-            | MirType::FnItem(_, _, _, _, _)
-            | MirType::Closure(_, _, _, _, _)
+        MirType::Fn(_, _, _, _) | MirType::FnItem(_, _, _, _, _) | MirType::Closure(_, _, _, _, _)
     )
 }
 
@@ -73,10 +71,9 @@ fn erase_runtime_type(ty: &MirType, prop_adts: &HashSet<AdtId>) -> MirType {
                 .collect(),
             Box::new(erase_runtime_type(ret, prop_adts)),
         ),
-        MirType::RawPtr(inner, mutability) => MirType::RawPtr(
-            Box::new(erase_runtime_type(inner, prop_adts)),
-            *mutability,
-        ),
+        MirType::RawPtr(inner, mutability) => {
+            MirType::RawPtr(Box::new(erase_runtime_type(inner, prop_adts)), *mutability)
+        }
         MirType::InteriorMutable(inner, kind) => {
             MirType::InteriorMutable(Box::new(erase_runtime_type(inner, prop_adts)), *kind)
         }

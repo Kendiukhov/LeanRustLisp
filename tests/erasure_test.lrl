@@ -1,2 +1,4 @@
+;; Minimal standalone smoke; legacy proof-only form was stale.
 
-(def h (Eq Nat zero zero) (refl Nat zero))
+(def h Nat (succ zero))
+h

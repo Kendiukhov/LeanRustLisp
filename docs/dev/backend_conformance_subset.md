@@ -18,13 +18,18 @@ Harness location:
 
 ## Prelude Compatibility Policy
 
-To avoid known representation mismatches between full preludes, conformance tests use a minimal compatibility prelude:
+By default, conformance tests use a minimal compatibility prelude:
 - `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/tests/backend_conformance/conformance_prelude.lrl`
 
 This prelude intentionally defines only shared core data needed by the subset (`Nat`, `Bool`).
 
+Case-level prelude override is supported via metadata:
+- `;;! prelude: <path>`
+
+This is used for targeted API-layer checks when needed (for example, shared prelude `append` behavior).
+
 Rationale:
-- `stdlib/prelude.lrl` and `stdlib/prelude_typed.lrl` differ in representation- and runtime-oriented features.
+- Full API+platform stacks still differ in runtime-oriented boundaries (`Dyn`/`EvalCap`/`eval`, runtime checks).
 - The mission compares backend faithfulness to MIR semantics in the overlap, not prelude feature parity.
 
 ## Included Constructs (Overlap Subset)

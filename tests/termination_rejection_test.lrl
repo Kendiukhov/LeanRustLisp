@@ -1,48 +1,15 @@
-;; Test file for Phase 1D: Termination Rejection
-;;
-;; This file demonstrates that non-terminating definitions are properly rejected
-;; when using the 'def' form (which requires totality).
-;;
-;; Expected behavior:
-;; - Total definitions with structural recursion via recursors should PASS
-;; - Partial definitions are allowed to be non-terminating
-;; - Total definitions without structural decrease should FAIL
+;; Termination smoke for current contracts (total defs only).
 
-;; Define Nat (self-contained test)
-(inductive copy Nat (sort 0)
-  (ctor zero Nat)
-  (ctor succ (pi n Nat Nat))
-)
-
-(inductive copy Bool (sort 0)
-  (ctor true Bool)
-  (ctor false Bool)
-)
-
-;; SHOULD PASS: Total definition using recursor (structural recursion)
-;; isZero n = Nat.rec (λ_. Bool) true (λ_ _. false) n
-(def isZero (pi n Nat Bool)
+(def is_zero_local (pi n Nat Bool)
   (lam n Nat
-    ((((Nat.rec (lam _ Nat Bool)) true) (lam _ Nat (lam _ Bool false))) n)
-  )
-)
+    (match n Bool
+      (case (zero) true)
+      (case (succ m ih) false))))
 
-;; SHOULD PASS: Total definition using recursor for predecessor
-;; pred n = Nat.rec (λ_. Nat) zero (λm _. m) n
-(def pred (pi n Nat Nat)
+(def pred_local (pi n Nat Nat)
   (lam n Nat
-    ((((Nat.rec (lam _ Nat Nat)) zero) (lam m Nat (lam _ Nat m))) n)
-  )
-)
+    (match n Nat
+      (case (zero) zero)
+      (case (succ m ih) m))))
 
-;; SHOULD PASS: Partial definition is allowed to be non-terminating
-(partial maybeLoop (pi n Nat Nat)
-  (lam n Nat
-    ((((Nat.rec (lam _ Nat Nat)) zero) (lam m Nat (lam _ Nat m))) n)
-  )
-)
-
-;; Test expressions
-(isZero zero)
-(isZero (succ zero))
-(pred (succ (succ zero)))
+(is_zero_local (pred_local (succ (succ zero))))

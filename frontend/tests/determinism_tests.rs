@@ -297,7 +297,7 @@ fn test_span_preservation() {
     // Check that spans exist and are reasonable
     for syntax in &syntax_nodes {
         assert!(
-            syntax.span.start < syntax.span.end || syntax.span.start == syntax.span.end,
+            syntax.span.start <= syntax.span.end,
             "Span should have non-negative length"
         );
         assert!(

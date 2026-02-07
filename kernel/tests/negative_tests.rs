@@ -2021,9 +2021,9 @@ fn negative_copy_inductive_with_noncopy_field() {
     }
 }
 
-/// Negative test: Copy inductive cannot be derived for recursive fields
+/// Recursive parametric Copy derivation is allowed when recursion preserves params.
 #[test]
-fn negative_copy_inductive_recursive_field() {
+fn copy_inductive_recursive_field_same_params_allowed() {
     let mut env = Env::new();
     env.set_allow_reserved_primitives(true);
 
@@ -2070,13 +2070,12 @@ fn negative_copy_inductive_recursive_field() {
         primitive_deps: vec![],
     };
 
-    let result = env.add_inductive(list_decl);
-    match result {
-        Err(TypeError::CopyDeriveFailure { ind, .. }) => {
-            assert_eq!(ind, "List");
-        }
-        other => panic!("Expected CopyDeriveFailure error, got {:?}", other),
-    }
+    env.add_inductive(list_decl)
+        .expect("List copy derivation should succeed when recursion preserves params");
+    assert!(
+        env.copy_instances.contains_key("List"),
+        "expected derived Copy instance for List"
+    );
 }
 
 /// Negative test: Large elimination from Prop (extracting data from proof)

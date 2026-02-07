@@ -1,0 +1,5 @@
+;;! tag: excluded
+;;! reason: Uses Dyn/eval capability semantics, which are intentionally excluded from the stable overlap subset due known cross-prelude representation differences.
+
+(def entry Nat
+  zero)

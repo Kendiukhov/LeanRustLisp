@@ -59,12 +59,9 @@ fn test_quasiquote_hygiene_capture() {
     let mut desugarer = Desugarer::new();
     let mut last_term = None;
     for syntax in syntax_list {
-        match expander.expand(syntax).expect("Failed to expand") {
-            Some(expanded) => {
-                let term = desugarer.desugar(expanded).expect("Failed to desugar");
-                last_term = Some(term);
-            }
-            None => {}
+        if let Some(expanded) = expander.expand(syntax).expect("Failed to expand") {
+            let term = desugarer.desugar(expanded).expect("Failed to desugar");
+            last_term = Some(term);
         }
     }
 
@@ -97,12 +94,9 @@ fn test_macro_hygiene_no_capture_call_site() {
     let mut desugarer = Desugarer::new();
     let mut last_term = None;
     for syntax in syntax_list {
-        match expander.expand(syntax).expect("Failed to expand") {
-            Some(expanded) => {
-                let term = desugarer.desugar(expanded).expect("Failed to desugar");
-                last_term = Some(term);
-            }
-            None => {}
+        if let Some(expanded) = expander.expand(syntax).expect("Failed to expand") {
+            let term = desugarer.desugar(expanded).expect("Failed to desugar");
+            last_term = Some(term);
         }
     }
 

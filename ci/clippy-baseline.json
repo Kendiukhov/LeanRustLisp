@@ -1,0 +1,627 @@
+{
+  "cargo_command": "cargo clippy --all --all-targets --message-format=json",
+  "generated_at": "2026-02-06T14:52:38.449492+00:00",
+  "version": 1,
+  "warning_count_total": 336,
+  "warning_count_unique": 103,
+  "warnings": [
+    {
+      "code": "clippy::assigning_clones",
+      "count": 2,
+      "message": "assigning the result of `Clone::clone()` may be inefficient",
+      "path": "frontend/src/elaborator.rs"
+    },
+    {
+      "code": "clippy::assigning_clones",
+      "count": 2,
+      "message": "assigning the result of `Clone::clone()` may be inefficient",
+      "path": "frontend/src/macro_expander.rs"
+    },
+    {
+      "code": "clippy::assigning_clones",
+      "count": 8,
+      "message": "assigning the result of `Clone::clone()` may be inefficient",
+      "path": "mir/src/lower.rs"
+    },
+    {
+      "code": "clippy::assigning_clones",
+      "count": 1,
+      "message": "assigning the result of `Clone::clone()` may be inefficient",
+      "path": "mir/tests/liveness_regression.rs"
+    },
+    {
+      "code": "clippy::borrowed_box",
+      "count": 2,
+      "message": "you seem to be trying to use `&Box<T>`. Consider using just `&T`",
+      "path": "mir/src/lower.rs"
+    },
+    {
+      "code": "clippy::collapsible_else_if",
+      "count": 2,
+      "message": "this `else { if .. }` block can be collapsed",
+      "path": "mir/src/lower.rs"
+    },
+    {
+      "code": "clippy::collapsible_if",
+      "count": 6,
+      "message": "this `if` statement can be collapsed",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::collapsible_if",
+      "count": 2,
+      "message": "this `if` statement can be collapsed",
+      "path": "mir/src/analysis/nll.rs"
+    },
+    {
+      "code": "clippy::collapsible_match",
+      "count": 2,
+      "message": "this `if let` can be collapsed into the outer `match`",
+      "path": "mir/src/analysis/liveness.rs"
+    },
+    {
+      "code": "clippy::collapsible_match",
+      "count": 2,
+      "message": "this `if let` can be collapsed into the outer `if let`",
+      "path": "mir/src/analysis/nll.rs"
+    },
+    {
+      "code": "clippy::collapsible_match",
+      "count": 4,
+      "message": "this `if let` can be collapsed into the outer `match`",
+      "path": "mir/src/transform/dce.rs"
+    },
+    {
+      "code": "clippy::collapsible_str_replace",
+      "count": 2,
+      "message": "used consecutive `str::replace` call",
+      "path": "cli/src/compiler.rs"
+    },
+    {
+      "code": "clippy::comparison_chain",
+      "count": 2,
+      "message": "`if` chain can be rewritten with `match`",
+      "path": "frontend/src/desugar.rs"
+    },
+    {
+      "code": "clippy::comparison_chain",
+      "count": 2,
+      "message": "`if` chain can be rewritten with `match`",
+      "path": "frontend/src/macro_expander.rs"
+    },
+    {
+      "code": "clippy::comparison_chain",
+      "count": 2,
+      "message": "`if` chain can be rewritten with `match`",
+      "path": "kernel/src/ast.rs"
+    },
+    {
+      "code": "clippy::derivable_impls",
+      "count": 2,
+      "message": "this `impl` can be derived",
+      "path": "cli/src/compiler.rs"
+    },
+    {
+      "code": "clippy::derivable_impls",
+      "count": 2,
+      "message": "this `impl` can be derived",
+      "path": "cli/src/driver.rs"
+    },
+    {
+      "code": "clippy::derivable_impls",
+      "count": 2,
+      "message": "this `impl` can be derived",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::double_comparisons",
+      "count": 1,
+      "message": "this binary expression can be simplified",
+      "path": "frontend/tests/determinism_tests.rs"
+    },
+    {
+      "code": "clippy::drop_non_drop",
+      "count": 2,
+      "message": "call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes",
+      "path": "cli/src/driver.rs"
+    },
+    {
+      "code": "clippy::explicit_auto_deref",
+      "count": 4,
+      "message": "deref which would be done by auto-deref",
+      "path": "kernel/src/nbe.rs"
+    },
+    {
+      "code": "clippy::explicit_counter_loop",
+      "count": 2,
+      "message": "the variable `depth_from_end` is used as a loop counter",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::for_kv_map",
+      "count": 2,
+      "message": "you seem to want to iterate on a map's keys",
+      "path": "mir/src/transform/inline.rs"
+    },
+    {
+      "code": "clippy::get_first",
+      "count": 2,
+      "message": "accessing first element with `args.get(0)`",
+      "path": "mir/src/analysis/borrow.rs"
+    },
+    {
+      "code": "clippy::get_first",
+      "count": 2,
+      "message": "accessing first element with `args.get(0)`",
+      "path": "mir/src/analysis/nll.rs"
+    },
+    {
+      "code": "clippy::get_first",
+      "count": 2,
+      "message": "accessing first element with `args.get(0)`",
+      "path": "mir/src/analysis/ownership.rs"
+    },
+    {
+      "code": "clippy::get_first",
+      "count": 2,
+      "message": "accessing first element with `args.get(0)`",
+      "path": "mir/src/analysis/typing.rs"
+    },
+    {
+      "code": "clippy::get_first",
+      "count": 2,
+      "message": "accessing first element with `args.get(0)`",
+      "path": "mir/src/lower.rs"
+    },
+    {
+      "code": "clippy::get_first",
+      "count": 20,
+      "message": "accessing first element with `args.get(0)`",
+      "path": "mir/src/typed_codegen.rs"
+    },
+    {
+      "code": "clippy::get_first",
+      "count": 4,
+      "message": "accessing first element with `body.body.local_decls.get(0)`",
+      "path": "mir/src/typed_codegen.rs"
+    },
+    {
+      "code": "clippy::if_same_then_else",
+      "count": 2,
+      "message": "this `if` has identical blocks",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::if_same_then_else",
+      "count": 2,
+      "message": "this `if` has identical blocks",
+      "path": "mir/src/typed_codegen.rs"
+    },
+    {
+      "code": "clippy::is_digit_ascii_radix",
+      "count": 2,
+      "message": "use of `char::is_digit` with literal radix of 10",
+      "path": "kernel/src/test_support.rs"
+    },
+    {
+      "code": "clippy::iter_cloned_collect",
+      "count": 4,
+      "message": "called `iter().cloned().collect()` on a slice to create a `Vec`. Calling `to_vec()` is both faster and more readable",
+      "path": "mir/src/lower.rs"
+    },
+    {
+      "code": "clippy::len_without_is_empty",
+      "count": 2,
+      "message": "struct `Context` has a public `len` method, but no `is_empty` method",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::len_without_is_empty",
+      "count": 2,
+      "message": "struct `LocationIndex` has a public `len` method, but no `is_empty` method",
+      "path": "mir/src/analysis/nll.rs"
+    },
+    {
+      "code": "clippy::manual_unwrap_or",
+      "count": 2,
+      "message": "this pattern reimplements `Result::unwrap_or`",
+      "path": "kernel/src/nbe.rs"
+    },
+    {
+      "code": "clippy::map_entry",
+      "count": 2,
+      "message": "usage of `contains_key` followed by `insert` on a `HashMap`",
+      "path": "mir/src/analysis/nll.rs"
+    },
+    {
+      "code": "clippy::match_like_matches_macro",
+      "count": 2,
+      "message": "match expression looks like `matches!` macro",
+      "path": "mir/src/analysis/typing.rs"
+    },
+    {
+      "code": "clippy::needless_borrow",
+      "count": 4,
+      "message": "this expression creates a reference which is immediately dereferenced by the compiler",
+      "path": "cli/src/driver.rs"
+    },
+    {
+      "code": "clippy::needless_borrow",
+      "count": 6,
+      "message": "this expression creates a reference which is immediately dereferenced by the compiler",
+      "path": "frontend/src/elaborator.rs"
+    },
+    {
+      "code": "clippy::needless_borrow",
+      "count": 10,
+      "message": "this expression creates a reference which is immediately dereferenced by the compiler",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::needless_borrow",
+      "count": 2,
+      "message": "this expression creates a reference which is immediately dereferenced by the compiler",
+      "path": "mir/src/lower.rs"
+    },
+    {
+      "code": "clippy::needless_borrow",
+      "count": 4,
+      "message": "this expression creates a reference which is immediately dereferenced by the compiler",
+      "path": "mir/src/typed_codegen.rs"
+    },
+    {
+      "code": "clippy::needless_borrows_for_generic_args",
+      "count": 2,
+      "message": "the borrowed expression implements the required traits",
+      "path": "cli/src/compiler.rs"
+    },
+    {
+      "code": "clippy::needless_borrows_for_generic_args",
+      "count": 1,
+      "message": "the borrowed expression implements the required traits",
+      "path": "cli/tests/macro_imports.rs"
+    },
+    {
+      "code": "clippy::needless_borrows_for_generic_args",
+      "count": 2,
+      "message": "the borrowed expression implements the required traits",
+      "path": "cli/tests/typed_backend.rs"
+    },
+    {
+      "code": "clippy::needless_range_loop",
+      "count": 8,
+      "message": "the loop variable `i` is used to index `args`",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::needless_range_loop",
+      "count": 2,
+      "message": "the loop variable `param_idx` is used to index `args`",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::needless_return",
+      "count": 2,
+      "message": "unneeded `return` statement",
+      "path": "kernel/src/nbe.rs"
+    },
+    {
+      "code": "clippy::new_without_default",
+      "count": 2,
+      "message": "you should consider adding a `Default` implementation for `Desugarer`",
+      "path": "frontend/src/desugar.rs"
+    },
+    {
+      "code": "clippy::new_without_default",
+      "count": 2,
+      "message": "you should consider adding a `Default` implementation for `DiagnosticCollector`",
+      "path": "frontend/src/diagnostics.rs"
+    },
+    {
+      "code": "clippy::new_without_default",
+      "count": 2,
+      "message": "you should consider adding a `Default` implementation for `Expander`",
+      "path": "frontend/src/macro_expander.rs"
+    },
+    {
+      "code": "clippy::new_without_default",
+      "count": 2,
+      "message": "you should consider adding a `Default` implementation for `Context`",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::new_without_default",
+      "count": 2,
+      "message": "you should consider adding a `Default` implementation for `Env`",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::new_without_default",
+      "count": 2,
+      "message": "you should consider adding a `Default` implementation for `UsageContext`",
+      "path": "kernel/src/ownership.rs"
+    },
+    {
+      "code": "clippy::new_without_default",
+      "count": 2,
+      "message": "you should consider adding a `Default` implementation for `BorrowState`",
+      "path": "mir/src/analysis/borrow.rs"
+    },
+    {
+      "code": "clippy::only_used_in_recursion",
+      "count": 4,
+      "message": "parameter is only used in recursion",
+      "path": "frontend/src/desugar.rs"
+    },
+    {
+      "code": "clippy::only_used_in_recursion",
+      "count": 16,
+      "message": "parameter is only used in recursion",
+      "path": "frontend/src/elaborator.rs"
+    },
+    {
+      "code": "clippy::only_used_in_recursion",
+      "count": 4,
+      "message": "parameter is only used in recursion",
+      "path": "frontend/src/macro_expander.rs"
+    },
+    {
+      "code": "clippy::only_used_in_recursion",
+      "count": 2,
+      "message": "parameter is only used in recursion",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::only_used_in_recursion",
+      "count": 8,
+      "message": "parameter is only used in recursion",
+      "path": "mir/src/analysis/nll.rs"
+    },
+    {
+      "code": "clippy::only_used_in_recursion",
+      "count": 8,
+      "message": "parameter is only used in recursion",
+      "path": "mir/src/analysis/typing.rs"
+    },
+    {
+      "code": "clippy::only_used_in_recursion",
+      "count": 2,
+      "message": "parameter is only used in recursion",
+      "path": "mir/src/lints.rs"
+    },
+    {
+      "code": "clippy::only_used_in_recursion",
+      "count": 4,
+      "message": "parameter is only used in recursion",
+      "path": "mir/src/lower.rs"
+    },
+    {
+      "code": "clippy::op_ref",
+      "count": 4,
+      "message": "needlessly taken reference of both operands",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::ptr_arg",
+      "count": 2,
+      "message": "writing `&mut Vec` instead of `&mut [_]` involves a new object where a slice will do",
+      "path": "cli/src/driver.rs"
+    },
+    {
+      "code": "clippy::question_mark",
+      "count": 2,
+      "message": "this block may be rewritten with the `?` operator",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::question_mark",
+      "count": 2,
+      "message": "this `let...else` may be rewritten with the `?` operator",
+      "path": "mir/src/analysis/nll.rs"
+    },
+    {
+      "code": "clippy::question_mark",
+      "count": 2,
+      "message": "this block may be rewritten with the `?` operator",
+      "path": "mir/src/analysis/nll.rs"
+    },
+    {
+      "code": "clippy::redundant_closure",
+      "count": 8,
+      "message": "redundant closure",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::redundant_pattern_matching",
+      "count": 4,
+      "message": "redundant pattern matching, consider using `is_err()`",
+      "path": "mir/src/analysis/borrow.rs"
+    },
+    {
+      "code": "clippy::single_char_pattern",
+      "count": 2,
+      "message": "single-character string constant used as pattern",
+      "path": "mir/src/codegen.rs"
+    },
+    {
+      "code": "clippy::single_match",
+      "count": 2,
+      "message": "you seem to be trying to use `match` for destructuring a single pattern. Consider using `if let`",
+      "path": "frontend/tests/macro_quasiquote_hygiene.rs"
+    },
+    {
+      "code": "clippy::single_match",
+      "count": 2,
+      "message": "you seem to be trying to use `match` for an equality check. Consider using `if`",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::single_match",
+      "count": 2,
+      "message": "you seem to be trying to use `match` for destructuring a single pattern. Consider using `if let`",
+      "path": "mir/src/analysis/ownership.rs"
+    },
+    {
+      "code": "clippy::too_many_arguments",
+      "count": 4,
+      "message": "this function has too many arguments (10/7)",
+      "path": "cli/src/compiler.rs"
+    },
+    {
+      "code": "clippy::too_many_arguments",
+      "count": 2,
+      "message": "this function has too many arguments (8/7)",
+      "path": "cli/src/compiler.rs"
+    },
+    {
+      "code": "clippy::too_many_arguments",
+      "count": 4,
+      "message": "this function has too many arguments (9/7)",
+      "path": "cli/src/compiler.rs"
+    },
+    {
+      "code": "clippy::too_many_arguments",
+      "count": 4,
+      "message": "this function has too many arguments (8/7)",
+      "path": "cli/src/repl.rs"
+    },
+    {
+      "code": "clippy::too_many_arguments",
+      "count": 2,
+      "message": "this function has too many arguments (9/7)",
+      "path": "cli/src/repl.rs"
+    },
+    {
+      "code": "clippy::too_many_arguments",
+      "count": 2,
+      "message": "this function has too many arguments (8/7)",
+      "path": "frontend/src/elaborator.rs"
+    },
+    {
+      "code": "clippy::too_many_arguments",
+      "count": 4,
+      "message": "this function has too many arguments (8/7)",
+      "path": "frontend/src/macro_expander.rs"
+    },
+    {
+      "code": "clippy::too_many_arguments",
+      "count": 2,
+      "message": "this function has too many arguments (9/7)",
+      "path": "frontend/src/macro_expander.rs"
+    },
+    {
+      "code": "clippy::too_many_arguments",
+      "count": 4,
+      "message": "this function has too many arguments (8/7)",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::type_complexity",
+      "count": 2,
+      "message": "very complex type used. Consider factoring parts into `type` definitions",
+      "path": "cli/src/driver.rs"
+    },
+    {
+      "code": "clippy::type_complexity",
+      "count": 2,
+      "message": "very complex type used. Consider factoring parts into `type` definitions",
+      "path": "frontend/src/desugar.rs"
+    },
+    {
+      "code": "clippy::type_complexity",
+      "count": 4,
+      "message": "very complex type used. Consider factoring parts into `type` definitions",
+      "path": "frontend/src/elaborator.rs"
+    },
+    {
+      "code": "clippy::type_complexity",
+      "count": 10,
+      "message": "very complex type used. Consider factoring parts into `type` definitions",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::type_complexity",
+      "count": 2,
+      "message": "very complex type used. Consider factoring parts into `type` definitions",
+      "path": "mir/src/lower.rs"
+    },
+    {
+      "code": "clippy::unnecessary_filter_map",
+      "count": 2,
+      "message": "this `.filter_map` can be written more simply using `.map`",
+      "path": "mir/src/analysis/nll.rs"
+    },
+    {
+      "code": "clippy::unnecessary_lazy_evaluations",
+      "count": 2,
+      "message": "unnecessary closure used to substitute value for `Option::None`",
+      "path": "mir/src/typed_codegen.rs"
+    },
+    {
+      "code": "clippy::unnecessary_sort_by",
+      "count": 2,
+      "message": "consider using `sort_by_key`",
+      "path": "kernel/src/ast.rs"
+    },
+    {
+      "code": "clippy::unusual_byte_groupings",
+      "count": 1,
+      "message": "digits of hex, binary or octal literal not in groups of equal size",
+      "path": "frontend/tests/fuzz_no_panic.rs"
+    },
+    {
+      "code": "clippy::unwrap_or_default",
+      "count": 2,
+      "message": "use of `or_insert_with` to construct default value",
+      "path": "frontend/src/desugar.rs"
+    },
+    {
+      "code": "clippy::vec_init_then_push",
+      "count": 2,
+      "message": "calls to `push` immediately after creation",
+      "path": "frontend/src/desugar.rs"
+    },
+    {
+      "code": "clippy::vec_init_then_push",
+      "count": 8,
+      "message": "calls to `push` immediately after creation",
+      "path": "mir/src/typed_codegen.rs"
+    },
+    {
+      "code": "clippy::while_let_loop",
+      "count": 2,
+      "message": "this loop could be written as a `while let` loop",
+      "path": "cli/src/driver.rs"
+    },
+    {
+      "code": "clippy::while_let_loop",
+      "count": 6,
+      "message": "this loop could be written as a `while let` loop",
+      "path": "frontend/src/elaborator.rs"
+    },
+    {
+      "code": "clippy::while_let_loop",
+      "count": 6,
+      "message": "this loop could be written as a `while let` loop",
+      "path": "kernel/src/checker.rs"
+    },
+    {
+      "code": "clippy::while_let_loop",
+      "count": 2,
+      "message": "this loop could be written as a `while let` loop",
+      "path": "mir/src/lower.rs"
+    },
+    {
+      "code": "clippy::while_let_loop",
+      "count": 2,
+      "message": "this loop could be written as a `while let` loop",
+      "path": "mir/src/typed_codegen.rs"
+    },
+    {
+      "code": "clippy::while_let_on_iterator",
+      "count": 2,
+      "message": "this loop could be written as a `for` loop",
+      "path": "mir/src/analysis/nll.rs"
+    }
+  ]
+}

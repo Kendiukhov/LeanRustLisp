@@ -136,6 +136,121 @@ fn open_requires_unique_target() {
 }
 
 #[test]
+fn import_requires_explicit_module_declaration() {
+    let mut env = Env::new();
+    let mut expander = Expander::new();
+    expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
+
+    let diagnostics = process_source(
+        &mut env,
+        &mut expander,
+        "(import std.list as L)",
+        "import_without_module",
+    );
+
+    assert!(
+        diagnostics
+            .diagnostics
+            .iter()
+            .any(|diag| diag.level == Level::Error
+                && diag
+                    .message
+                    .contains("import requires an explicit module declaration")),
+        "expected import-without-module diagnostic, got {:?}",
+        diagnostics
+            .diagnostics
+            .iter()
+            .map(|diag| diag.message_with_code())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn open_requires_explicit_module_declaration() {
+    let mut env = Env::new();
+    let mut expander = Expander::new();
+    expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
+
+    let diagnostics = process_source(&mut env, &mut expander, "(open L)", "open_without_module");
+
+    assert!(
+        diagnostics
+            .diagnostics
+            .iter()
+            .any(|diag| diag.level == Level::Error
+                && diag
+                    .message
+                    .contains("open requires an explicit module declaration")),
+        "expected open-without-module diagnostic, got {:?}",
+        diagnostics
+            .diagnostics
+            .iter()
+            .map(|diag| diag.message_with_code())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn module_declaration_must_be_first() {
+    let mut env = Env::new();
+    let mut expander = Expander::new();
+    expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
+
+    let diagnostics = process_source(
+        &mut env,
+        &mut expander,
+        "(def x (sort 1) (sort 0))\n(module Main)",
+        "module_after_decl",
+    );
+
+    assert!(
+        diagnostics
+            .diagnostics
+            .iter()
+            .any(|diag| diag.level == Level::Error
+                && diag
+                    .message
+                    .contains("module declaration must appear before all other declarations")),
+        "expected module-order diagnostic, got {:?}",
+        diagnostics
+            .diagnostics
+            .iter()
+            .map(|diag| diag.message_with_code())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn only_one_module_declaration_is_allowed_per_file() {
+    let mut env = Env::new();
+    let mut expander = Expander::new();
+    expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
+
+    let diagnostics = process_source(
+        &mut env,
+        &mut expander,
+        "(module A)\n(module B)",
+        "double_module_decl",
+    );
+
+    assert!(
+        diagnostics
+            .diagnostics
+            .iter()
+            .any(|diag| diag.level == Level::Error
+                && diag
+                    .message
+                    .contains("only one module declaration is allowed per file")),
+        "expected duplicate-module diagnostic, got {:?}",
+        diagnostics
+            .diagnostics
+            .iter()
+            .map(|diag| diag.message_with_code())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn qualified_alias_with_multiple_modules_is_error() {
     let mut env = Env::new();
     let mut expander = Expander::new();

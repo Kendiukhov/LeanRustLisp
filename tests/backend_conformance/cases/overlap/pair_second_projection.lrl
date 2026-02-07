@@ -1,0 +1,15 @@
+;;! tag: overlap-subset
+;;! expect_exit: 0
+;;! expect_result_kind: nat
+;;! expect_result: 1
+
+(inductive copy Pair (sort 1)
+  (ctor mk_pair (pi a Nat (pi b Nat Pair))))
+
+(def snd (pi p Pair Nat)
+  (lam p Pair
+    (match p Nat
+      (case (mk_pair a b) b))))
+
+(def entry Nat
+  (snd (mk_pair zero (succ zero))))

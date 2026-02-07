@@ -108,13 +108,15 @@ fn update_block_references(body: &mut Body, remap: &HashMap<usize, usize>) {
                         }
                     }
                 }
-                Terminator::Call { target, .. } => {
-                    if let Some(t) = target {
-                        if let Some(&new_idx) = remap.get(&t.index()) {
-                            *t = BasicBlock::from(new_idx);
-                        }
+                Terminator::Call {
+                    target: Some(target),
+                    ..
+                } => {
+                    if let Some(&new_idx) = remap.get(&target.index()) {
+                        *target = BasicBlock::from(new_idx);
                     }
                 }
+                Terminator::Call { target: None, .. } => {}
                 _ => {}
             }
         }
@@ -313,16 +315,18 @@ fn simplify_cfg_once(body: &mut Body) -> bool {
                         }
                     }
                 }
-                Terminator::Call { target, .. } => {
-                    if let Some(t) = target {
-                        if let Some(&new_target) = resolved_bypass.get(&t.index()) {
-                            if new_target != t.index() {
-                                *t = BasicBlock::from(new_target);
-                                changed = true;
-                            }
+                Terminator::Call {
+                    target: Some(target),
+                    ..
+                } => {
+                    if let Some(&new_target) = resolved_bypass.get(&target.index()) {
+                        if new_target != target.index() {
+                            *target = BasicBlock::from(new_target);
+                            changed = true;
                         }
                     }
                 }
+                Terminator::Call { target: None, .. } => {}
                 _ => {}
             }
         }

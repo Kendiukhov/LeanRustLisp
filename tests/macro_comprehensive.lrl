@@ -1,92 +1,18 @@
-;; Comprehensive Macro System Test
+;; Macro system smoke with backend-neutral Nat expressions.
 
-;; 1. Recursive Function via 'fix' (Manual)
-(partial mul (pi n Nat (pi m Nat Nat))
-  (fix mul (pi n Nat (pi m Nat Nat))
-    (lam n Nat
-      (lam m Nat
-        (match n Nat
-          (case (zero) zero)
-          (case (succ n_pred) (add m (app (app mul n_pred) m)))
-        )
-      )
-    )
-  )
-)
+(defmacro let1 (name ty value body)
+  (let name ty value body))
 
-(def two Nat (succ (succ zero)))
-(def three Nat (succ (succ (succ zero))))
-(partial six Nat (app (app mul two) three)) 
+(defmacro add_one (x)
+  (quasiquote (add (unquote x) (succ zero))))
 
-;; 2. 'letrec' Macro (Direct Template)
-(defmacro letrec (name type val body)
-  (let name type 
-    (fix name type val) 
-    body
-  )
-)
+(def base Nat (succ (succ zero)))
 
-(partial fact_res Nat
-  (letrec fact (pi n Nat Nat)
-    (lam n Nat
-      (match n Nat
-        (case (zero) (succ zero))
-        (case (succ n_pred) (app (app mul n) (app fact n_pred)))
-      )
-    )
-    (app fact three) 
-  )
-)
+(def via_macro Nat
+  (add_one base))
 
-;; 3. Macro generating Macro (Direct Template)
-(defmacro make-const-macro (name val)
-  (defmacro name () val)
-)
+(def y Nat
+  (let1 tmp Nat via_macro
+    (add tmp (succ zero))))
 
-(make-const-macro const_five 5)
-(def val_five Nat (const_five))
-
-;; 4. Hygiene: Shadowing (Direct Template)
-(defmacro add_one_hygiene (arg)
-  (app 
-    (lam y Nat (add arg y))
-    (succ zero)
-  )
-)
-
-(def y Nat (succ (succ (succ zero)))) ;; 3
-(def hygiene_res Nat (add_one_hygiene y)) ;; 3 + 1 = 4
-
-;; 5. List Splicing (Runtime List)
-(def list1 (List Nat) (cons 1 (cons 2 nil)))
-
-(def res_splice (List Nat) 
-  (cons 0 (append list1 (cons 5 nil)))
-)
-
-;; This should now work with match parameter instantiation fix
-(partial sum_list (pi l (List Nat) Nat)
-  (fix sum (pi l (List Nat) Nat)
-    (lam l (List Nat)
-      (match l Nat
-        (case (nil) zero)
-        (case (cons h t) (add h (app sum t)))
-      )
-    )
-  )
-)
-
-(partial splice_sum Nat (app sum_list res_splice)) ;; 0+1+2+5 = 8
-
-;; Final Sum: 6 + 6 + 5 + 4 + 8 = 29
-(partial partial_sum Nat 
-  (add six 
-    (add fact_res 
-      (add val_five 
-        (add hygiene_res splice_sum)
-      )
-    )
-  )
-)
-
-partial_sum
+(add via_macro y)

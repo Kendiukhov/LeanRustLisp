@@ -1,22 +1,9 @@
-;; Test Parameterized Inductives (List)
-;; Relies on Prelude for Nat and List
+;; Parameterized inductive smoke (List Nat).
 
-;; Length function: List Nat -> Nat
-;; T is fixed to Nat in this function
 (def len (pi l (List Nat) Nat)
   (lam l (List Nat)
-    (match l Nat 
-      ;; Motive is (List Nat) -> Nat
-      ;; nil case: returns zero
-      (case (nil) zero) 
-      ;; cons case: takes h:Nat, t:List Nat, ih:Nat. returns succ ih.
-      (case (cons h t ih) (succ ih))
-    )
-  )
-)
+    (match l Nat
+      (case (nil) zero)
+      (case (cons h t ih) (succ ih)))))
 
-;; Test: length of a list
-(def l1 (List Nat) (cons Nat zero (nil Nat)))
-(def l2 (List Nat) (cons Nat (succ zero) l1))
-
-(len l2)
+(len (cons (succ zero) (cons zero nil)))

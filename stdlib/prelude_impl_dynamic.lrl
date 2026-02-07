@@ -1,0 +1,7 @@
+;; Dynamic backend platform layer.
+;; Keep backend-specific runtime surface here.
+
+;; Dynamic evaluation boundary (placeholder; no runtime semantics yet).
+(axiom Dyn (sort 1))
+(axiom EvalCap (sort 1))
+(axiom unsafe eval (pi code Dyn (pi cap EvalCap Dyn)))

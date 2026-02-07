@@ -1,4 +1,4 @@
-(def and
+(def and_local
   (pi a Bool (pi b Bool Bool))
   (lam a Bool
     (lam b Bool
@@ -6,4 +6,4 @@
         (case (true) b)
         (case (false) false)))))
 
-(and true false)
+(and_local true false)

@@ -3,26 +3,77 @@ use crate::{
     Body, BorrowKind, CallOperand, Constant, Literal, Operand, Place, PlaceElem, RuntimeCheckKind,
     Rvalue, Statement, Terminator,
 };
-use kernel::ast::{FunctionKind, Level, Term};
+use kernel::ast::{Level, Term};
 use kernel::checker::{Builtin, Env};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum TypedCodegenReason {
+    UnsupportedFnMut,
+    UnsupportedNonUnaryFunction,
+    UnsupportedCallOperand,
+    UnsupportedProjectionAssignment,
+    UnsupportedPlaceProjection,
+    UnsupportedClosureEnvProjection,
+    UnsupportedClosureType,
+    UnsupportedFixpointType,
+    UnsupportedPolymorphicFunctionValue,
+    InternalInvariant,
+}
+
+impl TypedCodegenReason {
+    pub fn code(self) -> &'static str {
+        match self {
+            TypedCodegenReason::UnsupportedFnMut => "TB001",
+            TypedCodegenReason::UnsupportedNonUnaryFunction => "TB002",
+            TypedCodegenReason::UnsupportedCallOperand => "TB003",
+            TypedCodegenReason::UnsupportedProjectionAssignment => "TB004",
+            TypedCodegenReason::UnsupportedPlaceProjection => "TB005",
+            TypedCodegenReason::UnsupportedClosureEnvProjection => "TB006",
+            TypedCodegenReason::UnsupportedClosureType => "TB007",
+            TypedCodegenReason::UnsupportedFixpointType => "TB008",
+            TypedCodegenReason::UnsupportedPolymorphicFunctionValue => "TB009",
+            TypedCodegenReason::InternalInvariant => "TB900",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypedCodegenError {
+    pub reason: TypedCodegenReason,
     pub message: String,
 }
 
 impl TypedCodegenError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
+            reason: TypedCodegenReason::InternalInvariant,
             message: message.into(),
         }
+    }
+
+    pub fn unsupported(reason: TypedCodegenReason, message: impl Into<String>) -> Self {
+        Self {
+            reason,
+            message: message.into(),
+        }
+    }
+
+    pub fn with_context(self, context: impl AsRef<str>) -> Self {
+        Self {
+            reason: self.reason,
+            message: format!("{}: {}", context.as_ref(), self.message),
+        }
+    }
+
+    pub fn code(&self) -> &'static str {
+        self.reason.code()
     }
 }
 
 impl std::fmt::Display for TypedCodegenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
+        write!(f, "[{}] {}", self.code(), self.message)
     }
 }
 
@@ -52,7 +103,7 @@ pub fn codegen_program(
 
     let mut items = Vec::new();
     items.push(Item::CrateAttr(
-        "allow(dead_code, unused_variables, unused_parens, unreachable_patterns, non_snake_case, non_camel_case_types)".to_string(),
+        "allow(dead_code, unused_variables, unused_parens, unused_mut, unreachable_patterns, non_snake_case, non_camel_case_types)".to_string(),
     ));
     items.push(Item::Use("std::rc::Rc".to_string()));
     items.extend(ctx.emit_callable_runtime_items());
@@ -161,17 +212,11 @@ impl<'a> CodegenContext<'a> {
         for decl in &body.body.local_decls {
             self.check_type_supported(&decl.ty, used_adts)
                 .map_err(|e| {
-                    TypedCodegenError::new(format!(
-                        "typed backend unsupported in {}: {}",
-                        body.name, e.message
-                    ))
+                    e.with_context(format!("typed backend unsupported in {}", body.name))
                 })?;
             for cap_ty in &decl.closure_captures {
                 self.check_type_supported(cap_ty, used_adts).map_err(|e| {
-                    TypedCodegenError::new(format!(
-                        "typed backend unsupported in {}: {}",
-                        body.name, e.message
-                    ))
+                    e.with_context(format!("typed backend unsupported in {}", body.name))
                 })?;
             }
         }
@@ -208,13 +253,10 @@ impl<'a> CodegenContext<'a> {
             MirType::Fn(kind, _regions, args, ret)
             | MirType::FnItem(_, kind, _regions, args, ret)
             | MirType::Closure(kind, _, _regions, args, ret) => {
-                if *kind == FunctionKind::FnMut {
-                    return Err(TypedCodegenError::new(
-                        "FnMut not supported in typed backend",
-                    ));
-                }
+                let _ = kind;
                 if args.len() != 1 {
-                    return Err(TypedCodegenError::new(
+                    return Err(TypedCodegenError::unsupported(
+                        TypedCodegenReason::UnsupportedNonUnaryFunction,
                         "only unary (curried) function args are supported",
                     ));
                 }
@@ -350,15 +392,21 @@ impl<'a> CodegenContext<'a> {
             CallOperand::Borrow(_, place) => {
                 self.check_place_supported(body, place, used_adts)?;
                 let ty = self.place_type(body, place).ok_or_else(|| {
-                    TypedCodegenError::new(format!("unsupported call operand in {}", body.name))
+                    TypedCodegenError::unsupported(
+                        TypedCodegenReason::UnsupportedCallOperand,
+                        format!("unsupported call operand in {}", body.name),
+                    )
                 })?;
                 if !self.is_fn_type(&ty) {
-                    return Err(TypedCodegenError::new(format!(
-                        "borrowed call operand must be a function in {} (local _{} has type {:?})",
-                        body.name,
-                        place.local.index(),
-                        ty
-                    )));
+                    return Err(TypedCodegenError::unsupported(
+                        TypedCodegenReason::UnsupportedCallOperand,
+                        format!(
+                            "borrowed call operand must be a function in {} (local _{} has type {:?})",
+                            body.name,
+                            place.local.index(),
+                            ty
+                        ),
+                    ));
                 }
                 Ok(())
             }
@@ -429,10 +477,10 @@ impl<'a> CodegenContext<'a> {
                                         variant = None;
                                         continue;
                                     }
-                                    return Err(TypedCodegenError::new(format!(
-                                        "unsupported Nat field access in {}",
-                                        body.name
-                                    )));
+                                    return Err(TypedCodegenError::unsupported(
+                                        TypedCodegenReason::UnsupportedPlaceProjection,
+                                        format!("unsupported Nat field access in {}", body.name),
+                                    ));
                                 }
 
                                 current_ty = if let Some(next_ty) =
@@ -442,16 +490,19 @@ impl<'a> CodegenContext<'a> {
                                 } else if let MirType::Adt(adt_id, args) = &current_ty {
                                     self.field_type_without_downcast(adt_id, *field_idx, args)
                                         .ok_or_else(|| {
-                                            TypedCodegenError::new(format!(
-                                                "unsupported field access in {}",
-                                                body.name
-                                            ))
+                                            TypedCodegenError::unsupported(
+                                                TypedCodegenReason::UnsupportedPlaceProjection,
+                                                format!(
+                                                    "unsupported field access in {}",
+                                                    body.name
+                                                ),
+                                            )
                                         })?
                                 } else {
-                                    return Err(TypedCodegenError::new(format!(
-                                        "unsupported field access in {}",
-                                        body.name
-                                    )));
+                                    return Err(TypedCodegenError::unsupported(
+                                        TypedCodegenReason::UnsupportedPlaceProjection,
+                                        format!("unsupported field access in {}", body.name),
+                                    ));
                                 };
                                 self.check_type_supported(&current_ty, used_adts)?;
                                 variant = None;
@@ -460,27 +511,30 @@ impl<'a> CodegenContext<'a> {
                                 current_ty = match current_ty {
                                     MirType::Ref(_, inner, _) | MirType::RawPtr(inner, _) => *inner,
                                     _ => {
-                                        return Err(TypedCodegenError::new(format!(
-                                            "deref projection on non-reference in {}",
-                                            body.name
-                                        )))
+                                        return Err(TypedCodegenError::unsupported(
+                                            TypedCodegenReason::UnsupportedPlaceProjection,
+                                            format!(
+                                                "deref projection on non-reference in {}",
+                                                body.name
+                                            ),
+                                        ))
                                     }
                                 };
                                 self.check_type_supported(&current_ty, used_adts)?;
                                 variant = None;
                             }
                             PlaceElem::Index(_) => {
-                                current_ty = match current_ty {
-                                    MirType::Adt(_, args) => {
-                                        args.get(0).cloned().unwrap_or(MirType::Unit)
-                                    }
-                                    _ => {
-                                        return Err(TypedCodegenError::new(format!(
-                                            "index projection on non-ADT in {}",
-                                            body.name
-                                        )))
-                                    }
-                                };
+                                current_ty = self
+                                    .index_item_type_for_container(&current_ty)
+                                    .ok_or_else(|| {
+                                        TypedCodegenError::unsupported(
+                                            TypedCodegenReason::UnsupportedPlaceProjection,
+                                            format!(
+                                                "index projection on unsupported container in {}",
+                                                body.name
+                                            ),
+                                        )
+                                    })?;
                                 self.check_type_supported(&current_ty, used_adts)?;
                                 variant = None;
                             }
@@ -489,10 +543,10 @@ impl<'a> CodegenContext<'a> {
                     return Ok(());
                 }
             }
-            return Err(TypedCodegenError::new(format!(
-                "unsupported closure env projection in {}",
-                body.name
-            )));
+            return Err(TypedCodegenError::unsupported(
+                TypedCodegenReason::UnsupportedClosureEnvProjection,
+                format!("unsupported closure env projection in {}", body.name),
+            ));
         }
 
         let mut current_ty = self
@@ -516,10 +570,10 @@ impl<'a> CodegenContext<'a> {
                             variant = None;
                             continue;
                         }
-                        return Err(TypedCodegenError::new(format!(
-                            "unsupported Nat field access in {}",
-                            body.name
-                        )));
+                        return Err(TypedCodegenError::unsupported(
+                            TypedCodegenReason::UnsupportedPlaceProjection,
+                            format!("unsupported Nat field access in {}", body.name),
+                        ));
                     }
 
                     current_ty =
@@ -528,16 +582,16 @@ impl<'a> CodegenContext<'a> {
                         } else if let MirType::Adt(adt_id, args) = &current_ty {
                             self.field_type_without_downcast(adt_id, *field_idx, args)
                                 .ok_or_else(|| {
-                                    TypedCodegenError::new(format!(
-                                        "unsupported field access in {}",
-                                        body.name
-                                    ))
+                                    TypedCodegenError::unsupported(
+                                        TypedCodegenReason::UnsupportedPlaceProjection,
+                                        format!("unsupported field access in {}", body.name),
+                                    )
                                 })?
                         } else {
-                            return Err(TypedCodegenError::new(format!(
-                                "unsupported field access in {}",
-                                body.name
-                            )));
+                            return Err(TypedCodegenError::unsupported(
+                                TypedCodegenReason::UnsupportedPlaceProjection,
+                                format!("unsupported field access in {}", body.name),
+                            ));
                         };
                     self.check_type_supported(&current_ty, used_adts)?;
                     variant = None;
@@ -546,25 +600,27 @@ impl<'a> CodegenContext<'a> {
                     current_ty = match current_ty {
                         MirType::Ref(_, inner, _) | MirType::RawPtr(inner, _) => *inner,
                         _ => {
-                            return Err(TypedCodegenError::new(format!(
-                                "deref projection on non-reference in {}",
-                                body.name
-                            )))
+                            return Err(TypedCodegenError::unsupported(
+                                TypedCodegenReason::UnsupportedPlaceProjection,
+                                format!("deref projection on non-reference in {}", body.name),
+                            ))
                         }
                     };
                     self.check_type_supported(&current_ty, used_adts)?;
                     variant = None;
                 }
                 PlaceElem::Index(_) => {
-                    current_ty = match current_ty {
-                        MirType::Adt(_, args) => args.get(0).cloned().unwrap_or(MirType::Unit),
-                        _ => {
-                            return Err(TypedCodegenError::new(format!(
-                                "index projection on non-ADT in {}",
-                                body.name
-                            )))
-                        }
-                    };
+                    current_ty =
+                        self.index_item_type_for_container(&current_ty)
+                            .ok_or_else(|| {
+                                TypedCodegenError::unsupported(
+                                    TypedCodegenReason::UnsupportedPlaceProjection,
+                                    format!(
+                                        "index projection on unsupported container in {}",
+                                        body.name
+                                    ),
+                                )
+                            })?;
                     self.check_type_supported(&current_ty, used_adts)?;
                     variant = None;
                 }
@@ -840,72 +896,98 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                 continue;
             }
 
-            if !is_indexable || layout.variants.len() != 1 {
-                continue;
-            }
-            let variant = &layout.variants[0];
-            if variant.fields.is_empty() {
+            if !is_indexable {
                 continue;
             }
 
-            let ctor_name = self
-                .ctor_name_map
-                .get(&variant.ctor)
-                .cloned()
-                .unwrap_or_else(|| "ctor".to_string());
-            let first_field_ty = &variant.fields[0];
+            let item_ty_mir = if !generics.is_empty() {
+                MirType::Param(0)
+            } else if let Some(inferred) = self.infer_monomorphic_index_item_type(adt_id) {
+                inferred
+            } else {
+                continue;
+            };
             let impl_generics = if generics.is_empty() {
                 String::new()
             } else {
                 format!("<{}>", generics.join(", "))
             };
             let adt_ty = self.name_with_generics(&adt_name, &generics);
-            let item_ty = if !generics.is_empty() {
-                generics[0].clone()
-            } else {
-                self.rust_type(first_field_ty)?
-            };
-            let field_names: Vec<String> = (0..variant.fields.len())
-                .map(|i| {
-                    if i == 0 {
-                        "data".to_string()
-                    } else {
-                        format!("_{}", i)
-                    }
-                })
-                .collect();
-            let pattern = if field_names.is_empty() {
-                format!("{}::{}", adt_name, ctor_name)
-            } else {
-                format!("{}::{}({})", adt_name, ctor_name, field_names.join(", "))
-            };
+            let item_ty = self.rust_type(&item_ty_mir)?;
 
-            let first_field_is_item = matches!(first_field_ty, MirType::Param(0));
-            let first_field_is_list = matches!(
-                first_field_ty,
-                MirType::Adt(list_id, list_args)
-                    if list_builtin.as_ref().is_some_and(|id| id == list_id)
-                        && !list_args.is_empty()
-                        && matches!(list_args[0], MirType::Param(0))
-            );
-            let body_expr = if first_field_is_item {
-                "if index == 0 { data } else { panic!(\"index out of bounds\") }".to_string()
-            } else if first_field_is_list {
-                "runtime_index(data, index as u64)".to_string()
-            } else {
-                "panic!(\"indexing shape unsupported in typed backend\")".to_string()
-            };
+            let mut arms = Vec::new();
+            for (variant_idx, variant) in layout.variants.iter().enumerate() {
+                let ctor_name = self
+                    .ctor_name_map
+                    .get(&variant.ctor)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Ctor{}", variant_idx));
+
+                let source = self.select_index_source_field(&variant.fields, &item_ty_mir);
+                let bind_idx = source.as_ref().map(|(idx, _)| *idx);
+                let bind_name = bind_idx.map(|idx| format!("field_{}", idx));
+                let pattern = if variant.fields.is_empty() {
+                    format!("{}::{}", adt_name, ctor_name)
+                } else {
+                    let parts: Vec<String> = (0..variant.fields.len())
+                        .map(|idx| match (&bind_idx, &bind_name) {
+                            (Some(target), Some(name)) if idx == *target => name.clone(),
+                            _ => "_".to_string(),
+                        })
+                        .collect();
+                    format!("{}::{}({})", adt_name, ctor_name, parts.join(", "))
+                };
+
+                let body_expr = match (source, bind_name) {
+                    (Some((field_idx, IndexSourceKind::Direct)), Some(name)) => {
+                        let value_expr =
+                            if self
+                                .boxed_fields
+                                .contains(&(adt_id.clone(), variant_idx, field_idx))
+                            {
+                                format!("*{}", name)
+                            } else {
+                                name
+                            };
+                        format!(
+                            "if index == 0 {{ {} }} else {{ panic!(\"index out of bounds\") }}",
+                            value_expr
+                        )
+                    }
+                    (Some((field_idx, IndexSourceKind::Nested)), Some(name)) => {
+                        let source_expr =
+                            if self
+                                .boxed_fields
+                                .contains(&(adt_id.clone(), variant_idx, field_idx))
+                            {
+                                format!("*{}", name)
+                            } else {
+                                name
+                            };
+                        format!("runtime_index({}, index as u64)", source_expr)
+                    }
+                    _ => "panic!(\"index out of bounds\")".to_string(),
+                };
+                arms.push(format!("{} => {}", pattern, body_expr));
+            }
+            if arms.is_empty() {
+                continue;
+            }
 
             let text = format!(
                 "impl{} LrlIndex<{}> for {} {{
     fn lrl_index(self, index: usize) -> {} {{
         match self {{
-            {} => {},
-            _ => panic!(\"indexing shape unsupported in typed backend\"),
+            {},
+            _ => panic!(\"index out of bounds\"),
         }}
     }}
 }}",
-                impl_generics, item_ty, adt_ty, item_ty, pattern, body_expr
+                impl_generics,
+                item_ty,
+                adt_ty,
+                item_ty,
+                arms.join(",\n            ")
             );
             items.push(Item::Raw(text));
         }
@@ -1319,9 +1401,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             MirType::Fn(kind, _, args, ret)
             | MirType::FnItem(_, kind, _, args, ret)
             | MirType::Closure(kind, _, _, args, ret) => {
-                if *kind == FunctionKind::FnMut {
-                    return false;
-                }
+                let _ = kind;
                 args.len() == 1 && args[0] == *expected_arg && **ret == *expected_arg
             }
             _ => false,
@@ -1679,37 +1759,36 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             .map(|ty| self.rust_type(ty))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mut captured_names = Vec::new();
-        for idx in 0..param_count {
-            captured_names.push(format!("param_{}", idx));
-        }
-        captured_names.push("motive".to_string());
-
-        let mut entry_params = Vec::new();
+        let mut all_arg_names = Vec::new();
+        let mut all_arg_types = Vec::new();
         for (idx, ty) in param_types.iter().enumerate() {
-            entry_params.push(Param {
-                name: format!("param_{}", idx),
-                ty: Some(ty.clone()),
-            });
+            all_arg_names.push(format!("param_{}", idx));
+            all_arg_types.push(ty.clone());
         }
-        entry_params.push(Param {
-            name: "motive".to_string(),
-            ty: Some(motive_ty.clone()),
-        });
+        all_arg_names.push("motive".to_string());
+        all_arg_types.push(motive_ty.clone());
+        for (idx, ty) in minor_types.iter().enumerate() {
+            all_arg_names.push(format!("minor_{}", idx));
+            all_arg_types.push(ty.clone());
+        }
+        for (idx, ty) in index_types.iter().enumerate() {
+            all_arg_names.push(format!("index_{}", idx));
+            all_arg_types.push(ty.clone());
+        }
+        all_arg_names.push("major".to_string());
+        all_arg_types.push(major_ty.clone());
 
-        let mut entry_arg_names = Vec::new();
-        for idx in 0..minor_types.len() {
-            entry_arg_names.push(format!("minor_{}", idx));
-        }
-        for idx in 0..index_types.len() {
-            entry_arg_names.push(format!("index_{}", idx));
-        }
-        entry_arg_names.push("major".to_string());
+        let entry_first_name = all_arg_names
+            .first()
+            .ok_or_else(|| TypedCodegenError::new("recursor requires at least one argument"))?
+            .clone();
+        let entry_first_ty = all_arg_types
+            .first()
+            .ok_or_else(|| TypedCodegenError::new("recursor requires at least one argument"))?
+            .clone();
+        let entry_ret_ty = self.curried_fn_type(&all_arg_types[1..], ret_ty.clone());
 
-        let mut entry_arg_types = minor_types.clone();
-        entry_arg_types.extend(index_types.clone());
-        entry_arg_types.push(major_ty.clone());
-        let entry_ret_ty = self.curried_fn_type(&entry_arg_types, ret_ty.clone());
+        let captured_names = vec![entry_first_name.clone()];
         let impl_call = self.expr_call(self.expr_path(spec.impl_name()), {
             let mut args = Vec::new();
             for idx in 0..param_count {
@@ -1725,16 +1804,23 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             args.push(self.expr_path("major"));
             args
         });
-        let entry_expr = self.curried_entry_expr(
-            &entry_arg_names,
-            &entry_arg_types,
-            &captured_names,
-            &impl_call,
-            &ret_ty,
-        );
+        let entry_expr = if all_arg_names.len() == 1 {
+            impl_call
+        } else {
+            self.curried_entry_expr(
+                &all_arg_names[1..],
+                &all_arg_types[1..],
+                &captured_names,
+                &impl_call,
+                &ret_ty,
+            )
+        };
         let entry_item = Item::Fn {
             name: self.fn_name_with_generics(&spec.name, &generics),
-            params: entry_params,
+            params: vec![Param {
+                name: entry_first_name,
+                ty: Some(entry_first_ty),
+            }],
             ret: Some(entry_ret_ty),
             body: Block {
                 stmts: Vec::new(),
@@ -1844,6 +1930,13 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                 },
             });
         }
+        arms.push(MatchArm {
+            pat: Pat::Wild,
+            body: Block {
+                stmts: Vec::new(),
+                tail: Some(Box::new(self.expr_unreachable())),
+            },
+        });
 
         let match_expr = Expr::Match {
             scrutinee: Box::new(self.expr_path("major")),
@@ -2328,10 +2421,10 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
         match stmt {
             Statement::Assign(place, rvalue) => {
                 if !place.projection.is_empty() {
-                    return Err(TypedCodegenError::new(format!(
-                        "assignment to projection is not supported in {}",
-                        body.name
-                    )));
+                    return Err(TypedCodegenError::unsupported(
+                        TypedCodegenReason::UnsupportedProjectionAssignment,
+                        format!("assignment to projection is not supported in {}", body.name),
+                    ));
                 }
                 let dest = self.expr_path(format!("_{}", place.local.index()));
                 let expected_ty = self.place_type(body, place);
@@ -2538,7 +2631,13 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
         expected_ty: Option<&MirType>,
     ) -> Result<Expr, TypedCodegenError> {
         match &constant.literal {
-            Literal::Unit => Ok(self.expr_path("()")),
+            Literal::Unit => {
+                if let Some(fn_ty) = expected_ty.filter(|ty| self.is_fn_type(ty)) {
+                    self.erased_unit_callable_expr(fn_ty)
+                } else {
+                    Ok(self.expr_path("()"))
+                }
+            }
             Literal::Nat(n) => Ok(self.expr_lit_int(n.to_string())),
             Literal::Bool(b) => Ok(self.expr_lit_bool(*b)),
             Literal::GlobalDef(name) => {
@@ -2561,17 +2660,18 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             Literal::Closure(idx, captures) => {
                 let global_idx = body.closure_base + *idx;
                 let fn_ty = expected_ty.unwrap_or(&constant.ty);
-                if self.type_contains_params(fn_ty) {
-                    return Err(TypedCodegenError::new(
-                        "polymorphic function-value specialization is not yet supported in typed backend",
-                    ));
-                }
-                let arg_ty = self
-                    .fn_arg_type(fn_ty)
-                    .ok_or_else(|| TypedCodegenError::new("unsupported closure type"))?;
-                let ret_ty = self
-                    .fn_ret_type(fn_ty)
-                    .ok_or_else(|| TypedCodegenError::new("unsupported closure type"))?;
+                let arg_ty = self.fn_arg_type(fn_ty).ok_or_else(|| {
+                    TypedCodegenError::unsupported(
+                        TypedCodegenReason::UnsupportedClosureType,
+                        "unsupported closure type",
+                    )
+                })?;
+                let ret_ty = self.fn_ret_type(fn_ty).ok_or_else(|| {
+                    TypedCodegenError::unsupported(
+                        TypedCodegenReason::UnsupportedClosureType,
+                        "unsupported closure type",
+                    )
+                })?;
                 let callable_ty = self.callable_dyn_type(arg_ty, ret_ty)?;
                 let cap_expr = self.capture_tuple_expr(body, captures, closure_env)?;
                 let adapter_expr = Expr::StructInit {
@@ -2598,17 +2698,18 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             Literal::Fix(idx, captures) => {
                 let global_idx = body.closure_base + *idx;
                 let fn_ty = expected_ty.unwrap_or(&constant.ty);
-                if self.type_contains_params(fn_ty) {
-                    return Err(TypedCodegenError::new(
-                        "polymorphic function-value specialization is not yet supported in typed backend",
-                    ));
-                }
-                let arg_ty = self
-                    .fn_arg_type(fn_ty)
-                    .ok_or_else(|| TypedCodegenError::new("unsupported fixpoint type"))?;
-                let ret_ty = self
-                    .fn_ret_type(fn_ty)
-                    .ok_or_else(|| TypedCodegenError::new("unsupported fixpoint type"))?;
+                let arg_ty = self.fn_arg_type(fn_ty).ok_or_else(|| {
+                    TypedCodegenError::unsupported(
+                        TypedCodegenReason::UnsupportedFixpointType,
+                        "unsupported fixpoint type",
+                    )
+                })?;
+                let ret_ty = self.fn_ret_type(fn_ty).ok_or_else(|| {
+                    TypedCodegenError::unsupported(
+                        TypedCodegenReason::UnsupportedFixpointType,
+                        "unsupported fixpoint type",
+                    )
+                })?;
                 let callable_ty = self.callable_dyn_type(arg_ty, ret_ty)?;
                 let cap_expr = self.capture_tuple_expr(body, captures, closure_env)?;
                 let cyclic_builder = Expr::Closure {
@@ -2736,14 +2837,16 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                             variant = None;
                             continue;
                         }
-                        return Err(TypedCodegenError::new(
+                        return Err(TypedCodegenError::unsupported(
+                            TypedCodegenReason::UnsupportedPlaceProjection,
                             "unsupported Nat projection in typed backend",
                         ));
                     }
                     let (adt_id, args) = match &current_ty {
                         MirType::Adt(adt_id, args) => (adt_id.clone(), args.clone()),
                         _ => {
-                            return Err(TypedCodegenError::new(
+                            return Err(TypedCodegenError::unsupported(
+                                TypedCodegenReason::UnsupportedPlaceProjection,
                                 "field projection only supported on ADTs",
                             ))
                         }
@@ -2760,7 +2863,12 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                         next_ty
                     } else {
                         self.field_type_without_downcast(&adt_id, *field_idx, &args)
-                            .ok_or_else(|| TypedCodegenError::new("unsupported field access"))?
+                            .ok_or_else(|| {
+                                TypedCodegenError::unsupported(
+                                    TypedCodegenReason::UnsupportedPlaceProjection,
+                                    "unsupported field access",
+                                )
+                            })?
                     };
 
                     let adt_name = self.adt_name(&adt_id);
@@ -2880,7 +2988,8 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                             has_arm = true;
                         }
                         if !has_arm {
-                            return Err(TypedCodegenError::new(
+                            return Err(TypedCodegenError::unsupported(
+                                TypedCodegenReason::UnsupportedPlaceProjection,
                                 "missing downcast for multi-variant ADT",
                             ));
                         }
@@ -2922,7 +3031,8 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                             current_ty = (**inner).clone();
                         }
                         _ => {
-                            return Err(TypedCodegenError::new(
+                            return Err(TypedCodegenError::unsupported(
+                                TypedCodegenReason::UnsupportedPlaceProjection,
                                 "deref projection on non-reference type",
                             ))
                         }
@@ -2930,14 +3040,14 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                     variant = None;
                 }
                 PlaceElem::Index(local) => {
-                    let elem_ty = match &current_ty {
-                        MirType::Adt(_, args) => args.get(0).cloned().unwrap_or(MirType::Unit),
-                        _ => {
-                            return Err(TypedCodegenError::new(
-                                "index projection only supported on ADTs",
-                            ))
-                        }
-                    };
+                    let elem_ty =
+                        self.index_item_type_for_container(&current_ty)
+                            .ok_or_else(|| {
+                                TypedCodegenError::unsupported(
+                                    TypedCodegenReason::UnsupportedPlaceProjection,
+                                    "index projection only supported on indexable containers",
+                                )
+                            })?;
                     let index_expr = self.local_expr(local.index(), AccessKind::Copy)?;
                     expr = self.expr_call_path("runtime_index", vec![expr, index_expr]);
                     current_ty = elem_ty;
@@ -3022,6 +3132,15 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                         },
                     });
                 }
+                // Generic ADTs may include a synthetic `__Phantom` variant in emitted Rust.
+                // Treat it as unreachable for discriminant purposes.
+                arms.push(MatchArm {
+                    pat: Pat::Wild,
+                    body: Block {
+                        stmts: vec![Stmt::Expr(self.expr_unreachable())],
+                        tail: None,
+                    },
+                });
                 Ok(Expr::Match {
                     scrutinee: Box::new(expr),
                     arms,
@@ -3071,11 +3190,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             MirType::Fn(kind, _regions, args, ret)
             | MirType::FnItem(_, kind, _regions, args, ret)
             | MirType::Closure(kind, _, _regions, args, ret) => {
-                if *kind == FunctionKind::FnMut {
-                    return Err(TypedCodegenError::new(
-                        "FnMut not supported in typed backend",
-                    ));
-                }
+                let _ = kind;
                 let arg_ty = args
                     .get(0)
                     .ok_or_else(|| TypedCodegenError::new("missing function arg"))?;
@@ -3168,12 +3283,6 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             | MirType::IndexTerm(_)
             | MirType::Opaque { .. } => {}
         }
-    }
-
-    fn type_contains_params(&self, ty: &MirType) -> bool {
-        let mut indices = BTreeSet::new();
-        Self::collect_param_indices_in_type(ty, &mut indices);
-        !indices.is_empty()
     }
 
     fn generics_for_types<'b, I>(&self, types: I) -> Vec<String>
@@ -3453,6 +3562,49 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
         }
     }
 
+    fn erased_unit_callable_expr(&self, fn_ty: &MirType) -> Result<Expr, TypedCodegenError> {
+        let arg_ty = self.fn_arg_type(fn_ty).ok_or_else(|| {
+            TypedCodegenError::unsupported(
+                TypedCodegenReason::UnsupportedClosureType,
+                "function-typed unit literal is missing argument type",
+            )
+        })?;
+        let ret_ty = self.fn_ret_type(fn_ty).ok_or_else(|| {
+            TypedCodegenError::unsupported(
+                TypedCodegenReason::UnsupportedClosureType,
+                "function-typed unit literal is missing return type",
+            )
+        })?;
+        let callable_ty = self.callable_dyn_type(arg_ty, ret_ty)?;
+        let arg_ty_str = self.rust_type(arg_ty)?;
+        let panic_expr = Expr::MacroCall {
+            name: "panic".to_string(),
+            args: vec![self
+                .expr_lit_str("attempted to execute erased function literal (unit placeholder)")],
+        };
+        let closure = Expr::Closure {
+            params: vec![Param {
+                name: "__erased_arg".to_string(),
+                ty: Some(arg_ty_str),
+            }],
+            body: Block {
+                stmts: vec![Stmt::Expr(panic_expr)],
+                tail: None,
+            },
+            is_move: true,
+        };
+        let rc_expr = self.expr_call_path("Rc::new", vec![closure]);
+        Ok(Expr::Block(Block {
+            stmts: vec![Stmt::Let {
+                name: "__callable".to_string(),
+                mutable: false,
+                ty: Some(callable_ty),
+                value: Some(rc_expr),
+            }],
+            tail: Some(Box::new(self.expr_path("__callable"))),
+        }))
+    }
+
     fn closure_capture_types(&self, body: &Body) -> Result<Vec<MirType>, TypedCodegenError> {
         let env_decl = body
             .local_decls
@@ -3520,12 +3672,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                                 variant = None;
                             }
                             PlaceElem::Index(_) => {
-                                current_ty = match current_ty {
-                                    MirType::Adt(_, args) => {
-                                        args.get(0).cloned().unwrap_or(MirType::Unit)
-                                    }
-                                    _ => return None,
-                                };
+                                current_ty = self.index_item_type_for_container(&current_ty)?;
                                 variant = None;
                             }
                         }
@@ -3553,10 +3700,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                     variant = None;
                 }
                 PlaceElem::Index(_) => {
-                    current_ty = match current_ty {
-                        MirType::Adt(_, args) => args.get(0).cloned().unwrap_or(MirType::Unit),
-                        _ => return None,
-                    };
+                    current_ty = self.index_item_type_for_container(&current_ty)?;
                     variant = None;
                 }
             }
@@ -3566,6 +3710,86 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
 
     fn local_type<'b>(&self, body: &'b TypedBody, idx: usize) -> Option<&'b MirType> {
         body.body.local_decls.get(idx).map(|decl| &decl.ty)
+    }
+
+    fn index_item_type_for_container(&self, ty: &MirType) -> Option<MirType> {
+        match ty {
+            MirType::Adt(adt_id, args) => self.index_item_type_for_adt(adt_id, args),
+            _ => None,
+        }
+    }
+
+    fn index_item_type_for_adt(&self, adt_id: &AdtId, args: &[MirType]) -> Option<MirType> {
+        let list_builtin = self.ids.builtin_adt(Builtin::List);
+        if list_builtin.as_ref().is_some_and(|id| id == adt_id) {
+            return args.first().cloned();
+        }
+        if !self.ids.is_indexable_adt(adt_id) {
+            return None;
+        }
+        let item_ty = if let Some(first) = args.first() {
+            first.clone()
+        } else {
+            self.infer_monomorphic_index_item_type(adt_id)?
+        };
+        Some(item_ty)
+    }
+
+    fn infer_monomorphic_index_item_type(&self, adt_id: &AdtId) -> Option<MirType> {
+        let layout = self.adt_layouts.get(adt_id)?;
+        let mut candidate: Option<MirType> = None;
+        for variant in &layout.variants {
+            for field_ty in &variant.fields {
+                let mut field_candidate = self.index_item_type_from_field_shallow(field_ty);
+                if field_candidate.is_none() && variant.fields.len() == 1 {
+                    field_candidate = Some(field_ty.clone());
+                }
+                if let Some(item_ty) = field_candidate {
+                    if let Some(existing) = &candidate {
+                        if existing != &item_ty {
+                            return None;
+                        }
+                    } else {
+                        candidate = Some(item_ty);
+                    }
+                }
+            }
+        }
+        candidate
+    }
+
+    fn index_item_type_from_field_shallow(&self, field_ty: &MirType) -> Option<MirType> {
+        let MirType::Adt(field_adt, field_args) = field_ty else {
+            return None;
+        };
+        let list_builtin = self.ids.builtin_adt(Builtin::List);
+        if list_builtin.as_ref().is_some_and(|id| id == field_adt) {
+            return field_args.first().cloned();
+        }
+        if self.ids.is_indexable_adt(field_adt) {
+            return field_args.first().cloned();
+        }
+        None
+    }
+
+    fn select_index_source_field(
+        &self,
+        fields: &[MirType],
+        item_ty: &MirType,
+    ) -> Option<(usize, IndexSourceKind)> {
+        for (idx, field_ty) in fields.iter().enumerate() {
+            if field_ty == item_ty {
+                return Some((idx, IndexSourceKind::Direct));
+            }
+        }
+        for (idx, field_ty) in fields.iter().enumerate() {
+            if let Some(field_item_ty) = self.index_item_type_from_field_shallow(field_ty) {
+                if &field_item_ty == item_ty {
+                    return Some((idx, IndexSourceKind::Nested));
+                }
+            }
+        }
+        None
     }
 
     fn capture_tuple_type(&self, captures: &[MirType]) -> Result<String, TypedCodegenError> {
@@ -4407,6 +4631,12 @@ struct ClosureUsage {
     fix_capture_len: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum IndexSourceKind {
+    Direct,
+    Nested,
+}
+
 #[derive(Debug, Clone)]
 struct ClosureEnv {
     capture_names: Vec<String>,
@@ -4467,4 +4697,279 @@ fn count_indices(ty: &std::rc::Rc<kernel::ast::Term>, num_params: usize) -> usiz
 
 fn sanitize_name(name: &str) -> String {
     crate::codegen::sanitize_name(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{codegen_program, TypedBody, TypedCodegenError, TypedCodegenReason, TypedProgram};
+    use crate::types::{IdRegistry, MirType};
+    use crate::{
+        BasicBlockData, Body, BorrowKind, CallOperand, Constant, Literal, Local, LocalDecl,
+        Operand, Place, PlaceElem, Rvalue, Statement, Terminator,
+    };
+    use kernel::ast::FunctionKind;
+    use kernel::checker::Env;
+
+    fn local(name: &str, ty: MirType) -> LocalDecl {
+        LocalDecl::new(ty, Some(name.to_string()))
+    }
+
+    fn nat_const(value: u64) -> Operand {
+        Operand::Constant(Box::new(Constant {
+            literal: Literal::Nat(value),
+            ty: MirType::Nat,
+        }))
+    }
+
+    fn build_body(
+        arg_count: usize,
+        local_decls: Vec<LocalDecl>,
+        statements: Vec<Statement>,
+        terminator: Terminator,
+    ) -> Body {
+        let mut body = Body::new(arg_count);
+        body.local_decls = local_decls;
+        body.basic_blocks.push(BasicBlockData {
+            statements,
+            terminator: Some(terminator),
+        });
+        body
+    }
+
+    fn single_def_program(body: Body) -> TypedProgram {
+        TypedProgram {
+            defs: vec![TypedBody {
+                name: "entry".to_string(),
+                body,
+                closure_base: 0,
+            }],
+            closures: Vec::new(),
+            main_name: Some("entry".to_string()),
+        }
+    }
+
+    fn reason_for_body(body: Body) -> TypedCodegenReason {
+        let env = Env::new();
+        let ids = IdRegistry::from_env(&env);
+        let program = single_def_program(body);
+        codegen_program(&env, &ids, &program)
+            .expect_err("expected typed codegen error for malformed MIR")
+            .reason
+    }
+
+    #[test]
+    fn typed_codegen_reason_codes_are_stable() {
+        assert_eq!(TypedCodegenReason::UnsupportedFnMut.code(), "TB001");
+        assert_eq!(
+            TypedCodegenReason::UnsupportedNonUnaryFunction.code(),
+            "TB002"
+        );
+        assert_eq!(TypedCodegenReason::UnsupportedCallOperand.code(), "TB003");
+        assert_eq!(
+            TypedCodegenReason::UnsupportedProjectionAssignment.code(),
+            "TB004"
+        );
+        assert_eq!(
+            TypedCodegenReason::UnsupportedPlaceProjection.code(),
+            "TB005"
+        );
+        assert_eq!(
+            TypedCodegenReason::UnsupportedClosureEnvProjection.code(),
+            "TB006"
+        );
+        assert_eq!(TypedCodegenReason::UnsupportedClosureType.code(), "TB007");
+        assert_eq!(TypedCodegenReason::UnsupportedFixpointType.code(), "TB008");
+        assert_eq!(
+            TypedCodegenReason::UnsupportedPolymorphicFunctionValue.code(),
+            "TB009"
+        );
+        assert_eq!(TypedCodegenReason::InternalInvariant.code(), "TB900");
+    }
+
+    #[test]
+    fn typed_codegen_error_display_includes_reason_code() {
+        let err = TypedCodegenError::unsupported(
+            TypedCodegenReason::UnsupportedFnMut,
+            "FnMut not supported in typed backend",
+        );
+        assert_eq!(
+            err.to_string(),
+            "[TB001] FnMut not supported in typed backend"
+        );
+    }
+
+    #[test]
+    fn typed_codegen_rejects_non_unary_function_shape_with_tb002() {
+        let body = build_body(
+            0,
+            vec![
+                local("_0", MirType::Unit),
+                local(
+                    "_1",
+                    MirType::Fn(
+                        FunctionKind::Fn,
+                        Vec::new(),
+                        vec![MirType::Nat, MirType::Nat],
+                        Box::new(MirType::Nat),
+                    ),
+                ),
+            ],
+            Vec::new(),
+            Terminator::Return,
+        );
+        assert_eq!(
+            reason_for_body(body),
+            TypedCodegenReason::UnsupportedNonUnaryFunction
+        );
+    }
+
+    #[test]
+    fn typed_codegen_rejects_invalid_call_operand_with_tb003() {
+        let body = build_body(
+            0,
+            vec![local("_0", MirType::Unit), local("_1", MirType::Nat)],
+            Vec::new(),
+            Terminator::Call {
+                func: CallOperand::Borrow(BorrowKind::Shared, Place::from(Local(1))),
+                args: vec![nat_const(0)],
+                destination: Place::from(Local(0)),
+                target: None,
+            },
+        );
+        assert_eq!(
+            reason_for_body(body),
+            TypedCodegenReason::UnsupportedCallOperand
+        );
+    }
+
+    #[test]
+    fn typed_codegen_rejects_projection_assignment_with_tb004() {
+        let body = build_body(
+            0,
+            vec![local("_0", MirType::Unit), local("_1", MirType::Nat)],
+            vec![Statement::Assign(
+                Place {
+                    local: Local(1),
+                    projection: vec![PlaceElem::Downcast(1), PlaceElem::Field(0)],
+                },
+                Rvalue::Use(nat_const(1)),
+            )],
+            Terminator::Return,
+        );
+        assert_eq!(
+            reason_for_body(body),
+            TypedCodegenReason::UnsupportedProjectionAssignment
+        );
+    }
+
+    #[test]
+    fn typed_codegen_rejects_invalid_place_projection_with_tb005() {
+        let body = build_body(
+            0,
+            vec![local("_0", MirType::Unit), local("_1", MirType::Nat)],
+            vec![Statement::Assign(
+                Place::from(Local(0)),
+                Rvalue::Use(Operand::Copy(Place {
+                    local: Local(1),
+                    projection: vec![PlaceElem::Field(0)],
+                })),
+            )],
+            Terminator::Return,
+        );
+        assert_eq!(
+            reason_for_body(body),
+            TypedCodegenReason::UnsupportedPlaceProjection
+        );
+    }
+
+    #[test]
+    fn typed_codegen_rejects_invalid_closure_env_projection_with_tb006() {
+        let body = build_body(
+            2,
+            vec![
+                local("_0", MirType::Unit),
+                local("_1", MirType::Unit),
+                local("_2", MirType::Unit),
+            ],
+            vec![Statement::Assign(
+                Place::from(Local(0)),
+                Rvalue::Use(Operand::Copy(Place {
+                    local: Local(1),
+                    projection: vec![PlaceElem::Deref],
+                })),
+            )],
+            Terminator::Return,
+        );
+        assert_eq!(
+            reason_for_body(body),
+            TypedCodegenReason::UnsupportedClosureEnvProjection
+        );
+    }
+
+    #[test]
+    fn typed_codegen_rejects_invalid_closure_constant_type_with_tb007() {
+        let body = build_body(
+            0,
+            vec![local("_0", MirType::Unit)],
+            vec![Statement::Assign(
+                Place::from(Local(0)),
+                Rvalue::Use(Operand::Constant(Box::new(Constant {
+                    literal: Literal::Closure(0, Vec::new()),
+                    ty: MirType::Unit,
+                }))),
+            )],
+            Terminator::Return,
+        );
+        assert_eq!(
+            reason_for_body(body),
+            TypedCodegenReason::UnsupportedClosureType
+        );
+    }
+
+    #[test]
+    fn typed_codegen_rejects_invalid_fix_constant_type_with_tb008() {
+        let body = build_body(
+            0,
+            vec![local("_0", MirType::Unit)],
+            vec![Statement::Assign(
+                Place::from(Local(0)),
+                Rvalue::Use(Operand::Constant(Box::new(Constant {
+                    literal: Literal::Fix(0, Vec::new()),
+                    ty: MirType::Unit,
+                }))),
+            )],
+            Terminator::Return,
+        );
+        assert_eq!(
+            reason_for_body(body),
+            TypedCodegenReason::UnsupportedFixpointType
+        );
+    }
+
+    #[test]
+    fn typed_codegen_accepts_former_tb001_fnmut_type_shape() {
+        let body = build_body(
+            0,
+            vec![
+                local("_0", MirType::Unit),
+                local(
+                    "_1",
+                    MirType::Fn(
+                        FunctionKind::FnMut,
+                        Vec::new(),
+                        vec![MirType::Nat],
+                        Box::new(MirType::Nat),
+                    ),
+                ),
+            ],
+            Vec::new(),
+            Terminator::Return,
+        );
+        let env = Env::new();
+        let ids = IdRegistry::from_env(&env);
+        let program = single_def_program(body);
+        let code = codegen_program(&env, &ids, &program)
+            .expect("typed codegen should support former TB001 fnmut shape");
+        assert!(!code.is_empty(), "typed backend should emit Rust code");
+    }
 }

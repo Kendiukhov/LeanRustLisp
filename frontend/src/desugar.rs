@@ -6,9 +6,22 @@ use kernel::ast::FunctionKind;
 use std::collections::BTreeMap;
 
 type HygieneEnv = BTreeMap<String, BTreeMap<Vec<ScopeId>, String>>;
+type PiBinderParse = (
+    String,
+    Syntax,
+    kernel::ast::BinderInfo,
+    (String, Vec<ScopeId>),
+    Syntax,
+);
 
 pub struct Desugarer {
     gensym_counter: usize,
+}
+
+impl Default for Desugarer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Desugarer {
@@ -35,20 +48,24 @@ impl Desugarer {
         let mut ref_idx = 0usize;
         let mut def_idx = 0usize;
         while ref_idx < ref_norm.len() && def_idx < def_norm.len() {
-            if ref_norm[ref_idx] == def_norm[def_idx] {
-                ref_idx += 1;
-                def_idx += 1;
-            } else if ref_norm[ref_idx] < def_norm[def_idx] {
-                ref_idx += 1;
-            } else {
-                return false;
+            match ref_norm[ref_idx].cmp(&def_norm[def_idx]) {
+                std::cmp::Ordering::Equal => {
+                    ref_idx += 1;
+                    def_idx += 1;
+                }
+                std::cmp::Ordering::Less => {
+                    ref_idx += 1;
+                }
+                std::cmp::Ordering::Greater => {
+                    return false;
+                }
             }
         }
         def_idx == def_norm.len()
     }
 
     fn insert_binding(env: &mut HygieneEnv, name: String, scopes: Vec<ScopeId>, fresh: String) {
-        let entry = env.entry(name).or_insert_with(BTreeMap::new);
+        let entry = env.entry(name).or_default();
         entry.insert(scopes, fresh);
     }
 
@@ -136,7 +153,6 @@ impl Desugarer {
     }
 
     fn substitute_surface_var(
-        &self,
         term: SurfaceTerm,
         name: &str,
         replacement: &SurfaceTerm,
@@ -152,30 +168,30 @@ impl Desugarer {
             }
             SurfaceTermKind::Sort(l) => mk_term(SurfaceTermKind::Sort(l), span),
             SurfaceTermKind::App(f, x, is_explicit) => {
-                let new_f = self.substitute_surface_var(*f, name, replacement);
-                let new_x = self.substitute_surface_var(*x, name, replacement);
+                let new_f = Self::substitute_surface_var(*f, name, replacement);
+                let new_x = Self::substitute_surface_var(*x, name, replacement);
                 mk_term(
                     SurfaceTermKind::App(Box::new(new_f), Box::new(new_x), is_explicit),
                     span,
                 )
             }
             SurfaceTermKind::Index(base, index) => {
-                let new_base = self.substitute_surface_var(*base, name, replacement);
-                let new_index = self.substitute_surface_var(*index, name, replacement);
+                let new_base = Self::substitute_surface_var(*base, name, replacement);
+                let new_index = Self::substitute_surface_var(*index, name, replacement);
                 mk_term(
                     SurfaceTermKind::Index(Box::new(new_base), Box::new(new_index)),
                     span,
                 )
             }
             SurfaceTermKind::Lam(binder, info, kind, ty, body) => {
-                let new_ty = self.substitute_surface_var(*ty, name, replacement);
+                let new_ty = Self::substitute_surface_var(*ty, name, replacement);
                 if binder == name {
                     mk_term(
                         SurfaceTermKind::Lam(binder, info, kind, Box::new(new_ty), body),
                         span,
                     )
                 } else {
-                    let new_body = self.substitute_surface_var(*body, name, replacement);
+                    let new_body = Self::substitute_surface_var(*body, name, replacement);
                     mk_term(
                         SurfaceTermKind::Lam(
                             binder,
@@ -189,14 +205,14 @@ impl Desugarer {
                 }
             }
             SurfaceTermKind::Pi(binder, info, kind, ty, body) => {
-                let new_ty = self.substitute_surface_var(*ty, name, replacement);
+                let new_ty = Self::substitute_surface_var(*ty, name, replacement);
                 if binder == name {
                     mk_term(
                         SurfaceTermKind::Pi(binder, info, kind, Box::new(new_ty), body),
                         span,
                     )
                 } else {
-                    let new_body = self.substitute_surface_var(*body, name, replacement);
+                    let new_body = Self::substitute_surface_var(*body, name, replacement);
                     mk_term(
                         SurfaceTermKind::Pi(
                             binder,
@@ -210,15 +226,15 @@ impl Desugarer {
                 }
             }
             SurfaceTermKind::Let(binder, ty, val, body) => {
-                let new_ty = self.substitute_surface_var(*ty, name, replacement);
-                let new_val = self.substitute_surface_var(*val, name, replacement);
+                let new_ty = Self::substitute_surface_var(*ty, name, replacement);
+                let new_val = Self::substitute_surface_var(*val, name, replacement);
                 if binder == name {
                     mk_term(
                         SurfaceTermKind::Let(binder, Box::new(new_ty), Box::new(new_val), body),
                         span,
                     )
                 } else {
-                    let new_body = self.substitute_surface_var(*body, name, replacement);
+                    let new_body = Self::substitute_surface_var(*body, name, replacement);
                     mk_term(
                         SurfaceTermKind::Let(
                             binder,
@@ -234,11 +250,11 @@ impl Desugarer {
             SurfaceTermKind::Ctor(name, idx) => mk_term(SurfaceTermKind::Ctor(name, idx), span),
             SurfaceTermKind::Rec(name) => mk_term(SurfaceTermKind::Rec(name), span),
             SurfaceTermKind::Fix(binder, ty, body) => {
-                let new_ty = self.substitute_surface_var(*ty, name, replacement);
+                let new_ty = Self::substitute_surface_var(*ty, name, replacement);
                 if binder == name {
                     mk_term(SurfaceTermKind::Fix(binder, Box::new(new_ty), body), span)
                 } else {
-                    let new_body = self.substitute_surface_var(*body, name, replacement);
+                    let new_body = Self::substitute_surface_var(*body, name, replacement);
                     mk_term(
                         SurfaceTermKind::Fix(binder, Box::new(new_ty), Box::new(new_body)),
                         span,
@@ -246,14 +262,14 @@ impl Desugarer {
                 }
             }
             SurfaceTermKind::Match(scrutinee, ret_type, cases) => {
-                let new_scrutinee = self.substitute_surface_var(*scrutinee, name, replacement);
-                let new_ret_type = self.substitute_surface_var(*ret_type, name, replacement);
+                let new_scrutinee = Self::substitute_surface_var(*scrutinee, name, replacement);
+                let new_ret_type = Self::substitute_surface_var(*ret_type, name, replacement);
                 let mut new_cases = Vec::new();
                 for (ctor_name, bindings, body) in cases {
                     if bindings.iter().any(|b| b == name) {
                         new_cases.push((ctor_name, bindings, body));
                     } else {
-                        let new_body = self.substitute_surface_var(body, name, replacement);
+                        let new_body = Self::substitute_surface_var(body, name, replacement);
                         new_cases.push((ctor_name, bindings, new_body));
                     }
                 }
@@ -267,8 +283,8 @@ impl Desugarer {
                 )
             }
             SurfaceTermKind::Eval(code, cap) => {
-                let new_code = self.substitute_surface_var(*code, name, replacement);
-                let new_cap = self.substitute_surface_var(*cap, name, replacement);
+                let new_code = Self::substitute_surface_var(*code, name, replacement);
+                let new_cap = Self::substitute_surface_var(*cap, name, replacement);
                 mk_term(
                     SurfaceTermKind::Eval(Box::new(new_code), Box::new(new_cap)),
                     span,
@@ -499,13 +515,7 @@ impl Desugarer {
                             };
 
                             let mut kind_opt = None;
-                            let mut parsed: Option<(
-                                String,
-                                Syntax,
-                                kernel::ast::BinderInfo,
-                                (String, Vec<ScopeId>),
-                                Syntax,
-                            )> = None;
+                            let mut parsed: Option<PiBinderParse> = None;
 
                             if list.len() >= 4 {
                                 if let Some((kind, strict)) =
@@ -635,6 +645,13 @@ impl Desugarer {
                             ))
                         }
                         "app" => {
+                            if list.len() != 3 {
+                                return Err(ExpansionError::ArgumentCountMismatch(
+                                    "app".to_string(),
+                                    2,
+                                    list.len() - 1,
+                                ));
+                            }
                             let f = self.desugar_with_env(list[1].clone(), env)?;
                             if let SyntaxKind::BracedList(l) = &list[2].kind {
                                 if l.len() == 1 {
@@ -772,10 +789,10 @@ impl Desugarer {
                             ))
                         }
                         "match" => {
-                            if list.len() < 3 {
+                            if list.len() < 4 {
                                 return Err(ExpansionError::ArgumentCountMismatch(
                                     "match".to_string(),
-                                    2,
+                                    3,
                                     list.len() - 1,
                                 ));
                             }
@@ -947,7 +964,7 @@ impl Desugarer {
                                     let body =
                                         self.desugar_with_env(nlist[2].clone(), &mut body_env)?;
                                     if let Some(fresh) = fresh_t_name {
-                                        self.substitute_surface_var(body, &fresh, &param_t)
+                                        Self::substitute_surface_var(body, &fresh, &param_t)
                                     } else {
                                         body
                                     }
@@ -1035,7 +1052,7 @@ impl Desugarer {
                                         let body =
                                             self.desugar_with_env(clist[2].clone(), &mut body_env)?;
                                         let body = if let Some(fresh) = fresh_t_name {
-                                            self.substitute_surface_var(body, &fresh, &param_t)
+                                            Self::substitute_surface_var(body, &fresh, &param_t)
                                         } else {
                                             body
                                         };
@@ -1053,9 +1070,10 @@ impl Desugarer {
                                     ));
                                 };
 
-                            let mut cases = Vec::new();
-                            cases.push(("nil".to_string(), Vec::new(), nil_body));
-                            cases.push(("cons".to_string(), cons_bindings, cons_body));
+                            let cases = vec![
+                                ("nil".to_string(), Vec::new(), nil_body),
+                                ("cons".to_string(), cons_bindings, cons_body),
+                            ];
 
                             let scrut_name = self.gensym("scrut");
                             let scrut_ty = mk_term(
@@ -1114,7 +1132,7 @@ impl Desugarer {
                                 ));
                             }
                             let content = &list[1];
-                            Ok(self.quote_syntax(content, span))
+                            Ok(Self::quote_syntax(content, span))
                         }
                         _ => {
                             let mut term = self.desugar_with_env(list[0].clone(), env)?;
@@ -1225,13 +1243,13 @@ impl Desugarer {
                     span,
                     scopes: Vec::new(),
                 };
-                Ok(self.quote_syntax(&syntax, span))
+                Ok(Self::quote_syntax(&syntax, span))
             }
             _ => Err(ExpansionError::UnknownForm(format!("{:?}", syntax.kind))),
         }
     }
 
-    fn quote_syntax(&self, syntax: &Syntax, span: Span) -> SurfaceTerm {
+    fn quote_syntax(syntax: &Syntax, span: Span) -> SurfaceTerm {
         let nil_tm = mk_term(SurfaceTermKind::Ctor("List".to_string(), 0), span); // nil
         let cons_ctor = mk_term(SurfaceTermKind::Ctor("List".to_string(), 1), span); // cons
         let build_list = |items: Vec<SurfaceTerm>| {
@@ -1263,7 +1281,7 @@ impl Desugarer {
             SyntaxKind::List(list) => {
                 let items = list
                     .iter()
-                    .map(|item| self.quote_syntax(item, span))
+                    .map(|item| Self::quote_syntax(item, span))
                     .collect();
                 build_list(items)
             }

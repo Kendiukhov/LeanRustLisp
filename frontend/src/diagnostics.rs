@@ -86,6 +86,12 @@ pub struct DiagnosticCollector {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+impl Default for DiagnosticCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DiagnosticCollector {
     pub fn new() -> Self {
         Self {

@@ -1,0 +1,17 @@
+;;! tag: overlap-subset
+;;! expect_exit: 0
+;;! expect_result_kind: nat
+;;! expect_result: 2
+
+(def id_nat (pi n Nat Nat)
+  (lam n Nat n))
+
+(def succ1 (pi n Nat Nat)
+  (lam n Nat (succ n)))
+
+(def chain (pi n Nat Nat)
+  (lam n Nat
+    (succ1 (id_nat n))))
+
+(def entry Nat
+  (chain (succ zero)))

@@ -104,9 +104,9 @@ call semantics and ownership. See `docs/spec/function_kinds.md` for details.
 *   **Fn** calls use a shared borrow of the closure environment.
 *   **FnMut** calls use a mutable borrow of the closure environment.
 *   **FnOnce** calls consume the closure environment.
-*   Function values are non-Copy by default. The current compiler does not
-    derive Copy for closures based on captures; pass by shared reference or
-    lift to top-level definitions if duplication is required.
+*   Function values are non-Copy by default.
+*   MIR lowering may mark a closure value Copy-by-clone when all captured
+    values are Copy, enabling safe duplication of reusable closure adapters.
 
 ### 6.1 Implicit binders (observational-only)
 

@@ -1,19 +1,12 @@
 ;; Indexing surface syntax smoke tests for VecDyn/Slice/Array.
 
-(unsafe index_vec_dyn_ok Nat
-  (let v (VecDyn Nat)
-    (mk_vec_dyn {Nat}
-      (cons {Nat} 0 (cons {Nat} 1 (nil {Nat}))))
-    v[0]))
+(unsafe index_vec_dyn_ok (pi v (VecDyn Nat) Nat)
+  (lam v (VecDyn Nat) v[zero]))
 
-(unsafe index_slice_ok Nat
-  (let s (Slice Nat)
-    (mk_slice {Nat}
-      (cons {Nat} 5 (cons {Nat} 6 (nil {Nat}))))
-    s[1]))
+(unsafe index_slice_ok (pi s (Slice Nat) Nat)
+  (lam s (Slice Nat) s[zero]))
 
-(unsafe index_array_ok Nat
-  (let a (Array Nat)
-    (mk_array {Nat}
-      (cons {Nat} 7 (cons {Nat} 8 (nil {Nat}))))
-    a[0]))
+(unsafe index_array_ok (pi a (Array Nat) Nat)
+  (lam a (Array Nat) a[zero]))
+
+(def entry Nat zero)

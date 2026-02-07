@@ -1,0 +1,17 @@
+;;! tag: overlap-subset
+;;! expect_exit: 0
+;;! expect_result_kind: nat
+;;! expect_result: 2
+
+(def add_local (pi n Nat (pi m Nat Nat))
+  (lam n Nat
+    (lam m Nat
+      (match n Nat
+        (case (zero) m)
+        (case (succ k ih) (succ ih))))))
+
+(def double (pi n Nat Nat)
+  (lam n Nat (add_local n n)))
+
+(def entry Nat
+  (double (succ zero)))

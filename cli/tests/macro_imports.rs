@@ -36,8 +36,8 @@ fn import_macros_resolves_relative_path() {
         (mk-id my_id)
     "#;
 
-    fs::write(&macros_path, macros_src).expect("Failed to write macros file");
-    fs::write(&main_path, main_src).expect("Failed to write main file");
+    fs::write(macros_path, macros_src).expect("Failed to write macros file");
+    fs::write(main_path.as_path(), main_src).expect("Failed to write main file");
 
     let content = fs::read_to_string(&main_path).expect("Failed to read main file");
     let filename = main_path.to_string_lossy().to_string();

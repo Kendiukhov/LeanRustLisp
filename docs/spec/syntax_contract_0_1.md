@@ -746,7 +746,7 @@ Likely code locations: `frontend/src/declaration_parser.rs`, `frontend/src/desug
 
 4) Move `match_list` into prelude sugar/macros and remove core special-case parser/desugar support
 Justification: currently hardcoded and unused; should be either promoted to core or moved to prelude macros.
-Likely code locations: `frontend/src/desugar.rs`, `stdlib/prelude.lrl`.
+Likely code locations: `frontend/src/desugar.rs`, `stdlib/prelude_api.lrl`.
 
 5) Add explicit syntax for grouped def modifiers
 Justification: current mix of `(def opaque ...)` and `(opaque ...)` is easy to misuse.

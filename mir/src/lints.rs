@@ -19,7 +19,7 @@ impl<'a> PanicFreeLinter<'a> {
     pub fn check(&mut self) {
         // Check local declarations for interior mutability types
         for (i, decl) in self.body.local_decls.iter().enumerate() {
-            if self.contains_interior_mutability(&decl.ty) {
+            if Self::contains_interior_mutability(&decl.ty) {
                 self.errors.push(format!(
                     "Local {:?} uses interior mutability (RefCell/Mutex/Atomic). Forbidden in panic-free profile.",
                     i
@@ -81,18 +81,18 @@ impl<'a> PanicFreeLinter<'a> {
         }
     }
 
-    fn contains_interior_mutability(&self, ty: &MirType) -> bool {
+    fn contains_interior_mutability(ty: &MirType) -> bool {
         match ty {
             MirType::InteriorMutable(_, _) => true,
-            MirType::Ref(_, inner, _) => self.contains_interior_mutability(inner),
-            MirType::Adt(_, args) => args.iter().any(|a| self.contains_interior_mutability(a)),
+            MirType::Ref(_, inner, _) => Self::contains_interior_mutability(inner),
+            MirType::Adt(_, args) => args.iter().any(Self::contains_interior_mutability),
             MirType::Fn(_, _, args, ret)
             | MirType::FnItem(_, _, _, args, ret)
             | MirType::Closure(_, _, _, args, ret) => {
-                args.iter().any(|a| self.contains_interior_mutability(a))
-                    || self.contains_interior_mutability(ret)
+                args.iter().any(Self::contains_interior_mutability)
+                    || Self::contains_interior_mutability(ret)
             }
-            MirType::RawPtr(inner, _) => self.contains_interior_mutability(inner),
+            MirType::RawPtr(inner, _) => Self::contains_interior_mutability(inner),
             _ => false,
         }
     }

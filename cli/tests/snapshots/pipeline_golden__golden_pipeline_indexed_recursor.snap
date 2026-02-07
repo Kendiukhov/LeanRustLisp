@@ -4,7 +4,7 @@ assertion_line: 343
 expression: output
 ---
 Diagnostics:
-- Error: [M300] MIR typing error in vlen closure 6: Assignment type mismatch: expected Adt(AdtId(Vec, 4342519251499682640), [Param(0), IndexTerm(Var(1))]), got Adt(AdtId(Vec, 4342519251499682640), [Unit, IndexTerm(Var(0))])
+- Error: [M300] MIR typing error in vlen closure 6: Assignment type mismatch: expected Adt(AdtId(Vec, 4342519251499682640), [Param(0), IndexTerm(Var(1))]), got Adt(AdtId(Vec, 4342519251499682640), [Param(0), IndexTerm(Var(0))])
 
 DefEqConfig
   fuel: 100000

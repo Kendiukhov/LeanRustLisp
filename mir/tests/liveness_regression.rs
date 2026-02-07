@@ -132,7 +132,7 @@ fn compute_liveness_reference(body: &Body) -> (Vec<HashSet<Local>>, Vec<HashSet<
                 }
             }
             if new_out != outs[i] {
-                outs[i] = new_out.clone();
+                outs[i].clone_from(&new_out);
                 changed = true;
             }
 

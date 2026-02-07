@@ -45,7 +45,8 @@ LRL uses a **Scope Sets** model (simplified for this stage).
     *   Syntax passed as arguments to the macro *retains* its original scopes (it does not get the fresh scope).
 4.  **Binder Logic**:
     *   A binder (like `lam x`) binds a name `x` with a specific set of scopes.
-    *   A usage `x` refers to that binder only if its **normalized scope set exactly matches** the binder's scope set. There is no subset/superset compatibility in the current implementation.
+    *   A usage `x` refers to that binder when the binder's normalized scope set is a **subset** of the usage scope set.
+    *   Unscoped binders are only resolved by unscoped usages (scoped references do not fall back to unscoped names).
 
 ### Example
 ```lisp
@@ -55,8 +56,8 @@ LRL uses a **Scope Sets** model (simplified for this stage).
 ```
 *   The `let` binder `x` has scopes `{Module}`.
 *   The `(m)` expands to `x` with scopes `{Module, MacroScope}`.
-*   The usage `x` `{Module, MacroScope}` does *not* accidentally bind to `let x` `{Module}` if we enforce strict matching or if the macro scope makes it distinct.
-*   *Note*: This is stricter than standard scope-set hygiene (Racket-style). Nested macro invocations do not resolve to binders introduced by outer macros unless the scope sets are exactly equal. In practice, macros don’t implicitly see bindings introduced by other macros unless those bindings are passed explicitly.
+*   Macro-introduced references do *not* accidentally bind to unrelated unscoped/local binders; the extra macro scope prevents fallback to unscoped names.
+*   *Note*: Hygiene resolution is subset-based with deterministic tie-breaking, not strict equality. Nested macro invocations do not implicitly capture binders from outer macro expansions unless scope propagation makes that binder visible.
 
 ### Nested Macro Example (Current Behavior)
 ```lisp
@@ -65,8 +66,8 @@ LRL uses a **Scope Sets** model (simplified for this stage).
 (outer (inner))
 ```
 **Defined behavior:** `inner` resolves to the global `x` (or remains unbound), **not** the `x`
-introduced by `outer`. This is the intentional consequence of strict scope matching in the current
-implementation; cross-macro capture does not occur unless the binding is passed explicitly.
+introduced by `outer`. This follows current subset-based scope resolution and macro-scope
+propagation; cross-macro capture does not occur unless the binding is passed explicitly.
 
 ## Attributes and Hygienic Metadata
 

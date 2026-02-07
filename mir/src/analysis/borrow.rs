@@ -21,6 +21,12 @@ pub struct BorrowState {
     pub holders: HashMap<Local, HashSet<Loan>>,
 }
 
+impl Default for BorrowState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BorrowState {
     pub fn new() -> Self {
         BorrowState {
@@ -330,7 +336,7 @@ impl<'a> BorrowChecker<'a> {
             }
             Terminator::Return => {
                 if let Some(held) = state.holders.get(&Local(0)) {
-                    for loan in held {
+                    if let Some(loan) = held.iter().next() {
                         return Err(format!(
                             "Escaping reference: Returning a reference to local variable {:?}",
                             loan.place
@@ -448,7 +454,7 @@ impl<'a> BorrowChecker<'a> {
                 }
                 PlaceElem::Index(_) => {
                     if let MirType::Adt(_, args) = &current_ty {
-                        if let Some(elem_ty) = args.get(0).cloned() {
+                        if let Some(elem_ty) = args.first().cloned() {
                             current_ty = elem_ty;
                         }
                     }
@@ -480,26 +486,22 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
-                if dest.projection.is_empty() {
-                    if let Err(_) = state.check_access(dest, true) {
-                        self.structured_errors
-                            .push(BorrowError::AssignWhileBorrowed {
-                                place: dest.clone(),
-                                location,
-                                context: BorrowErrorContext::default(),
-                            });
-                    }
+                if dest.projection.is_empty() && state.check_access(dest, true).is_err() {
+                    self.structured_errors
+                        .push(BorrowError::AssignWhileBorrowed {
+                            place: dest.clone(),
+                            location,
+                            context: BorrowErrorContext::default(),
+                        });
                 }
 
-                if let Rvalue::Ref(kind, src_place) = rvalue {
-                    if *kind == BorrowKind::Mut {
-                        if let Err(_) = self.check_mutability(src_place) {
-                            self.structured_errors.push(BorrowError::MutateSharedRef {
-                                place: src_place.clone(),
-                                location,
-                                context: BorrowErrorContext::default(),
-                            });
-                        }
+                if let Rvalue::Ref(BorrowKind::Mut, src_place) = rvalue {
+                    if self.check_mutability(src_place).is_err() {
+                        self.structured_errors.push(BorrowError::MutateSharedRef {
+                            place: src_place.clone(),
+                            location,
+                            context: BorrowErrorContext::default(),
+                        });
                     }
                 }
             }

@@ -1,0 +1,13 @@
+;;! tag: overlap-subset
+;;! expect_exit: 0
+;;! expect_result_kind: nat
+;;! expect_result: 1
+
+(def choose_nat (pi b Bool Nat)
+  (lam b Bool
+    (match b Nat
+      (case (true) (succ zero))
+      (case (false) zero))))
+
+(def entry Nat
+  (choose_nat true))

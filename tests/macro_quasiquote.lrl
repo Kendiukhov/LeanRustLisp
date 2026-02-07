@@ -1,25 +1,10 @@
-;; tests/macro_quasiquote.lrl
-;; append is provided by the prelude
+;; Quasiquote/unquote smoke in Nat-only form.
 
-(defmacro list1 (x) 
-  (quasiquote (cons (unquote x) nil)))
+(defmacro plus_two (x)
+  (quasiquote (add (unquote x) (succ (succ zero)))))
 
-(defmacro list2 (x y)
-  (quasiquote (cons (unquote x) (cons (unquote y) nil))))
+(def x Nat (succ zero))
+(def q1 Nat (plus_two x))
+(def q2 Nat (plus_two (succ (succ zero))))
 
-(defmacro splice (l)
-  (quasiquote (cons 1 (append (unquote-splicing l) (cons 4 nil)))))
-
-(def q1 (List Nat) (list1 42))
-(def q2 (List Nat) (list2 1 2))
-
-;; q3: Splice (2 3) into (1 ... 4) via a syntax list.
-(def l_inner (List Nat) (cons 2 (cons 3 nil)))
-
-;; Pass a syntax list containing the symbol l_inner.
-;; This expands to (cons 1 (append l_inner (cons 4 nil))).
-(def q3 (List Nat) (splice (quasiquote (l_inner))))
-
-(def manual_q3 (List Nat) (cons 1 (append l_inner (cons 4 nil))))
-
-q3
+(add q1 q2)

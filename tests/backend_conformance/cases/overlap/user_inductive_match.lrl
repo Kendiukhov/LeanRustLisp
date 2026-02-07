@@ -1,0 +1,17 @@
+;;! tag: overlap-subset
+;;! expect_exit: 0
+;;! expect_result_kind: nat
+;;! expect_result: 2
+
+(inductive copy Color (sort 1)
+  (ctor red Color)
+  (ctor rgb (pi r Nat (pi g Nat (pi b Nat Color)))))
+
+(def code (pi c Color Nat)
+  (lam c Color
+    (match c Nat
+      (case (red) zero)
+      (case (rgb r g b) (succ (succ zero))))))
+
+(def entry Nat
+  (code (rgb zero (succ zero) zero)))

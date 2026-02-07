@@ -1,0 +1,13 @@
+;;! tag: overlap-subset
+;;! expect_exit: 0
+;;! expect_result_kind: bool
+;;! expect_result: false
+
+(def not_b (pi b Bool Bool)
+  (lam b Bool
+    (match b Bool
+      (case (true) false)
+      (case (false) true))))
+
+(def entry Bool
+  (not_b true))

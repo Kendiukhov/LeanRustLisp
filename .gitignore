@@ -10,3 +10,5 @@
 /build/
 *.snap.new
 /output.txt
+/agents/
+/docs/audit/

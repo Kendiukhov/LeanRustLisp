@@ -1,19 +1,13 @@
+;; Simple macro smoke.
 
-(def q1 (List Nat) (quote (1)))
-q1
+(def q1 Nat (succ zero))
 
-(defmacro mk_singleton (val)
-  (quasiquote (cons (unquote val) nil)))
+(defmacro mk_inc (val)
+  (quasiquote (add (unquote val) (succ zero))))
 
-(def q2 (List Nat) (mk_singleton 1))
-q2
+(def q2 Nat (mk_inc (succ zero)))
 
-(def x Nat 10)
-(def q3 (List Nat) (mk_singleton x))
-q3
+(def x Nat (succ (succ zero)))
+(def q3 Nat (mk_inc x))
 
-;; (quote x) inside macro should substitute x if substitution descends
-(defmacro basic-quote (val) 
-  (quote val))
-
-(basic-quote 42)
+(add q1 (add q2 q3))

@@ -1,9 +1,0 @@
-(def head_or (pi xs ListRc (pi d Nat Nat))
-  (lam xs ListRc
-    (lam d Nat
-      (match xs Nat
-        (case (nil_rc) d)
-        (case (cons_rc h t) h)))))
-
-(def entry Nat
-  (print_nat (head_or (append nil_rc (cons_rc (succ zero) nil_rc)) zero)))

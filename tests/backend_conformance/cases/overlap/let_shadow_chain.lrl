@@ -1,0 +1,10 @@
+;;! tag: overlap-subset
+;;! expect_exit: 0
+;;! expect_result_kind: nat
+;;! expect_result: 3
+
+(def entry Nat
+  (let x Nat (succ zero)
+    (let x Nat (succ x)
+      (let x Nat (succ x)
+        x))))

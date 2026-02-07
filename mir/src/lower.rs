@@ -48,6 +48,7 @@ impl fmt::Display for LoweringError {
 impl std::error::Error for LoweringError {}
 
 type LoweringResult<T> = Result<T, LoweringError>;
+type FunctionSignature = (FunctionKind, Vec<Region>, Vec<MirType>, Box<MirType>);
 
 pub type StableTermId = u64;
 
@@ -548,7 +549,7 @@ impl<'a> LoweringContext<'a> {
         Ok(scope)
     }
 
-    fn substitute_params_offset(&self, ty: &MirType, offset: usize, params: &[MirType]) -> MirType {
+    fn substitute_params_offset(ty: &MirType, offset: usize, params: &[MirType]) -> MirType {
         match ty {
             MirType::Param(idx) if *idx >= offset => {
                 let rel = idx - offset;
@@ -557,46 +558,46 @@ impl<'a> LoweringContext<'a> {
             MirType::Adt(id, args) => MirType::Adt(
                 id.clone(),
                 args.iter()
-                    .map(|arg| self.substitute_params_offset(arg, offset, params))
+                    .map(|arg| Self::substitute_params_offset(arg, offset, params))
                     .collect(),
             ),
             MirType::Ref(region, inner, mutability) => MirType::Ref(
                 *region,
-                Box::new(self.substitute_params_offset(inner, offset, params)),
+                Box::new(Self::substitute_params_offset(inner, offset, params)),
                 *mutability,
             ),
             MirType::Fn(kind, region_params, args, ret) => MirType::Fn(
                 *kind,
                 region_params.clone(),
                 args.iter()
-                    .map(|arg| self.substitute_params_offset(arg, offset, params))
+                    .map(|arg| Self::substitute_params_offset(arg, offset, params))
                     .collect(),
-                Box::new(self.substitute_params_offset(ret, offset, params)),
+                Box::new(Self::substitute_params_offset(ret, offset, params)),
             ),
             MirType::FnItem(def_id, kind, region_params, args, ret) => MirType::FnItem(
                 *def_id,
                 *kind,
                 region_params.clone(),
                 args.iter()
-                    .map(|arg| self.substitute_params_offset(arg, offset, params))
+                    .map(|arg| Self::substitute_params_offset(arg, offset, params))
                     .collect(),
-                Box::new(self.substitute_params_offset(ret, offset, params)),
+                Box::new(Self::substitute_params_offset(ret, offset, params)),
             ),
             MirType::Closure(kind, self_region, region_params, args, ret) => MirType::Closure(
                 *kind,
                 *self_region,
                 region_params.clone(),
                 args.iter()
-                    .map(|arg| self.substitute_params_offset(arg, offset, params))
+                    .map(|arg| Self::substitute_params_offset(arg, offset, params))
                     .collect(),
-                Box::new(self.substitute_params_offset(ret, offset, params)),
+                Box::new(Self::substitute_params_offset(ret, offset, params)),
             ),
             MirType::RawPtr(inner, mutability) => MirType::RawPtr(
-                Box::new(self.substitute_params_offset(inner, offset, params)),
+                Box::new(Self::substitute_params_offset(inner, offset, params)),
                 *mutability,
             ),
             MirType::InteriorMutable(inner, kind) => MirType::InteriorMutable(
-                Box::new(self.substitute_params_offset(inner, offset, params)),
+                Box::new(Self::substitute_params_offset(inner, offset, params)),
                 *kind,
             ),
             MirType::IndexTerm(term) => MirType::IndexTerm(term.clone()),
@@ -693,7 +694,7 @@ impl<'a> LoweringContext<'a> {
             result = MirType::Fn(kind, region_params.clone(), vec![arg_ty], Box::new(result));
         }
         if !param_subst.is_empty() {
-            result = self.substitute_params_offset(&result, outer_param_offset, &param_subst);
+            result = Self::substitute_params_offset(&result, outer_param_offset, &param_subst);
         }
         Ok(Some(result))
     }
@@ -870,7 +871,7 @@ impl<'a> LoweringContext<'a> {
     fn function_signature_from_type(
         &mut self,
         ty: &Rc<Term>,
-    ) -> LoweringResult<Option<(FunctionKind, Vec<Region>, Vec<MirType>, Box<MirType>)>> {
+    ) -> LoweringResult<Option<FunctionSignature>> {
         let ty_norm = whnf_in_ctx(
             self.kernel_env,
             &self.checker_ctx,
@@ -1293,9 +1294,9 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    fn count_pi_args(&self, ty: &Rc<Term>) -> usize {
+    fn count_pi_args(ty: &Rc<Term>) -> usize {
         match &**ty {
-            Term::Pi(_, body, _, _) => 1 + self.count_pi_args(body),
+            Term::Pi(_, body, _, _) => 1 + Self::count_pi_args(body),
             _ => 0,
         }
     }
@@ -1333,7 +1334,7 @@ impl<'a> LoweringContext<'a> {
                         if let Some(decl) = self.kernel_env.get_inductive(ind_name) {
                             let num_params = decl.num_params;
                             let num_indices =
-                                self.count_pi_args(&decl.ty).saturating_sub(num_params);
+                                Self::count_pi_args(&decl.ty).saturating_sub(num_params);
                             let num_ctors = decl.ctors.len();
                             let motive_pos = num_params;
                             let indices_start = motive_pos + 1 + num_ctors;
@@ -1905,31 +1906,33 @@ impl<'a> LoweringContext<'a> {
         let apply = |kind: FunctionKind,
                      region_params: &[Region],
                      args: &[MirType],
-                     ret: &Box<MirType>|
+                     ret: &MirType|
          -> LoweringResult<MirType> {
             if args.is_empty() {
                 Err(LoweringError::new(
                     "Function type has no arguments".to_string(),
                 ))
             } else if args.len() == 1 {
-                Ok((**ret).clone())
+                Ok(ret.clone())
             } else {
                 Ok(MirType::Fn(
                     kind,
                     region_params.to_vec(),
                     args[1..].to_vec(),
-                    ret.clone(),
+                    Box::new(ret.clone()),
                 ))
             }
         };
 
         match func_ty {
-            MirType::Fn(kind, region_params, args, ret) => apply(*kind, region_params, args, ret),
+            MirType::Fn(kind, region_params, args, ret) => {
+                apply(*kind, region_params, args, ret.as_ref())
+            }
             MirType::FnItem(_, kind, region_params, args, ret) => {
-                apply(*kind, region_params, args, ret)
+                apply(*kind, region_params, args, ret.as_ref())
             }
             MirType::Closure(kind, _self_region, region_params, args, ret) => {
-                apply(*kind, region_params, args, ret)
+                apply(*kind, region_params, args, ret.as_ref())
             }
             _ => Err(LoweringError::new(format!(
                 "Expected function type in MIR, got {:?}",
@@ -2118,7 +2121,7 @@ impl<'a> LoweringContext<'a> {
                                 )));
                             }
 
-                            let _elem_ty = args.get(0).cloned().unwrap_or(MirType::Unit);
+                            let _elem_ty = args.first().cloned().unwrap_or(MirType::Unit);
                             let mut projection = container_place.projection.clone();
                             projection.push(PlaceElem::Index(index_local));
                             let indexed_place = Place {
@@ -2290,10 +2293,8 @@ impl<'a> LoweringContext<'a> {
                         current_func_ty = result_ty;
                         current_func_place = None;
                         current_func_is_temp = true;
-                    } else {
-                        if current_func_is_temp {
-                            self.push_statement(Statement::StorageDead(current_func));
-                        }
+                    } else if current_func_is_temp {
+                        self.push_statement(Statement::StorageDead(current_func));
                     }
                 }
 
@@ -2361,9 +2362,10 @@ impl<'a> LoweringContext<'a> {
 
                 if destination.projection.is_empty() {
                     let decl = &mut self.body.local_decls[destination.local.index()];
-                    decl.closure_captures = capture_plan.mir_types.clone();
-                    if capture_plan.mir_types.is_empty() {
-                        // Non-capturing closures are safe to copy, even if inferred as FnOnce.
+                    decl.closure_captures.clone_from(&capture_plan.mir_types);
+                    if capture_plan.is_copy.iter().all(|is_copy| *is_copy) {
+                        // Closures with copyable captures can be duplicated by cloning.
+                        // This keeps recursive recursor minor-premise closures reusable.
                         decl.is_copy = true;
                     }
                 }
@@ -2378,18 +2380,35 @@ impl<'a> LoweringContext<'a> {
                         )));
                     }
                 };
-                sub_ctx.push_temp_local(ret_ty, Some("_0".to_string()))?;
+                let outer_checker_ctx = self.checker_ctx.clone();
+                sub_ctx.checker_ctx = outer_checker_ctx.clone();
+                let arg_mir_ty = sub_ctx.lower_type(&arg_ty)?;
+                sub_ctx.checker_ctx = outer_checker_ctx.push(arg_ty.clone());
+                let ret_mir_ty = sub_ctx.lower_type(&ret_ty)?;
+
+                sub_ctx.push_temp_local_with_mir(
+                    ret_ty.clone(),
+                    ret_mir_ty,
+                    Some("_0".to_string()),
+                )?;
+                sub_ctx.checker_ctx = outer_checker_ctx.clone();
 
                 let env_local = sub_ctx.push_temp_local(
                     Rc::new(Term::Sort(kernel::ast::Level::Zero)),
                     Some("env".to_string()),
                 )?;
                 if !capture_plan.mir_types.is_empty() {
-                    sub_ctx.body.local_decls[env_local.index()].closure_captures =
-                        capture_plan.mir_types.clone();
+                    sub_ctx.body.local_decls[env_local.index()]
+                        .closure_captures
+                        .clone_from(&capture_plan.mir_types);
                 }
-                let arg_local =
-                    sub_ctx.push_temp_local(arg_ty.clone(), Some("arg0".to_string()))?;
+                sub_ctx.checker_ctx = outer_checker_ctx.clone();
+                let arg_local = sub_ctx.push_temp_local_with_mir(
+                    arg_ty.clone(),
+                    arg_mir_ty,
+                    Some("arg0".to_string()),
+                )?;
+                sub_ctx.checker_ctx = Context::new();
 
                 let mut capture_locals = HashMap::new();
                 for (i, outer_idx) in capture_plan.outer_indices.iter().enumerate() {
@@ -2573,7 +2592,7 @@ impl<'a> LoweringContext<'a> {
 
                 if destination.projection.is_empty() {
                     let decl = &mut self.body.local_decls[destination.local.index()];
-                    decl.closure_captures = capture_plan.mir_types.clone();
+                    decl.closure_captures.clone_from(&capture_plan.mir_types);
                 }
 
                 let ret_ty = match &**ty {
@@ -2585,7 +2604,18 @@ impl<'a> LoweringContext<'a> {
                         )));
                     }
                 };
-                sub_ctx.push_temp_local(ret_ty, Some("_0".to_string()))?;
+                let outer_checker_ctx = self.checker_ctx.clone();
+                sub_ctx.checker_ctx = outer_checker_ctx.clone();
+                let arg_mir_ty = sub_ctx.lower_type(&arg_ty)?;
+                sub_ctx.checker_ctx = outer_checker_ctx.push(arg_ty.clone());
+                let ret_mir_ty = sub_ctx.lower_type(&ret_ty)?;
+
+                sub_ctx.push_temp_local_with_mir(
+                    ret_ty.clone(),
+                    ret_mir_ty,
+                    Some("_0".to_string()),
+                )?;
+                sub_ctx.checker_ctx = outer_checker_ctx.clone();
 
                 let env_local = sub_ctx.push_temp_local(
                     Rc::new(Term::Sort(kernel::ast::Level::Zero)),
@@ -2593,12 +2623,17 @@ impl<'a> LoweringContext<'a> {
                 )?;
                 if !capture_plan.mir_types.is_empty() {
                     let mut env_types = Vec::with_capacity(capture_plan.mir_types.len() + 1);
-                    env_types.push(self.lower_type(&ty)?);
+                    env_types.push(self.lower_type(ty)?);
                     env_types.extend(capture_plan.mir_types.clone());
                     sub_ctx.body.local_decls[env_local.index()].closure_captures = env_types;
                 }
-                let arg_local =
-                    sub_ctx.push_temp_local(arg_ty.clone(), Some("arg0".to_string()))?;
+                sub_ctx.checker_ctx = outer_checker_ctx.clone();
+                let arg_local = sub_ctx.push_temp_local_with_mir(
+                    arg_ty.clone(),
+                    arg_mir_ty,
+                    Some("arg0".to_string()),
+                )?;
+                sub_ctx.checker_ctx = Context::new();
 
                 let mut capture_locals = HashMap::new();
                 // Unpack captures from env fields starting at 1 (env[0] is self)
@@ -2882,14 +2917,14 @@ impl<'a> LoweringContext<'a> {
                     }
 
                     if rec_index_locals.len() != n_indices {
-                        rec_index_locals = index_locals.clone();
+                        rec_index_locals.clone_from(&index_locals);
                         rec_index_temps.clear();
-                        rec_index_terms_final = Some(index_terms.iter().cloned().collect());
+                        rec_index_terms_final = Some(index_terms.to_vec());
                     }
 
                     let rec_term = Rc::new(Term::Rec(ind_name.to_string(), levels.to_vec()));
                     let rec_ty = compute_recursor_type(decl, levels);
-                    let mut rec_args: Vec<Rc<Term>> = params.iter().cloned().collect();
+                    let mut rec_args: Vec<Rc<Term>> = params.to_vec();
                     rec_args.push(motive_term.clone());
                     rec_args.extend(minor_terms.iter().cloned());
                     let rec_index_terms = rec_index_terms_final.as_deref().unwrap_or(index_terms);
@@ -3066,14 +3101,9 @@ fn instantiate_params(mut ty: Rc<Term>, params: &[Rc<Term>]) -> Rc<Term> {
 fn peel_pi_binders(ty: &Rc<Term>) -> (Vec<Rc<Term>>, Rc<Term>) {
     let mut binders = Vec::new();
     let mut current = ty.clone();
-    loop {
-        match &*current {
-            Term::Pi(dom, body, _, _) => {
-                binders.push(dom.clone());
-                current = body.clone();
-            }
-            _ => break,
-        }
+    while let Term::Pi(dom, body, _, _) = &*current {
+        binders.push(dom.clone());
+        current = body.clone();
     }
     (binders, current)
 }
@@ -3412,6 +3442,44 @@ mod tests {
 
         println!("{:?}", body);
         assert!(body.basic_blocks.len() > 1);
+    }
+
+    #[test]
+    fn test_polymorphic_lambda_closure_locals_keep_param_types() {
+        let sort1 = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
+        let term = Rc::new(Term::Lam(
+            sort1,
+            Rc::new(Term::Lam(
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::Var(0)),
+                BinderInfo::Default,
+                FunctionKind::Fn,
+            )),
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        ));
+
+        let env = Env::new();
+        let ids = IdRegistry::from_env(&env);
+        let ret_ty = Rc::new(Term::Sort(Level::Zero));
+        let mut ctx =
+            LoweringContext::new(vec![], ret_ty, &env, &ids).expect("context init should succeed");
+        let target = ctx.new_block();
+
+        ctx.lower_term(&term, Place::from(Local(0)), target)
+            .expect("lowering polymorphic lambda should succeed");
+
+        let derived = ctx.derived_bodies.borrow();
+        let has_param_typed_closure = derived.iter().any(|body| {
+            body.local_decls.len() >= 3
+                && body.local_decls[0].ty == MirType::Param(0)
+                && body.local_decls[2].ty == MirType::Param(0)
+        });
+        assert!(
+            has_param_typed_closure,
+            "expected closure body locals to preserve Param(0) for polymorphic lambda, got {:?}",
+            *derived
+        );
     }
 
     #[test]

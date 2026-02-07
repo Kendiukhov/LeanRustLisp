@@ -56,6 +56,10 @@ impl LocationIndex {
         self.total
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.total == 0
+    }
+
     pub fn index(&self, location: Location) -> Option<usize> {
         let block_idx = location.block.0 as usize;
         if block_idx >= self.block_offsets.len() {
@@ -423,7 +427,7 @@ impl BorrowCheckResult {
                 new_statements.push(stmt.clone());
             }
 
-            while let Some((_idx, kind)) = check_iter.next() {
+            for (_idx, kind) in check_iter {
                 new_statements.push(Statement::RuntimeCheck(kind));
             }
 
@@ -712,8 +716,8 @@ impl RegionInferenceContext {
         let mut constraints: Vec<(Region, Region)> = self
             .constraints
             .iter()
-            .filter_map(|constraint| match constraint {
-                Constraint::Outlives(sup, sub) => Some((*sup, *sub)),
+            .map(|constraint| match constraint {
+                Constraint::Outlives(sup, sub) => (*sup, *sub),
             })
             .collect();
         constraints.sort_by_key(|(sup, sub)| (sup.0, sub.0));
@@ -743,9 +747,7 @@ impl RegionInferenceContext {
         let mut chain = vec![root];
         let mut cursor = root;
         while cursor != region {
-            let Some(parent) = prev.get(&cursor).copied() else {
-                return None;
-            };
+            let parent = prev.get(&cursor).copied()?;
             chain.push(parent);
             cursor = parent;
         }
@@ -877,20 +879,18 @@ impl<'a> NllChecker<'a> {
                 }
             }
 
-            if let Some(term) = &bb_data.terminator {
-                if let Terminator::Call {
-                    func,
-                    args,
-                    destination,
-                    ..
-                } = term
-                {
-                    let term_loc = Location {
-                        block: bb,
-                        statement_index: bb_data.statements.len(),
-                    };
-                    self.relate_call_types(func, args, destination, term_loc);
-                }
+            if let Some(Terminator::Call {
+                func,
+                args,
+                destination,
+                ..
+            }) = &bb_data.terminator
+            {
+                let term_loc = Location {
+                    block: bb,
+                    statement_index: bb_data.statements.len(),
+                };
+                self.relate_call_types(func, args, destination, term_loc);
             }
         }
 
@@ -922,19 +922,19 @@ impl<'a> NllChecker<'a> {
                         // If local is invalidated, loans of it must be dead.
                         // We check if any loan of `local` is active.
                         for loan in &self.loans {
-                            if loan.place.local == *local {
-                                if self.context.is_region_live_at(loan.region, loc) {
-                                    self.errors.push(BorrowError::DanglingReference {
-                                        borrowed_local: *local,
-                                        location: Some(MirSpan {
-                                            block: loc.block,
-                                            statement_index: loc.statement_index,
-                                        }),
-                                        context: self.borrow_error_context(loan, loc),
-                                    });
-                                    dangling_reported.insert((bb, *local));
-                                    break;
-                                }
+                            if loan.place.local == *local
+                                && self.context.is_region_live_at(loan.region, loc)
+                            {
+                                self.errors.push(BorrowError::DanglingReference {
+                                    borrowed_local: *local,
+                                    location: Some(MirSpan {
+                                        block: loc.block,
+                                        statement_index: loc.statement_index,
+                                    }),
+                                    context: self.borrow_error_context(loan, loc),
+                                });
+                                dangling_reported.insert((bb, *local));
+                                break;
                             }
                         }
                     }
@@ -1340,7 +1340,7 @@ impl<'a> NllChecker<'a> {
                 }
                 PlaceElem::Index(_) => {
                     if let MirType::Adt(_, args) = &ty {
-                        if let Some(elem_ty) = args.get(0).cloned() {
+                        if let Some(elem_ty) = args.first().cloned() {
                             ty = elem_ty;
                         }
                     }
@@ -1400,17 +1400,17 @@ impl<'a> NllChecker<'a> {
         map
     }
 
-    fn substitute_regions(&self, ty: &MirType, map: &HashMap<Region, Region>) -> MirType {
+    fn substitute_regions(ty: &MirType, map: &HashMap<Region, Region>) -> MirType {
         match ty {
             MirType::Ref(region, inner, mutability) => {
                 let region = map.get(region).copied().unwrap_or(*region);
-                let inner_renumbered = self.substitute_regions(inner, map);
+                let inner_renumbered = Self::substitute_regions(inner, map);
                 MirType::Ref(region, Box::new(inner_renumbered), *mutability)
             }
             MirType::Adt(id, args) => {
                 let new_args = args
                     .iter()
-                    .map(|a| self.substitute_regions(a, map))
+                    .map(|a| Self::substitute_regions(a, map))
                     .collect();
                 MirType::Adt(id.clone(), new_args)
             }
@@ -1421,9 +1421,9 @@ impl<'a> NllChecker<'a> {
                     .collect();
                 let new_args = args
                     .iter()
-                    .map(|a| self.substitute_regions(a, map))
+                    .map(|a| Self::substitute_regions(a, map))
                     .collect();
-                let new_ret = self.substitute_regions(ret, map);
+                let new_ret = Self::substitute_regions(ret, map);
                 MirType::Fn(*kind, new_region_params, new_args, Box::new(new_ret))
             }
             MirType::FnItem(def_id, kind, region_params, args, ret) => {
@@ -1433,9 +1433,9 @@ impl<'a> NllChecker<'a> {
                     .collect();
                 let new_args = args
                     .iter()
-                    .map(|a| self.substitute_regions(a, map))
+                    .map(|a| Self::substitute_regions(a, map))
                     .collect();
-                let new_ret = self.substitute_regions(ret, map);
+                let new_ret = Self::substitute_regions(ret, map);
                 MirType::FnItem(
                     *def_id,
                     *kind,
@@ -1452,9 +1452,9 @@ impl<'a> NllChecker<'a> {
                     .collect();
                 let new_args = args
                     .iter()
-                    .map(|a| self.substitute_regions(a, map))
+                    .map(|a| Self::substitute_regions(a, map))
                     .collect();
-                let new_ret = self.substitute_regions(ret, map);
+                let new_ret = Self::substitute_regions(ret, map);
                 MirType::Closure(
                     *kind,
                     new_self_region,
@@ -1464,10 +1464,10 @@ impl<'a> NllChecker<'a> {
                 )
             }
             MirType::RawPtr(inner, mutability) => {
-                MirType::RawPtr(Box::new(self.substitute_regions(inner, map)), *mutability)
+                MirType::RawPtr(Box::new(Self::substitute_regions(inner, map)), *mutability)
             }
             MirType::InteriorMutable(inner, kind) => {
-                MirType::InteriorMutable(Box::new(self.substitute_regions(inner, map)), *kind)
+                MirType::InteriorMutable(Box::new(Self::substitute_regions(inner, map)), *kind)
             }
             _ => ty.clone(),
         }
@@ -1490,9 +1490,9 @@ impl<'a> NllChecker<'a> {
                     let subst = self.instantiate_region_params(&region_params);
                     param_tys = param_tys
                         .iter()
-                        .map(|ty| self.substitute_regions(ty, &subst))
+                        .map(|ty| Self::substitute_regions(ty, &subst))
                         .collect();
-                    ret_ty = self.substitute_regions(&ret_ty, &subst);
+                    ret_ty = Self::substitute_regions(&ret_ty, &subst);
                 }
                 for (arg, param_ty) in args.iter().zip(param_tys.iter()) {
                     let arg_ty = self.operand_type(arg);
@@ -1508,9 +1508,9 @@ impl<'a> NllChecker<'a> {
                     let subst = self.instantiate_region_params(&region_params);
                     param_tys = param_tys
                         .iter()
-                        .map(|ty| self.substitute_regions(ty, &subst))
+                        .map(|ty| Self::substitute_regions(ty, &subst))
                         .collect();
-                    ret_ty = self.substitute_regions(&ret_ty, &subst);
+                    ret_ty = Self::substitute_regions(&ret_ty, &subst);
                 }
                 for (arg, param_ty) in args.iter().zip(param_tys.iter()) {
                     let arg_ty = self.operand_type(arg);
@@ -1521,7 +1521,7 @@ impl<'a> NllChecker<'a> {
 
                 if let CallOperand::Borrow(borrow_kind, place) = func {
                     let mut ref_regions = Vec::new();
-                    self.collect_ref_regions(&ret_ty, &mut ref_regions);
+                    Self::collect_ref_regions(&ret_ty, &mut ref_regions);
                     ref_regions.sort_by_key(|r| r.0);
                     ref_regions.dedup();
                     ref_regions.retain(|region| *region != Region::STATIC);
@@ -1554,19 +1554,19 @@ impl<'a> NllChecker<'a> {
         }
     }
 
-    fn collect_ref_regions(&self, ty: &MirType, out: &mut Vec<Region>) {
+    fn collect_ref_regions(ty: &MirType, out: &mut Vec<Region>) {
         match ty {
             MirType::Ref(region, inner, _) => {
                 out.push(*region);
-                self.collect_ref_regions(inner, out);
+                Self::collect_ref_regions(inner, out);
             }
             MirType::Adt(_, args) => {
                 for arg in args {
-                    self.collect_ref_regions(arg, out);
+                    Self::collect_ref_regions(arg, out);
                 }
             }
-            MirType::InteriorMutable(inner, _) => self.collect_ref_regions(inner, out),
-            MirType::RawPtr(inner, _) => self.collect_ref_regions(inner, out),
+            MirType::InteriorMutable(inner, _) => Self::collect_ref_regions(inner, out),
+            MirType::RawPtr(inner, _) => Self::collect_ref_regions(inner, out),
             _ => {}
         }
     }
@@ -1710,9 +1710,7 @@ impl<'a> NllChecker<'a> {
         };
         match op {
             Operand::Constant(c) => {
-                if c.literal.capture_operands().is_none() {
-                    return None;
-                }
+                c.literal.capture_operands()?;
                 let mut captures = Vec::new();
                 self.collect_capture_payload_types(op, &mut captures);
                 if captures.is_empty() {
@@ -1870,9 +1868,12 @@ impl<'a> NllChecker<'a> {
                     continue;
                 }
 
-                if !self.synthetic_borrow_regions.contains_key(&dest.local) {
-                    let region = self.next_region();
-                    self.synthetic_borrow_regions.insert(dest.local, region);
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    self.synthetic_borrow_regions.entry(dest.local)
+                {
+                    let region = Region(self.context.num_regions);
+                    self.context.num_regions += 1;
+                    entry.insert(region);
                 }
             }
         }
@@ -1978,7 +1979,7 @@ impl<'a> NllChecker<'a> {
                 };
                 let location = Location::new(bb, stmt_idx);
                 let place_ty = self.place_type(place);
-                self.collect_runtime_checks_for_type_at_location(
+                Self::collect_runtime_checks_for_type_at_location(
                     &place_ty,
                     place.local,
                     location,
@@ -1989,7 +1990,6 @@ impl<'a> NllChecker<'a> {
     }
 
     fn collect_runtime_checks_for_type_at_location(
-        &self,
         ty: &MirType,
         local: Local,
         location: Location,
@@ -2012,14 +2012,14 @@ impl<'a> NllChecker<'a> {
                     }
                     IMKind::Atomic => {}
                 }
-                self.collect_runtime_checks_for_type_at_location(inner, local, location, checks);
+                Self::collect_runtime_checks_for_type_at_location(inner, local, location, checks);
             }
             MirType::Ref(_, inner, _) => {
-                self.collect_runtime_checks_for_type_at_location(inner, local, location, checks);
+                Self::collect_runtime_checks_for_type_at_location(inner, local, location, checks);
             }
             MirType::Adt(_, args) => {
                 for arg in args {
-                    self.collect_runtime_checks_for_type_at_location(arg, local, location, checks);
+                    Self::collect_runtime_checks_for_type_at_location(arg, local, location, checks);
                 }
             }
             _ => {}
@@ -2033,7 +2033,7 @@ impl<'a> NllChecker<'a> {
                     return true;
                 }
                 match rvalue {
-                    Rvalue::Use(op) => self.operand_uses_local(op, local),
+                    Rvalue::Use(op) => Self::operand_uses_local(op, local),
                     Rvalue::Ref(_, place) => place.local == local,
                     Rvalue::Discriminant(place) => place.local == local,
                 }
@@ -2055,21 +2055,21 @@ impl<'a> NllChecker<'a> {
                 if self.call_operand_uses_local(func, local) {
                     return true;
                 }
-                if args.iter().any(|arg| self.operand_uses_local(arg, local)) {
+                if args.iter().any(|arg| Self::operand_uses_local(arg, local)) {
                     return true;
                 }
                 destination.local == local
             }
-            Terminator::SwitchInt { discr, .. } => self.operand_uses_local(discr, local),
+            Terminator::SwitchInt { discr, .. } => Self::operand_uses_local(discr, local),
             _ => false,
         }
     }
 
-    fn operand_uses_local(&self, op: &Operand, local: Local) -> bool {
+    fn operand_uses_local(op: &Operand, local: Local) -> bool {
         match op {
             Operand::Copy(p) | Operand::Move(p) => p.local == local,
             Operand::Constant(c) => c.literal.capture_operands().map_or(false, |caps| {
-                caps.iter().any(|op| self.operand_uses_local(op, local))
+                caps.iter().any(|op| Self::operand_uses_local(op, local))
             }),
         }
     }
@@ -2077,7 +2077,7 @@ impl<'a> NllChecker<'a> {
     fn call_operand_uses_local(&self, op: &CallOperand, local: Local) -> bool {
         match op {
             CallOperand::Borrow(_, place) => place.local == local,
-            CallOperand::Operand(op) => self.operand_uses_local(op, local),
+            CallOperand::Operand(op) => Self::operand_uses_local(op, local),
         }
     }
 

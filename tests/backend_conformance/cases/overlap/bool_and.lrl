@@ -1,0 +1,14 @@
+;;! tag: overlap-subset
+;;! expect_exit: 0
+;;! expect_result_kind: bool
+;;! expect_result: false
+
+(def and_b (pi a Bool (pi b Bool Bool))
+  (lam a Bool
+    (lam b Bool
+      (match a Bool
+        (case (true) b)
+        (case (false) false)))))
+
+(def entry Bool
+  (and_b true false))

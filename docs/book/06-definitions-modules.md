@@ -29,7 +29,9 @@ LRL has a preliminary concept of modules based on files.
 
 The standard library is located in `stdlib/`.
 
-- `stdlib/prelude.lrl`: The default environment.
-- `stdlib/prelude_typed.lrl`: A typed variant used for compilation.
+- `stdlib/prelude_api.lrl`: Shared public prelude contract (names/types/functions).
+- `stdlib/prelude_impl_dynamic.lrl`: Dynamic backend platform layer.
+- `stdlib/prelude_impl_typed.lrl`: Typed/auto backend platform layer.
 
-You can inspect these files to see how basic types like `Nat`, `Bool`, `Option` are defined.
+User code should target the API contract, not backend-specific prelude files. Shared logic belongs in
+`prelude_api.lrl`; impl preludes are for backend-dependent runtime/platform wiring.

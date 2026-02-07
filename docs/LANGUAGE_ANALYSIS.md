@@ -252,7 +252,13 @@ Desugared to eliminators with computed motives:
 
 ## Standard Library
 
-The prelude (`stdlib/prelude.lrl`) provides foundational types:
+The shared prelude API (`stdlib/prelude_api.lrl`) provides foundational types. It is loaded with a
+backend platform layer:
+
+- dynamic: `stdlib/prelude_impl_dynamic.lrl`
+- typed/auto: `stdlib/prelude_impl_typed.lrl`
+
+Core API types include:
 
 ```lisp
 ;; Core types (marked Copy)
@@ -269,7 +275,7 @@ The prelude (`stdlib/prelude.lrl`) provides foundational types:
 (inductive Eq ...)         ;; a = b proofs
 ```
 
-Core functions: `add`, `not`, `and`, `or`, `if_nat`, `append`
+Core functions: `add`, `not`, `and`, `or`, `if_nat`, `append` (shared API definition)
 
 ---
 

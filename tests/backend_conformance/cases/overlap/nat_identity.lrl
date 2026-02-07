@@ -1,0 +1,7 @@
+;;! tag: overlap-subset
+;;! expect_exit: 0
+;;! expect_result_kind: nat
+;;! expect_result: 1
+
+(def entry Nat
+  (succ zero))

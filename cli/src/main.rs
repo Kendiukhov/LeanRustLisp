@@ -116,43 +116,40 @@ fn main() {
             output,
             backend,
         }) => {
-            compiler::compile_file(
-                file,
-                output.clone(),
-                cli.trace_macros,
-                cli.panic_free,
-                cli.require_axiom_tags,
-                cli.macro_boundary_warn,
-                cli.allow_redefine,
-                cli.allow_axioms,
-                *backend,
-            );
+            let options = compiler::CompileOptions {
+                trace_macros: cli.trace_macros,
+                panic_free: cli.panic_free,
+                require_axiom_tags: cli.require_axiom_tags,
+                macro_boundary_warn: cli.macro_boundary_warn,
+                allow_redefine: cli.allow_redefine,
+                allow_axioms: cli.allow_axioms,
+                backend: *backend,
+            };
+            compiler::compile_file(file, output.clone(), options);
         }
         Some(Commands::CompileTyped { file, output }) => {
-            compiler::compile_file_with_prelude(
-                file,
-                output.clone(),
-                cli.trace_macros,
-                cli.panic_free,
-                cli.require_axiom_tags,
-                cli.macro_boundary_warn,
-                cli.allow_redefine,
-                cli.allow_axioms,
-                compiler::BackendMode::Typed,
-                "stdlib/prelude_typed.lrl",
-            );
+            let options = compiler::CompileOptions {
+                trace_macros: cli.trace_macros,
+                panic_free: cli.panic_free,
+                require_axiom_tags: cli.require_axiom_tags,
+                macro_boundary_warn: cli.macro_boundary_warn,
+                allow_redefine: cli.allow_redefine,
+                allow_axioms: cli.allow_axioms,
+                backend: compiler::BackendMode::Typed,
+            };
+            compiler::compile_file(file, output.clone(), options);
         }
         Some(Commands::CompileMir { file, backend }) => {
-            compiler::compile_file_to_mir(
-                file,
-                cli.trace_macros,
-                cli.panic_free,
-                cli.require_axiom_tags,
-                cli.macro_boundary_warn,
-                cli.allow_redefine,
-                cli.allow_axioms,
-                *backend,
-            );
+            let options = compiler::CompileOptions {
+                trace_macros: cli.trace_macros,
+                panic_free: cli.panic_free,
+                require_axiom_tags: cli.require_axiom_tags,
+                macro_boundary_warn: cli.macro_boundary_warn,
+                allow_redefine: cli.allow_redefine,
+                allow_axioms: cli.allow_axioms,
+                backend: *backend,
+            };
+            compiler::compile_file_to_mir(file, options);
         }
         None => {
             if let Some(file) = cli.file {
@@ -181,41 +178,53 @@ fn main() {
                 };
                 expander.set_macro_boundary_policy(user_policy);
 
-                let prelude_path = "stdlib/prelude.lrl";
-                if Path::new(prelude_path).exists() {
+                let mut prelude_modules = Vec::new();
+                let allow_reserved = env.allows_reserved_primitives();
+                env.set_allow_reserved_primitives(true);
+                for prelude_path in
+                    compiler::prelude_stack_for_backend(compiler::BackendMode::Dynamic)
+                {
+                    if !Path::new(prelude_path).exists() {
+                        continue;
+                    }
                     let prelude_module = driver::module_id_for_source(prelude_path);
                     expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
                     cli::set_prelude_macro_boundary_allowlist(&mut expander, &prelude_module);
-                    let allow_reserved = env.allows_reserved_primitives();
-                    env.set_allow_reserved_primitives(true);
                     let _ = repl::run_file(
                         prelude_path,
                         &mut env,
                         &mut expander,
-                        false,
-                        cli.panic_free,
-                        false,
-                        true,
-                        false,
-                        false,
+                        repl::RunFileOptions {
+                            verbose: false,
+                            panic_free: cli.panic_free,
+                            require_axiom_tags: false,
+                            allow_axioms: true,
+                            prelude_frozen: false,
+                            allow_redefine: false,
+                        },
                     );
-                    env.set_allow_reserved_primitives(allow_reserved);
                     expander.clear_macro_boundary_allowlist();
-                    expander.set_default_imports(vec![prelude_module]);
-                    expander.set_macro_boundary_policy(user_policy);
+                    prelude_modules.push(prelude_module);
                 }
+                env.set_allow_reserved_primitives(allow_reserved);
+                if !prelude_modules.is_empty() {
+                    expander.set_default_imports(prelude_modules);
+                }
+                expander.set_macro_boundary_policy(user_policy);
 
                 env.set_allow_redefinition(cli.allow_redefine);
                 let _ = repl::run_file(
                     &file,
                     &mut env,
                     &mut expander,
-                    false,
-                    cli.panic_free,
-                    cli.require_axiom_tags,
-                    cli.allow_axioms,
-                    true,
-                    cli.allow_redefine,
+                    repl::RunFileOptions {
+                        verbose: false,
+                        panic_free: cli.panic_free,
+                        require_axiom_tags: cli.require_axiom_tags,
+                        allow_axioms: cli.allow_axioms,
+                        prelude_frozen: true,
+                        allow_redefine: cli.allow_redefine,
+                    },
                 );
                 return;
             }
@@ -239,9 +248,11 @@ fn print_expansion_output(path: &str, mode: ExpandMode, macro_boundary_warn: boo
         MacroBoundaryPolicy::Deny
     };
     expander.set_macro_boundary_policy(user_policy);
-    let prelude_path = "stdlib/prelude.lrl";
-
-    if Path::new(prelude_path).exists() {
+    let mut prelude_modules = Vec::new();
+    for prelude_path in compiler::prelude_stack_for_backend(compiler::BackendMode::Dynamic) {
+        if !Path::new(prelude_path).exists() {
+            continue;
+        }
         match fs::read_to_string(prelude_path) {
             Ok(content) => {
                 let prelude_module = driver::module_id_for_source(prelude_path);
@@ -252,11 +263,14 @@ fn print_expansion_output(path: &str, mode: ExpandMode, macro_boundary_warn: boo
                     eprintln!("{}", err);
                 }
                 expander.clear_macro_boundary_allowlist();
-                expander.set_macro_boundary_policy(user_policy);
-                expander.set_default_imports(vec![prelude_module]);
+                prelude_modules.push(prelude_module);
             }
             Err(e) => eprintln!("Error reading prelude {}: {:?}", prelude_path, e),
         }
+    }
+    expander.set_macro_boundary_policy(user_policy);
+    if !prelude_modules.is_empty() {
+        expander.set_default_imports(prelude_modules);
     }
 
     let content = match fs::read_to_string(path) {
@@ -270,5 +284,32 @@ fn print_expansion_output(path: &str, mode: ExpandMode, macro_boundary_warn: boo
     match expand_source_with_imports(&content, path, &mut expander, mode) {
         Ok(output) => println!("{}", output),
         Err(err) => eprintln!("{}", err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compile_command_defaults_to_auto_backend() {
+        let cli = Cli::parse_from(["cli", "compile", "program.lrl"]);
+        match cli.command {
+            Some(Commands::Compile { backend, .. }) => {
+                assert_eq!(backend, compiler::BackendMode::Auto);
+            }
+            other => panic!("unexpected parsed command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn compile_mir_command_defaults_to_auto_backend() {
+        let cli = Cli::parse_from(["cli", "compile-mir", "program.lrl"]);
+        match cli.command {
+            Some(Commands::CompileMir { backend, .. }) => {
+                assert_eq!(backend, compiler::BackendMode::Auto);
+            }
+            other => panic!("unexpected parsed command: {:?}", other),
+        }
     }
 }

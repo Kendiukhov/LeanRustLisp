@@ -1,3 +1,6 @@
-(inductive copy Nat (sort 0)
-  (zero Nat)
-  (succ (pi n Nat Nat)))
+;; Standalone identity smoke under current syntax contract.
+
+(def from_id Nat
+  ((lam x Nat x) (succ zero)))
+
+from_id

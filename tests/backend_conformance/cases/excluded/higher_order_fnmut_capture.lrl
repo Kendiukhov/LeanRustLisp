@@ -1,0 +1,5 @@
+;;! tag: excluded
+;;! reason: Higher-order closure/FnMut capture behavior is excluded from this overlap subset because cross-backend parity still depends on representation-sensitive lowering details.
+
+(def entry Nat
+  zero)

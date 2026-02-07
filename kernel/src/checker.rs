@@ -10,6 +10,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use thiserror::Error;
 
+type TotalDefWithHint = (String, Rc<Term>, Rc<Term>, Option<usize>);
+type RefLabelMismatch = (Option<String>, Option<String>);
+
 #[derive(Debug, Clone, Default)]
 pub struct DefEqFuelDetail {
     pub last_event: Option<String>,
@@ -467,6 +470,10 @@ impl Context {
         Context { types: Vec::new() }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.types.is_empty()
+    }
+
     pub fn push(&self, ty: Rc<Term>) -> Self {
         let mut types = self.types.clone();
         types.push(ty);
@@ -484,6 +491,12 @@ impl Context {
         } else {
             None
         }
+    }
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -672,6 +685,12 @@ impl InductiveInfo {
                 ctor_infos,
             },
         }
+    }
+}
+
+impl Default for Env {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -949,9 +968,7 @@ impl Env {
         // Infer parameter count from constructors for consistency with recursors/elimination.
         // If the caller specified params, honor them but don't exceed what constructors support.
         let inferred_params = infer_num_params_from_ctors(&decl)?;
-        if decl.num_params == 0 {
-            decl.num_params = inferred_params;
-        } else if decl.num_params > inferred_params {
+        if decl.num_params == 0 || decl.num_params > inferred_params {
             decl.num_params = inferred_params;
         }
 
@@ -1197,7 +1214,7 @@ impl Env {
             if def.totality == Totality::Total {
                 if let Some(ref val) = def.value {
                     // Collect all existing total definitions (with bodies) plus the new definition.
-                    let mut total_defs: Vec<(String, Rc<Term>, Rc<Term>, Option<usize>)> = self
+                    let mut total_defs: Vec<TotalDefWithHint> = self
                         .definitions
                         .iter()
                         .filter_map(|(name, existing)| {
@@ -1234,13 +1251,12 @@ impl Env {
                         .find(|g| g.contains(&def.name.as_str()))
                     {
                         if group.len() > 1 {
-                            let group_defs: Vec<(String, Rc<Term>, Rc<Term>, Option<usize>)> =
-                                group
-                                    .iter()
-                                    .filter_map(|name| {
-                                        total_defs.iter().find(|(n, _, _, _)| n == *name).cloned()
-                                    })
-                                    .collect();
+                            let group_defs: Vec<TotalDefWithHint> = group
+                                .iter()
+                                .filter_map(|name| {
+                                    total_defs.iter().find(|(n, _, _, _)| n == *name).cloned()
+                                })
+                                .collect();
                             let results = check_mutual_termination_with_hints(self, &group_defs)?;
                             rec_arg = results
                                 .iter()
@@ -1602,16 +1618,45 @@ fn collect_recursion_info(
                             info.record_recursor_major(*var_idx, ctx, num_params);
                         }
                     }
-                    collect_recursor_info(
-                        env,
-                        def_name,
-                        recursive_names,
-                        decl,
-                        &rec_args,
-                        ctx,
-                        num_params,
-                        info,
-                    )?;
+
+                    let minor_start = decl.num_params + 1;
+                    let minor_end = minor_start + decl.ctors.len();
+
+                    for (ctor_idx, minor) in rec_args
+                        .iter()
+                        .take(minor_end.min(rec_args.len()))
+                        .skip(minor_start)
+                        .enumerate()
+                    {
+                        if let Some((body, new_ctx)) =
+                            build_minor_premise_ctx(decl, ctor_idx, minor, ctx)
+                        {
+                            collect_recursion_info(
+                                env,
+                                def_name,
+                                recursive_names,
+                                &body,
+                                &new_ctx,
+                                num_params,
+                                info,
+                            )?;
+                        }
+                    }
+
+                    if rec_args.len() > minor_end {
+                        for arg in &rec_args[minor_end..] {
+                            collect_recursion_info(
+                                env,
+                                def_name,
+                                recursive_names,
+                                arg,
+                                ctx,
+                                num_params,
+                                info,
+                            )?;
+                        }
+                    }
+
                     return Ok(());
                 }
             }
@@ -1805,9 +1850,7 @@ pub fn check_termination_with_hint(
             if let Some(first_ind) = ind_names.iter().position(|n| n.is_some()) {
                 let ind_name = ind_names[first_ind].clone().unwrap_or_default();
                 let err_ctx = TerminationCtx::new(first_ind, ind_name);
-                if let Err(err) = check_recursive_calls_ctx(env, def_name, &inner_body, &err_ctx) {
-                    return Err(err);
-                }
+                check_recursive_calls_ctx(env, def_name, &inner_body, &err_ctx)?;
             }
             return Err(TypeError::TerminationError {
                 def_name: def_name.to_string(),
@@ -1847,7 +1890,7 @@ pub fn check_mutual_termination(
     env: &Env,
     defs: &[(String, Rc<Term>, Rc<Term>)], // (name, type, body)
 ) -> Result<Vec<(String, Option<usize>)>, TypeError> {
-    let defs_with_hints: Vec<(String, Rc<Term>, Rc<Term>, Option<usize>)> = defs
+    let defs_with_hints: Vec<TotalDefWithHint> = defs
         .iter()
         .map(|(name, ty, body)| (name.clone(), ty.clone(), body.clone(), None))
         .collect();
@@ -1856,7 +1899,7 @@ pub fn check_mutual_termination(
 
 fn check_mutual_termination_with_hints(
     env: &Env,
-    defs: &[(String, Rc<Term>, Rc<Term>, Option<usize>)], // (name, type, body, rec_arg_hint)
+    defs: &[TotalDefWithHint], // (name, type, body, rec_arg_hint)
 ) -> Result<Vec<(String, Option<usize>)>, TypeError> {
     if defs.is_empty() {
         return Ok(vec![]);
@@ -2095,6 +2138,60 @@ fn find_mutual_groups<'a>(
     call_graph: &HashMap<String, Vec<String>>,
     def_names: &[&'a str],
 ) -> Vec<Vec<&'a str>> {
+    struct TarjanState {
+        index: usize,
+        indices: Vec<Option<usize>>,
+        lowlink: Vec<usize>,
+        stack: Vec<usize>,
+        on_stack: Vec<bool>,
+        groups: Vec<Vec<usize>>,
+    }
+
+    impl TarjanState {
+        fn new(node_count: usize) -> Self {
+            TarjanState {
+                index: 0,
+                indices: vec![None; node_count],
+                lowlink: vec![0; node_count],
+                stack: Vec::new(),
+                on_stack: vec![false; node_count],
+                groups: Vec::new(),
+            }
+        }
+
+        fn strongconnect(&mut self, v: usize, edges: &[Vec<usize>]) {
+            self.indices[v] = Some(self.index);
+            self.lowlink[v] = self.index;
+            self.index += 1;
+            self.stack.push(v);
+            self.on_stack[v] = true;
+
+            for &w in &edges[v] {
+                if self.indices[w].is_none() {
+                    self.strongconnect(w, edges);
+                    let lowlink_w = self.lowlink[w];
+                    self.lowlink[v] = self.lowlink[v].min(lowlink_w);
+                } else if self.on_stack[w] {
+                    if let Some(w_index) = self.indices[w] {
+                        self.lowlink[v] = self.lowlink[v].min(w_index);
+                    }
+                }
+            }
+
+            if self.indices[v] == Some(self.lowlink[v]) {
+                let mut group = Vec::new();
+                while let Some(w) = self.stack.pop() {
+                    self.on_stack[w] = false;
+                    group.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+                self.groups.push(group);
+            }
+        }
+    }
+
     let mut names: Vec<&'a str> = def_names.to_vec();
     names.sort();
     names.dedup();
@@ -2119,74 +2216,16 @@ fn find_mutual_groups<'a>(
         }
     }
 
-    let mut index = 0usize;
-    let mut indices: Vec<Option<usize>> = vec![None; names.len()];
-    let mut lowlink: Vec<usize> = vec![0; names.len()];
-    let mut stack: Vec<usize> = Vec::new();
-    let mut on_stack: Vec<bool> = vec![false; names.len()];
-    let mut groups: Vec<Vec<usize>> = Vec::new();
-
-    fn strongconnect(
-        v: usize,
-        index: &mut usize,
-        indices: &mut [Option<usize>],
-        lowlink: &mut [usize],
-        stack: &mut Vec<usize>,
-        on_stack: &mut [bool],
-        edges: &[Vec<usize>],
-        groups: &mut Vec<Vec<usize>>,
-    ) {
-        indices[v] = Some(*index);
-        lowlink[v] = *index;
-        *index += 1;
-        stack.push(v);
-        on_stack[v] = true;
-
-        for &w in &edges[v] {
-            if indices[w].is_none() {
-                strongconnect(w, index, indices, lowlink, stack, on_stack, edges, groups);
-                lowlink[v] = lowlink[v].min(lowlink[w]);
-            } else if on_stack[w] {
-                if let Some(w_index) = indices[w] {
-                    lowlink[v] = lowlink[v].min(w_index);
-                }
-            }
-        }
-
-        if indices[v] == Some(lowlink[v]) {
-            let mut group = Vec::new();
-            loop {
-                match stack.pop() {
-                    Some(w) => {
-                        on_stack[w] = false;
-                        group.push(w);
-                        if w == v {
-                            break;
-                        }
-                    }
-                    None => break,
-                }
-            }
-            groups.push(group);
-        }
-    }
+    let mut tarjan = TarjanState::new(names.len());
 
     for v in 0..names.len() {
-        if indices[v].is_none() {
-            strongconnect(
-                v,
-                &mut index,
-                &mut indices,
-                &mut lowlink,
-                &mut stack,
-                &mut on_stack,
-                &edges,
-                &mut groups,
-            );
+        if tarjan.indices[v].is_none() {
+            tarjan.strongconnect(v, &edges);
         }
     }
 
-    let mut result: Vec<Vec<&'a str>> = groups
+    let mut result: Vec<Vec<&'a str>> = tarjan
+        .groups
         .into_iter()
         .map(|group| {
             let mut out: Vec<&'a str> = group.into_iter().map(|idx| names[idx]).collect();
@@ -2624,43 +2663,6 @@ fn build_minor_premise_ctx(
     Some((body, new_ctx))
 }
 
-fn collect_recursor_info(
-    env: &Env,
-    def_name: &str,
-    recursive_names: &[&str],
-    decl: &InductiveDecl,
-    args: &[Rc<Term>],
-    ctx: &TerminationCtx,
-    num_params: usize,
-    info: &mut RecArgInference,
-) -> Result<(), TypeError> {
-    let minor_start = decl.num_params + 1;
-    let minor_end = minor_start + decl.ctors.len();
-
-    for i in minor_start..minor_end.min(args.len()) {
-        let minor = &args[i];
-        if let Some((body, new_ctx)) = build_minor_premise_ctx(decl, i - minor_start, minor, ctx) {
-            collect_recursion_info(
-                env,
-                def_name,
-                recursive_names,
-                &body,
-                &new_ctx,
-                num_params,
-                info,
-            )?;
-        }
-    }
-
-    if args.len() > minor_end {
-        for arg in &args[minor_end..] {
-            collect_recursion_info(env, def_name, recursive_names, arg, ctx, num_params, info)?;
-        }
-    }
-
-    Ok(())
-}
-
 /// Check a recursor application for termination
 /// Rec applications are inherently terminating because the recursor
 /// encodes structural recursion - minor premises receive strictly smaller arguments
@@ -2688,9 +2690,13 @@ fn check_rec_app(
     let minor_end = minor_start + num_ctors;
 
     // Check each minor premise
-    for i in minor_start..minor_end.min(args.len()) {
-        let minor = &args[i];
-        check_minor_premise(env, def_name, decl, i - minor_start, minor, ctx)?;
+    for (ctor_idx, minor) in args
+        .iter()
+        .take(minor_end.min(args.len()))
+        .skip(minor_start)
+        .enumerate()
+    {
+        check_minor_premise(env, def_name, decl, ctor_idx, minor, ctx)?;
     }
 
     // Check the major premise (the thing being recursed on)
@@ -2720,17 +2726,13 @@ fn check_rec_app_mutual(
     let minor_start = decl.num_params + 1;
     let minor_end = minor_start + decl.ctors.len();
 
-    for i in minor_start..minor_end.min(args.len()) {
-        let minor = &args[i];
-        check_minor_premise_mutual(
-            env,
-            def_name,
-            mutual_names,
-            decl,
-            i - minor_start,
-            minor,
-            ctx,
-        )?;
+    for (ctor_idx, minor) in args
+        .iter()
+        .take(minor_end.min(args.len()))
+        .skip(minor_start)
+        .enumerate()
+    {
+        check_minor_premise_mutual(env, def_name, mutual_names, decl, ctor_idx, minor, ctx)?;
     }
 
     if args.len() > minor_end {
@@ -3101,7 +3103,7 @@ pub fn check_wellfounded_termination(
         spec.decreasing_arg,
         acc_param_pos,
     );
-    check_wellfounded_calls(env, def_name, &inner_body, &wf_ctx, acc_decl)?;
+    check_wellfounded_calls(def_name, &inner_body, &wf_ctx, acc_decl)?;
     Ok(())
 }
 
@@ -3109,7 +3111,7 @@ pub fn check_wellfounded_termination(
 fn is_wellfoundedness_proof_type(ty: &Rc<Term>, relation: &str, value_type: &Rc<Term>) -> bool {
     // Expected structure: Pi (x : T) (Acc R x)
     if let Term::Pi(dom, body, _, _) = &**ty {
-        if &**dom != &**value_type {
+        if dom.as_ref() != value_type.as_ref() {
             return false;
         }
         if let Some(target) = acc_type_target(body, relation) {
@@ -3178,7 +3180,6 @@ fn acc_proof_target_from_term(t: &Rc<Term>, ctx: &WellFoundedCtx) -> Option<Rc<T
 
 /// Check that recursive calls in a well-founded recursive function are valid
 fn check_wellfounded_calls(
-    env: &Env,
     def_name: &str,
     t: &Rc<Term>,
     ctx: &WellFoundedCtx,
@@ -3206,25 +3207,25 @@ fn check_wellfounded_calls(
 
                     // Params + motive
                     for arg in args.iter().take(minors_start) {
-                        check_wellfounded_calls(env, def_name, arg, ctx, acc_decl)?;
+                        check_wellfounded_calls(def_name, arg, ctx, acc_decl)?;
                     }
 
                     // Minor premises (Acc.rec body)
                     for arg in args.iter().skip(minors_start).take(num_ctors) {
                         let minor_ctx = ctx.enter_acc_rec();
-                        check_wellfounded_calls(env, def_name, arg, &minor_ctx, acc_decl)?;
+                        check_wellfounded_calls(def_name, arg, &minor_ctx, acc_decl)?;
                     }
 
                     // Indices + major (and any extra args, if over-applied)
                     for arg in args.iter().skip(minors_end) {
-                        check_wellfounded_calls(env, def_name, arg, ctx, acc_decl)?;
+                        check_wellfounded_calls(def_name, arg, ctx, acc_decl)?;
                     }
 
                     return Ok(());
                 }
 
                 for arg in &args {
-                    check_wellfounded_calls(env, def_name, arg, ctx, acc_decl)?;
+                    check_wellfounded_calls(def_name, arg, ctx, acc_decl)?;
                 }
                 return Ok(());
             }
@@ -3246,7 +3247,7 @@ fn check_wellfounded_calls(
                     })
                 })?;
 
-                if &**dec_arg != &*target {
+                if dec_arg.as_ref() != target.as_ref() {
                     return Err(wf_error(WellFoundedError::MismatchedAccTarget {
                         expected: target,
                         actual: dec_arg.clone(),
@@ -3254,21 +3255,21 @@ fn check_wellfounded_calls(
                 }
 
                 for arg in &args {
-                    check_wellfounded_calls(env, def_name, arg, ctx, acc_decl)?;
+                    check_wellfounded_calls(def_name, arg, ctx, acc_decl)?;
                 }
                 return Ok(());
             }
 
             // Regular application - check both parts
             let (f, args) = collect_app_spine(t);
-            check_wellfounded_calls(env, def_name, &f, ctx, acc_decl)?;
+            check_wellfounded_calls(def_name, &f, ctx, acc_decl)?;
             for arg in &args {
-                check_wellfounded_calls(env, def_name, &arg.arg, ctx, acc_decl)?;
+                check_wellfounded_calls(def_name, &arg.arg, ctx, acc_decl)?;
             }
             Ok(())
         }
         Term::Lam(ty, body, _, _) | Term::Pi(ty, body, _, _) | Term::Fix(ty, body) => {
-            check_wellfounded_calls(env, def_name, ty, ctx, acc_decl)?;
+            check_wellfounded_calls(def_name, ty, ctx, acc_decl)?;
             let mut next_ctx = ctx.shift();
             if ctx.in_acc_rec() {
                 if is_acc_fn_type(ty, &ctx.relation) {
@@ -3278,18 +3279,18 @@ fn check_wellfounded_calls(
                     next_ctx = next_ctx.add_acc_proof(0, target.shift(0, 1));
                 }
             }
-            check_wellfounded_calls(env, def_name, body, &next_ctx, acc_decl)
+            check_wellfounded_calls(def_name, body, &next_ctx, acc_decl)
         }
         Term::LetE(ty, val, body) => {
-            check_wellfounded_calls(env, def_name, ty, ctx, acc_decl)?;
-            check_wellfounded_calls(env, def_name, val, ctx, acc_decl)?;
+            check_wellfounded_calls(def_name, ty, ctx, acc_decl)?;
+            check_wellfounded_calls(def_name, val, ctx, acc_decl)?;
             let mut next_ctx = ctx.shift();
             if ctx.in_acc_rec() {
                 if let Some(target) = acc_proof_target_from_term(val, ctx) {
                     next_ctx = next_ctx.add_acc_proof(0, target.shift(0, 1));
                 }
             }
-            check_wellfounded_calls(env, def_name, body, &next_ctx, acc_decl)
+            check_wellfounded_calls(def_name, body, &next_ctx, acc_decl)
         }
         _ => Ok(()),
     }
@@ -3602,7 +3603,7 @@ fn compute_minor_premise_type(
 
     let (ctor_args, ctor_result) = peel_pi_binders(&instantiated_ty);
     let result_indices =
-        extract_inductive_indices(&ctor_result, ind_name, num_params).unwrap_or_else(|| Vec::new());
+        extract_inductive_indices(&ctor_result, ind_name, num_params).unwrap_or_default();
 
     struct Binder {
         ty: Rc<Term>,
@@ -3658,14 +3659,12 @@ fn compute_minor_premise_type(
     }
 
     for arg_idx in 0..ctor_args.len() {
-        let mut depth_from_end = 0;
         let mut found_depth = 0;
-        for b in binders.iter().rev() {
+        for (depth_from_end, b) in binders.iter().rev().enumerate() {
             if b.is_arg_idx == Some(arg_idx) {
                 found_depth = depth_from_end;
                 break;
             }
-            depth_from_end += 1;
         }
         app_term = Term::app(app_term, Term::var(found_depth));
     }
@@ -3690,14 +3689,9 @@ fn compute_minor_premise_type(
 fn peel_pi_binders(ty: &Rc<Term>) -> (Vec<(Rc<Term>, BinderInfo)>, Rc<Term>) {
     let mut binders = Vec::new();
     let mut current = ty.clone();
-    loop {
-        match &*current {
-            Term::Pi(dom, body, info, _) => {
-                binders.push((dom.clone(), *info));
-                current = body.clone();
-            }
-            _ => break,
-        }
+    while let Term::Pi(dom, body, info, _) = &*current {
+        binders.push((dom.clone(), *info));
+        current = body.clone();
     }
     (binders, current)
 }
@@ -3756,26 +3750,21 @@ fn extract_ctor_args(ty: &Rc<Term>, ind_name: &str) -> Vec<(Option<String>, Rc<T
     let mut current = ty.clone();
     let mut args = Vec::new();
 
-    loop {
-        match &*current {
-            Term::Pi(arg_ty, body, _, _) => {
-                // Check if arg type is the inductive type (possibly applied)
-                let is_rec = {
-                    let mut t = arg_ty.clone();
-                    loop {
-                        match &*t {
-                            Term::Ind(name, _) if name == ind_name => break true,
-                            Term::App(f, _, _) => t = f.clone(),
-                            _ => break false,
-                        }
-                    }
-                };
-
-                args.push((None, arg_ty.clone(), is_rec));
-                current = body.clone();
+    while let Term::Pi(arg_ty, body, _, _) = &*current {
+        // Check if arg type is the inductive type (possibly applied)
+        let is_rec = {
+            let mut t = arg_ty.clone();
+            loop {
+                match &*t {
+                    Term::Ind(name, _) if name == ind_name => break true,
+                    Term::App(f, _, _) => t = f.clone(),
+                    _ => break false,
+                }
             }
-            _ => break,
-        }
+        };
+
+        args.push((None, arg_ty.clone(), is_rec));
+        current = body.clone();
     }
     args
 }
@@ -3840,8 +3829,8 @@ fn infer_num_params_from_ctors(decl: &InductiveDecl) -> Result<usize, TypeError>
 
         let max = std::cmp::min(binder_count, args.len());
         let mut prefix = 0;
-        for i in 0..max {
-            match &*args[i] {
+        for (i, arg) in args.iter().take(max).enumerate() {
+            match &**arg {
                 Term::Var(idx) if *idx == (binder_count - 1 - i) => {
                     prefix += 1;
                 }
@@ -4104,7 +4093,7 @@ fn ref_label_mismatch_in_ctx(
     ctx: &Context,
     expected: &Rc<Term>,
     got: &Rc<Term>,
-) -> Result<Option<(Option<String>, Option<String>)>, TypeError> {
+) -> Result<Option<RefLabelMismatch>, TypeError> {
     let expected_whnf = whnf_in_ctx(env, ctx, expected.clone(), crate::Transparency::Reducible)?;
     let got_whnf = whnf_in_ctx(env, ctx, got.clone(), crate::Transparency::Reducible)?;
     let expected_ref = match parse_ref_type_parts(&expected_whnf) {
@@ -4958,9 +4947,10 @@ fn result_sort_with_transparency(
 }
 
 /// Transparency policy for Prop classification checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PropTransparencyContext {
     /// Default: respect `opaque` aliases during Prop classification.
+    #[default]
     Opaque,
     /// Explicitly unfold `opaque` aliases during Prop classification.
     UnfoldOpaque,
@@ -4972,12 +4962,6 @@ impl PropTransparencyContext {
             PropTransparencyContext::Opaque => Transparency::Reducible,
             PropTransparencyContext::UnfoldOpaque => Transparency::All,
         }
-    }
-}
-
-impl Default for PropTransparencyContext {
-    fn default() -> Self {
-        PropTransparencyContext::Opaque
     }
 }
 
@@ -5001,7 +4985,7 @@ pub fn is_prop_like_with_transparency(
     let sort_norm = whnf_in_ctx(env, ctx, sort_ty, transparency)?;
     Ok(extract_level(&sort_norm)
         .as_ref()
-        .map_or(false, |level| level_is_zero(level)))
+        .map_or(false, level_is_zero))
 }
 
 /// Enforce Prop -> Type elimination restriction for inductives in Prop.
@@ -5055,9 +5039,7 @@ pub fn check_elimination_restriction_with_transparency(
     let ctx = Context::new();
     let result_sort = result_sort_with_transparency(env, &ctx, &decl.ty, prop_ctx.transparency())?;
 
-    let is_prop = result_sort
-        .as_ref()
-        .map_or(false, |level| level_is_zero(level));
+    let is_prop = result_sort.as_ref().map_or(false, level_is_zero);
 
     if is_prop {
         // Controlled exception: allow equality eliminator (transport) into Type
@@ -5125,7 +5107,7 @@ fn infer_inner(env: &Env, ctx: &Context, term: Rc<Term>) -> Result<Rc<Term>, Typ
         }
         Term::Lam(ty, body, info, kind) => {
             infer(env, ctx, ty.clone())?;
-            ensure_type_safe(env, &ty)?;
+            ensure_type_safe(env, ty)?;
             let new_ctx = ctx.push(ty.clone());
             let body_ty = infer(env, &new_ctx, body.clone())?;
             ensure_type_safe(env, &body_ty)?;
@@ -5142,12 +5124,12 @@ fn infer_inner(env: &Env, ctx: &Context, term: Rc<Term>) -> Result<Rc<Term>, Typ
             // Pi (x : A) -> B has type Sort(imax(level(A), level(B)))
             let s1 = infer(env, ctx, ty.clone())?;
             let s1_norm = whnf_in_ctx(env, ctx, s1, crate::Transparency::Reducible)?;
-            ensure_type_safe(env, &ty)?;
+            ensure_type_safe(env, ty)?;
 
             let new_ctx = ctx.push(ty.clone());
             let s2 = infer(env, &new_ctx, body.clone())?;
             let s2_norm = whnf_in_ctx(env, &new_ctx, s2, crate::Transparency::Reducible)?;
-            ensure_type_safe(env, &body)?;
+            ensure_type_safe(env, body)?;
 
             // Extract levels from sorts
             if let (Some(l1), Some(l2)) = (extract_level(&s1_norm), extract_level(&s2_norm)) {
@@ -5178,7 +5160,7 @@ fn infer_inner(env: &Env, ctx: &Context, term: Rc<Term>) -> Result<Rc<Term>, Typ
             }
         }
         Term::LetE(ty, v, b) => {
-            ensure_type_safe(env, &ty)?;
+            ensure_type_safe(env, ty)?;
             check(env, ctx, v.clone(), ty.clone())?;
             let new_ctx = ctx.push(ty.clone());
             let b_ty = infer(env, &new_ctx, b.clone())?;
@@ -5220,7 +5202,7 @@ fn infer_inner(env: &Env, ctx: &Context, term: Rc<Term>) -> Result<Rc<Term>, Typ
         Term::Fix(ty, body) => {
             // Check ty is a type
             let _ = infer(env, ctx, ty.clone())?; // Should verify it returns a Sort?
-            ensure_type_safe(env, &ty)?;
+            ensure_type_safe(env, ty)?;
             // Usually we want to ensure ty is a type, but `infer` returns the type of ty.
             // Strict check:
             // let s = infer(env, ctx, ty.clone())?;
@@ -5514,9 +5496,9 @@ fn check_inductive_params(
         ));
     }
 
-    for param_idx in 0..num_params {
+    for (param_idx, arg) in args.iter().take(num_params).enumerate() {
         let expected = depth - 1 - param_idx;
-        match &*args[param_idx] {
+        match &**arg {
             Term::Var(idx) if *idx == expected => {}
             _ => {
                 return Err(format!(
@@ -6024,16 +6006,13 @@ fn derive_copy_instance(env: &mut Env, decl: &InductiveDecl) -> Result<(), Strin
                         })?;
 
                 if is_self_requirement(&remapped, &decl.name, param_count) {
-                    if param_count == 0 {
-                        field_idx += 1;
-                        pos += 1;
-                        curr = body.clone();
-                        continue;
-                    }
-                    return Err(format!(
-                        "constructor {} field {} is recursively {}",
-                        ctor.name, field_idx, decl.name
-                    ));
+                    // Recursive self fields do not add extra Copy requirements here.
+                    // Parametric requirements are collected from the other fields
+                    // (for example the element type in List T).
+                    field_idx += 1;
+                    pos += 1;
+                    curr = body.clone();
+                    continue;
                 }
 
                 if !requirements.iter().any(|req| req == &remapped) {
@@ -6057,10 +6036,10 @@ fn derive_copy_instance(env: &mut Env, decl: &InductiveDecl) -> Result<(), Strin
     } else {
         let ctx = Context::new();
         for req in &requirements {
-            if !term_depends_on_params(req, param_count, 0) {
-                if !is_copy_type(env, &ctx, req).map_err(|e| format!("Copy check failed: {}", e))? {
-                    return Err(format!("field requirement {:?} is not Copy", req));
-                }
+            if !term_depends_on_params(req, param_count, 0)
+                && !is_copy_type(env, &ctx, req).map_err(|e| format!("Copy check failed: {}", e))?
+            {
+                return Err(format!("field requirement {:?} is not Copy", req));
             }
         }
     }
@@ -6109,15 +6088,13 @@ pub fn check_inductive_soundness(env: &Env, decl: &InductiveDecl) -> Result<(), 
         let mut curr = ctor.ty.clone();
         let mut binder_idx = 0usize;
         while let Term::Pi(dom, body, _, _) = &*curr {
-            if binder_idx >= decl.num_params {
-                if contains_nested_inductive(dom, &decl.name) {
-                    let field_idx = binder_idx - decl.num_params;
-                    return Err(TypeError::NestedInductive {
-                        ind: decl.name.clone(),
-                        ctor: ctor.name.clone(),
-                        field: field_idx,
-                    });
-                }
+            if binder_idx >= decl.num_params && contains_nested_inductive(dom, &decl.name) {
+                let field_idx = binder_idx - decl.num_params;
+                return Err(TypeError::NestedInductive {
+                    ind: decl.name.clone(),
+                    ctor: ctor.name.clone(),
+                    field: field_idx,
+                });
             }
             curr = body.clone();
             binder_idx += 1;
@@ -6132,9 +6109,7 @@ pub fn check_inductive_soundness(env: &Env, decl: &InductiveDecl) -> Result<(), 
         &decl.ty,
         PropTransparencyContext::UnfoldOpaque.transparency(),
     )?;
-    let is_prop_ind = result_sort
-        .as_ref()
-        .map_or(false, |level| level_is_zero(level));
+    let is_prop_ind = result_sort.as_ref().map_or(false, level_is_zero);
     if !is_prop_ind {
         for ctor in &decl.ctors {
             let mut ctx = Context::new();
@@ -6142,20 +6117,20 @@ pub fn check_inductive_soundness(env: &Env, decl: &InductiveDecl) -> Result<(), 
             let mut binder_idx = 0usize;
 
             while let Term::Pi(dom, body, _, _) = &*curr {
-                if binder_idx >= decl.num_params {
-                    if is_prop_like_with_transparency(
+                if binder_idx >= decl.num_params
+                    && is_prop_like_with_transparency(
                         env,
                         &ctx,
                         dom,
                         PropTransparencyContext::UnfoldOpaque,
-                    )? {
-                        let field_idx = binder_idx - decl.num_params;
-                        return Err(TypeError::PropFieldInData {
-                            ind: decl.name.clone(),
-                            ctor: ctor.name.clone(),
-                            field: field_idx,
-                        });
-                    }
+                    )?
+                {
+                    let field_idx = binder_idx - decl.num_params;
+                    return Err(TypeError::PropFieldInData {
+                        ind: decl.name.clone(),
+                        ctor: ctor.name.clone(),
+                        field: field_idx,
+                    });
                 }
 
                 ctx = ctx.push(dom.clone());
@@ -6305,9 +6280,8 @@ pub fn classical_axiom_dependencies(env: &Env, def: &Definition) -> Vec<String> 
 /// - Partial context: Cannot call Unsafe.
 /// - Unsafe context: Can call anything.
 pub fn check_effects(env: &Env, allowed_context: Totality, t: &Rc<Term>) -> Result<(), TypeError> {
-    match allowed_context {
-        Totality::Unsafe => return Ok(()), // Unsafe code can do anything
-        _ => {}
+    if allowed_context == Totality::Unsafe {
+        return Ok(()); // Unsafe code can do anything
     }
 
     match &**t {

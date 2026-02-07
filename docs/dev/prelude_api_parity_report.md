@@ -26,9 +26,11 @@ The following are provided through `prelude_api.lrl` for both backend stacks:
 |---|---|---|---|---|
 | `Dyn`, `EvalCap`, `eval` | Axiom-based placeholders | Concrete typed ADTs + identity `eval` | Feature-gated (explicit) | Kept backend-specific until effect/runtime model converges |
 
-## API placeholders
+## API notes
 
-- `append` is now declared in the shared API as `axiom unsafe` (signature-only contract) so both backends share one public name/type while executable backend-neutral lowering is tracked separately.
+- `append` is executable in `prelude_api.lrl` and shared by both backends.
+- Current signature is Nat-list focused: `append : List Nat -> List Nat -> List Nat`.
+- Backend impl preludes do not redefine `append`; they only provide platform-layer substrate.
 
 ## Temporarily Gated Features
 
@@ -39,3 +41,26 @@ The following are provided through `prelude_api.lrl` for both backend stacks:
 ## Platform Layer Status
 
 Current impl layers are restricted to runtime substrate declarations (`Dyn`, `EvalCap`, `eval`) and no longer carry shared stdlib algorithms.
+
+## Stdlib Ownership
+
+Public contract ownership:
+
+- `prelude_api.lrl` owns the exported prelude contract (names and signatures visible to user code).
+- User code must rely on this contract, not on backend impl files.
+
+Implementation ownership:
+
+- `prelude_impl_dynamic.lrl` and `prelude_impl_typed.lrl` own only platform-dependent runtime substrate.
+- They must not become duplicate stdlib layers.
+
+Shared-library ownership:
+
+- Backend-neutral algorithms belong in shared stdlib modules (`stdlib/std/*`) as migration proceeds.
+- Until migration completes, shared algorithms may remain in `prelude_api.lrl`, but must still be defined once and never duplicated in impl preludes.
+
+Policy classification:
+
+- Must fix for 0.1: accidental shared algorithm duplication in impl preludes.
+- Allowed divergence (documented): `Dyn`/`EvalCap`/`eval` representation and execution model.
+- Feature-gated: interior mutability runtime checks and executable axioms.

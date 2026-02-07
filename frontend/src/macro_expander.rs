@@ -124,6 +124,39 @@ impl ExpansionBudget {
     }
 }
 
+// Shared mutable state threaded through recursive expansion calls.
+#[derive(Debug)]
+struct ExpansionState<'a> {
+    budget: &'a mut ExpansionBudget,
+    trace: &'a mut Vec<MacroTraceEntry>,
+    trace_enabled: bool,
+    did_expand: &'a mut bool,
+}
+
+impl<'a> ExpansionState<'a> {
+    fn new(
+        budget: &'a mut ExpansionBudget,
+        trace: &'a mut Vec<MacroTraceEntry>,
+        trace_enabled: bool,
+        did_expand: &'a mut bool,
+    ) -> Self {
+        Self {
+            budget,
+            trace,
+            trace_enabled,
+            did_expand,
+        }
+    }
+
+    fn single_step_done(&self, limit: ExpansionLimit) -> bool {
+        limit == ExpansionLimit::SingleStep && *self.did_expand
+    }
+
+    fn mark_expanded(&mut self) {
+        *self.did_expand = true;
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum MacroBoundaryKind {
     UnsafeForm,
@@ -229,6 +262,12 @@ pub struct Expander {
     pub trace_verbose: bool,
 }
 
+impl Default for Expander {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Expander {
     pub fn new() -> Self {
         let mut expander = Expander {
@@ -299,7 +338,7 @@ impl Expander {
 
     pub fn enter_module<S: Into<String>>(&mut self, module: S) {
         let module = module.into();
-        self.current_module = module.clone();
+        self.current_module.clone_from(&module);
         self.ensure_module(&module);
     }
 
@@ -452,13 +491,17 @@ impl Expander {
         let mut ref_idx = 0usize;
         let mut def_idx = 0usize;
         while ref_idx < ref_norm.len() && def_idx < def_norm.len() {
-            if ref_norm[ref_idx] == def_norm[def_idx] {
-                ref_idx += 1;
-                def_idx += 1;
-            } else if ref_norm[ref_idx] < def_norm[def_idx] {
-                ref_idx += 1;
-            } else {
-                return false;
+            match ref_norm[ref_idx].cmp(&def_norm[def_idx]) {
+                std::cmp::Ordering::Equal => {
+                    ref_idx += 1;
+                    def_idx += 1;
+                }
+                std::cmp::Ordering::Less => {
+                    ref_idx += 1;
+                }
+                std::cmp::Ordering::Greater => {
+                    return false;
+                }
             }
         }
         def_idx == def_norm.len()
@@ -512,15 +555,8 @@ impl Expander {
         let mut trace = Vec::new();
         let mut did_expand = false;
         let mut budget = ExpansionBudget::new(self.expansion_step_limit);
-        let res = self.expand_macros_internal(
-            syntax,
-            ExpansionLimit::SingleStep,
-            &mut budget,
-            &mut trace,
-            false,
-            &mut did_expand,
-            0,
-        )?;
+        let mut state = ExpansionState::new(&mut budget, &mut trace, false, &mut did_expand);
+        let res = self.expand_macros_internal(syntax, ExpansionLimit::SingleStep, &mut state, 0)?;
         Ok(res.unwrap_or_else(empty_syntax))
     }
 
@@ -542,15 +578,10 @@ impl Expander {
         let mut trace = Vec::new();
         let mut did_expand = false;
         let mut budget = ExpansionBudget::new(self.expansion_step_limit);
-        let res = self.expand_macros_internal(
-            syntax,
-            ExpansionLimit::Full,
-            &mut budget,
-            &mut trace,
-            true,
-            &mut did_expand,
-            0,
-        )?;
+        let res = {
+            let mut state = ExpansionState::new(&mut budget, &mut trace, true, &mut did_expand);
+            self.expand_macros_internal(syntax, ExpansionLimit::Full, &mut state, 0)?
+        };
         Ok((res, trace))
     }
 
@@ -950,32 +981,17 @@ impl Expander {
         &mut self,
         syntax: &Syntax,
         limit: ExpansionLimit,
-        budget: &mut ExpansionBudget,
-        trace: &mut Vec<MacroTraceEntry>,
-        trace_enabled: bool,
-        did_expand: &mut bool,
+        state: &mut ExpansionState<'_>,
         macro_depth: usize,
     ) -> Result<Option<Syntax>, ExpansionError> {
-        self.expand_quasiquote_with_depth(
-            syntax,
-            limit,
-            budget,
-            trace,
-            trace_enabled,
-            did_expand,
-            macro_depth,
-            1,
-        )
+        self.expand_quasiquote_with_depth(syntax, limit, state, macro_depth, 1)
     }
 
     fn expand_quasiquote_with_depth(
         &mut self,
         syntax: &Syntax,
         limit: ExpansionLimit,
-        budget: &mut ExpansionBudget,
-        trace: &mut Vec<MacroTraceEntry>,
-        trace_enabled: bool,
-        did_expand: &mut bool,
+        state: &mut ExpansionState<'_>,
         macro_depth: usize,
         quasiquote_depth: usize,
     ) -> Result<Option<Syntax>, ExpansionError> {
@@ -995,10 +1011,7 @@ impl Expander {
                                 .expand_quasiquote_with_depth(
                                     &list[1],
                                     limit,
-                                    budget,
-                                    trace,
-                                    trace_enabled,
-                                    did_expand,
+                                    state,
                                     macro_depth,
                                     quasiquote_depth + 1,
                                 )?
@@ -1026,10 +1039,7 @@ impl Expander {
                                     .expand_macros_internal(
                                         list[1].clone(),
                                         limit,
-                                        budget,
-                                        trace,
-                                        trace_enabled,
-                                        did_expand,
+                                        state,
                                         macro_depth,
                                     )?
                                     .ok_or(ExpansionError::InvalidSyntax(
@@ -1042,10 +1052,7 @@ impl Expander {
                                 .expand_quasiquote_with_depth(
                                     &list[1],
                                     limit,
-                                    budget,
-                                    trace,
-                                    trace_enabled,
-                                    did_expand,
+                                    state,
                                     macro_depth,
                                     quasiquote_depth - 1,
                                 )?
@@ -1079,10 +1086,7 @@ impl Expander {
                                 .expand_quasiquote_with_depth(
                                     &list[1],
                                     limit,
-                                    budget,
-                                    trace,
-                                    trace_enabled,
-                                    did_expand,
+                                    state,
                                     macro_depth,
                                     quasiquote_depth - 1,
                                 )?
@@ -1117,10 +1121,7 @@ impl Expander {
                                             .expand_macros_internal(
                                                 sub[1].clone(),
                                                 limit,
-                                                budget,
-                                                trace,
-                                                trace_enabled,
-                                                did_expand,
+                                                state,
                                                 macro_depth,
                                             )?
                                             .ok_or(ExpansionError::InvalidSyntax(
@@ -1152,10 +1153,7 @@ impl Expander {
                         .expand_quasiquote_with_depth(
                             item,
                             limit,
-                            budget,
-                            trace,
-                            trace_enabled,
-                            did_expand,
+                            state,
                             macro_depth,
                             quasiquote_depth,
                         )?
@@ -1191,10 +1189,7 @@ impl Expander {
                                             .expand_macros_internal(
                                                 sub[1].clone(),
                                                 limit,
-                                                budget,
-                                                trace,
-                                                trace_enabled,
-                                                did_expand,
+                                                state,
                                                 macro_depth,
                                             )?
                                             .ok_or(ExpansionError::InvalidSyntax(
@@ -1226,10 +1221,7 @@ impl Expander {
                         .expand_quasiquote_with_depth(
                             item,
                             limit,
-                            budget,
-                            trace,
-                            trace_enabled,
-                            did_expand,
+                            state,
                             macro_depth,
                             quasiquote_depth,
                         )?
@@ -1251,10 +1243,7 @@ impl Expander {
                     .expand_quasiquote_with_depth(
                         base,
                         limit,
-                        budget,
-                        trace,
-                        trace_enabled,
-                        did_expand,
+                        state,
                         macro_depth,
                         quasiquote_depth,
                     )?
@@ -1266,10 +1255,7 @@ impl Expander {
                     .expand_quasiquote_with_depth(
                         index,
                         limit,
-                        budget,
-                        trace,
-                        trace_enabled,
-                        did_expand,
+                        state,
                         macro_depth,
                         quasiquote_depth,
                     )?
@@ -1291,13 +1277,10 @@ impl Expander {
         &mut self,
         syntax: Syntax,
         limit: ExpansionLimit,
-        budget: &mut ExpansionBudget,
-        trace: &mut Vec<MacroTraceEntry>,
-        trace_enabled: bool,
-        did_expand: &mut bool,
+        state: &mut ExpansionState<'_>,
         depth: usize,
     ) -> Result<Option<Syntax>, ExpansionError> {
-        if limit == ExpansionLimit::SingleStep && *did_expand {
+        if state.single_step_done(limit) {
             return Ok(Some(syntax));
         }
 
@@ -1326,15 +1309,7 @@ impl Expander {
                         if limit == ExpansionLimit::SingleStep {
                             return Ok(Some(syntax.clone()));
                         }
-                        return self.expand_quasiquote_internal(
-                            &list[1],
-                            limit,
-                            budget,
-                            trace,
-                            trace_enabled,
-                            did_expand,
-                            depth,
-                        );
+                        return self.expand_quasiquote_internal(&list[1], limit, state, depth);
                     }
 
                     if s == "defmacro" {
@@ -1385,7 +1360,7 @@ impl Expander {
                         self.add_macro(name, args, body);
 
                         if limit == ExpansionLimit::SingleStep {
-                            *did_expand = true;
+                            state.mark_expanded();
                         }
 
                         return Ok(None);
@@ -1399,8 +1374,8 @@ impl Expander {
 
                         if limit == ExpansionLimit::Full {
                             if let Some(cached) = self.expansion_cache.get(&call_key).cloned() {
-                                if trace_enabled {
-                                    trace.push(MacroTraceEntry {
+                                if state.trace_enabled {
+                                    state.trace.push(MacroTraceEntry {
                                         name: s.clone(),
                                         span: syntax.span,
                                         depth,
@@ -1422,8 +1397,8 @@ impl Expander {
                             return Err(ExpansionError::MacroExpansionCycle { cycle });
                         }
 
-                        if trace_enabled {
-                            trace.push(MacroTraceEntry {
+                        if state.trace_enabled {
+                            state.trace.push(MacroTraceEntry {
                                 name: s.clone(),
                                 span: syntax.span,
                                 depth,
@@ -1450,14 +1425,14 @@ impl Expander {
                                 });
                             }
 
-                            if !budget.consume() {
+                            if !state.budget.consume() {
                                 let message = format!(
                                     "Macro expansion step limit exceeded (limit {}). Possible recursive macro expansion.",
-                                    budget.limit
+                                    state.budget.limit
                                 );
                                 self.record_expansion_limit_diagnostic(syntax.span, message);
                                 return Err(ExpansionError::ExpansionStepLimitExceeded {
-                                    limit: budget.limit,
+                                    limit: state.budget.limit,
                                 });
                             }
 
@@ -1470,19 +1445,12 @@ impl Expander {
                                     syntax.span,
                                     &expanded,
                                 )?;
-                                *did_expand = true;
+                                state.mark_expanded();
                                 return Ok(Some(expanded));
                             }
 
-                            let res = self.expand_macros_internal(
-                                expanded,
-                                limit,
-                                budget,
-                                trace,
-                                trace_enabled,
-                                did_expand,
-                                depth + 1,
-                            )?;
+                            let res =
+                                self.expand_macros_internal(expanded, limit, state, depth + 1)?;
 
                             if let Some(expanded_full) = &res {
                                 self.check_macro_boundary(
@@ -1508,18 +1476,10 @@ impl Expander {
 
                 let mut new_list = Vec::new();
                 for item in list.iter() {
-                    let expanded_item = if limit == ExpansionLimit::SingleStep && *did_expand {
+                    let expanded_item = if state.single_step_done(limit) {
                         Some(item.clone())
                     } else {
-                        self.expand_macros_internal(
-                            item.clone(),
-                            limit,
-                            budget,
-                            trace,
-                            trace_enabled,
-                            did_expand,
-                            depth,
-                        )?
+                        self.expand_macros_internal(item.clone(), limit, state, depth)?
                     };
                     if let Some(expanded_item) = expanded_item {
                         new_list.push(expanded_item);
@@ -1534,18 +1494,10 @@ impl Expander {
             SyntaxKind::BracedList(list) => {
                 let mut new_list = Vec::new();
                 for item in list.iter() {
-                    let expanded_item = if limit == ExpansionLimit::SingleStep && *did_expand {
+                    let expanded_item = if state.single_step_done(limit) {
                         Some(item.clone())
                     } else {
-                        self.expand_macros_internal(
-                            item.clone(),
-                            limit,
-                            budget,
-                            trace,
-                            trace_enabled,
-                            did_expand,
-                            depth,
-                        )?
+                        self.expand_macros_internal(item.clone(), limit, state, depth)?
                     };
                     if let Some(expanded_item) = expanded_item {
                         new_list.push(expanded_item);
@@ -1558,35 +1510,19 @@ impl Expander {
                 }))
             }
             SyntaxKind::Index(base, index) => {
-                let new_base = if limit == ExpansionLimit::SingleStep && *did_expand {
+                let new_base = if state.single_step_done(limit) {
                     Some((**base).clone())
                 } else {
-                    self.expand_macros_internal(
-                        (**base).clone(),
-                        limit,
-                        budget,
-                        trace,
-                        trace_enabled,
-                        did_expand,
-                        depth,
-                    )?
+                    self.expand_macros_internal((**base).clone(), limit, state, depth)?
                 }
                 .ok_or(ExpansionError::InvalidSyntax(
                     "index".to_string(),
                     "Index base expanded to empty".to_string(),
                 ))?;
-                let new_index = if limit == ExpansionLimit::SingleStep && *did_expand {
+                let new_index = if state.single_step_done(limit) {
                     Some((**index).clone())
                 } else {
-                    self.expand_macros_internal(
-                        (**index).clone(),
-                        limit,
-                        budget,
-                        trace,
-                        trace_enabled,
-                        did_expand,
-                        depth,
-                    )?
+                    self.expand_macros_internal((**index).clone(), limit, state, depth)?
                 }
                 .ok_or(ExpansionError::InvalidSyntax(
                     "index".to_string(),
@@ -1608,15 +1544,8 @@ impl Expander {
         let mut trace = Vec::new();
         let mut did_expand = false;
         let mut budget = ExpansionBudget::new(self.expansion_step_limit);
-        self.expand_macros_internal(
-            syntax,
-            ExpansionLimit::Full,
-            &mut budget,
-            &mut trace,
-            false,
-            &mut did_expand,
-            0,
-        )
+        let mut state = ExpansionState::new(&mut budget, &mut trace, false, &mut did_expand);
+        self.expand_macros_internal(syntax, ExpansionLimit::Full, &mut state, 0)
     }
 
     fn substitute_macro_args(
@@ -1640,12 +1569,15 @@ impl Expander {
             subst_env.insert(arg_name.clone(), args[i].clone());
         }
 
-        let substituted = self.substitute_rec_with_scope(&def.body, &subst_env, macro_scope)?;
-        Ok(self.remap_spans_for_scope(&substituted, macro_scope, call_site_span))
+        let substituted = Self::substitute_rec_with_scope(&def.body, &subst_env, macro_scope)?;
+        Ok(Self::remap_spans_for_scope(
+            &substituted,
+            macro_scope,
+            call_site_span,
+        ))
     }
 
     fn substitute_rec_with_scope(
-        &self,
         syntax: &Syntax,
         subst_env: &HashMap<String, Syntax>,
         macro_scope: ScopeId,
@@ -1664,7 +1596,7 @@ impl Expander {
             SyntaxKind::List(list) => {
                 let new_list = list
                     .iter()
-                    .map(|item| self.substitute_rec_with_scope(item, subst_env, macro_scope))
+                    .map(|item| Self::substitute_rec_with_scope(item, subst_env, macro_scope))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(Syntax {
@@ -1676,7 +1608,7 @@ impl Expander {
             SyntaxKind::BracedList(list) => {
                 let new_list = list
                     .iter()
-                    .map(|item| self.substitute_rec_with_scope(item, subst_env, macro_scope))
+                    .map(|item| Self::substitute_rec_with_scope(item, subst_env, macro_scope))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(Syntax {
@@ -1686,8 +1618,8 @@ impl Expander {
                 })
             }
             SyntaxKind::Index(base, index) => {
-                let new_base = self.substitute_rec_with_scope(base, subst_env, macro_scope)?;
-                let new_index = self.substitute_rec_with_scope(index, subst_env, macro_scope)?;
+                let new_base = Self::substitute_rec_with_scope(base, subst_env, macro_scope)?;
+                let new_index = Self::substitute_rec_with_scope(index, subst_env, macro_scope)?;
                 Ok(Syntax {
                     kind: SyntaxKind::Index(Box::new(new_base), Box::new(new_index)),
                     span: syntax.span,
@@ -1701,12 +1633,7 @@ impl Expander {
         }
     }
 
-    fn remap_spans_for_scope(
-        &self,
-        syntax: &Syntax,
-        scope: ScopeId,
-        call_site_span: Span,
-    ) -> Syntax {
+    fn remap_spans_for_scope(syntax: &Syntax, scope: ScopeId, call_site_span: Span) -> Syntax {
         let span = if syntax.scopes.contains(&scope) {
             call_site_span
         } else {
@@ -1716,17 +1643,17 @@ impl Expander {
         let kind = match &syntax.kind {
             SyntaxKind::List(list) => SyntaxKind::List(
                 list.iter()
-                    .map(|item| self.remap_spans_for_scope(item, scope, call_site_span))
+                    .map(|item| Self::remap_spans_for_scope(item, scope, call_site_span))
                     .collect(),
             ),
             SyntaxKind::BracedList(list) => SyntaxKind::BracedList(
                 list.iter()
-                    .map(|item| self.remap_spans_for_scope(item, scope, call_site_span))
+                    .map(|item| Self::remap_spans_for_scope(item, scope, call_site_span))
                     .collect(),
             ),
             SyntaxKind::Index(base, index) => SyntaxKind::Index(
-                Box::new(self.remap_spans_for_scope(base, scope, call_site_span)),
-                Box::new(self.remap_spans_for_scope(index, scope, call_site_span)),
+                Box::new(Self::remap_spans_for_scope(base, scope, call_site_span)),
+                Box::new(Self::remap_spans_for_scope(index, scope, call_site_span)),
             ),
             _ => syntax.kind.clone(),
         };

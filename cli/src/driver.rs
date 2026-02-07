@@ -581,6 +581,7 @@ fn load_macro_module(
 }
 
 /// Compilation/Interpretation Options
+#[derive(Default)]
 pub struct PipelineOptions {
     pub show_types: bool,
     pub show_eval: bool,
@@ -591,22 +592,6 @@ pub struct PipelineOptions {
     pub allow_axioms: bool,
     pub prelude_frozen: bool,
     pub allow_redefine: bool,
-}
-
-impl Default for PipelineOptions {
-    fn default() -> Self {
-        PipelineOptions {
-            show_types: false,
-            show_eval: false,
-            verbose: false,
-            collect_artifacts: false,
-            panic_free: false,
-            require_axiom_tags: false,
-            allow_axioms: false,
-            prelude_frozen: false,
-            allow_redefine: false,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -666,7 +651,7 @@ fn artifact_name(artifact: &Artifact) -> &str {
     }
 }
 
-fn sort_artifacts(artifacts: &mut Vec<Artifact>) {
+fn sort_artifacts(artifacts: &mut [Artifact]) {
     artifacts.sort_by(|a, b| {
         let key_a = (artifact_kind_order(a), artifact_name(a));
         let key_b = (artifact_kind_order(b), artifact_name(b));
@@ -809,9 +794,10 @@ pub fn process_code(
 
     emit_syntax_compat_warnings(&syntax_nodes, diagnostics);
 
-    let mut decl_parser = DeclarationParser::new(expander);
-    let parse_result = decl_parser.parse(syntax_nodes);
-    drop(decl_parser); // Release borrow of expander
+    let parse_result = {
+        let mut decl_parser = DeclarationParser::new(expander);
+        decl_parser.parse(syntax_nodes)
+    };
     drain_macro_diagnostics(expander, diagnostics);
 
     let decls = match parse_result {
@@ -1252,7 +1238,7 @@ pub fn process_code(
                         // Even in REPL/Driver mode, we check safety constraints.
                         if let Some(d) = env.definitions().get(&name) {
                             if let Some(val) = &d.value {
-                                let ids = mir::types::IdRegistry::from_env(&env);
+                                let ids = mir::types::IdRegistry::from_env(env);
                                 if ids.has_errors() {
                                     for err in ids.errors() {
                                         let mut diagnostic = Diagnostic::error(err.to_string());
@@ -1276,7 +1262,7 @@ pub fn process_code(
                                 let mut ctx = match mir::lower::LoweringContext::new_with_metadata(
                                     vec![],
                                     d.ty.clone(),
-                                    &env,
+                                    env,
                                     &ids,
                                     Some(term_span_map.clone()),
                                     Some(name.clone()),
@@ -2288,40 +2274,24 @@ fn defeq_fix_diagnostic() -> String {
     "Definitional equality refused to unfold `fix` (general recursion). Mark the definition `partial`, keep it out of types, or make it `opaque` if it should not reduce.".to_string()
 }
 
-fn peel_surface_pi_binders(
-    term: SurfaceTerm,
-) -> (
-    Vec<(
-        String,
-        BinderInfo,
-        Option<kernel::ast::FunctionKind>,
-        SurfaceTerm,
-    )>,
+type SurfacePiBinder = (
+    String,
+    BinderInfo,
+    Option<kernel::ast::FunctionKind>,
     SurfaceTerm,
-) {
+);
+
+fn peel_surface_pi_binders(term: SurfaceTerm) -> (Vec<SurfacePiBinder>, SurfaceTerm) {
     let mut binders = Vec::new();
     let mut curr = term;
-    loop {
-        match curr.kind {
-            SurfaceTermKind::Pi(name, info, kind, ty, body) => {
-                binders.push((name, info, kind, *ty));
-                curr = *body;
-            }
-            _ => break,
-        }
+    while let SurfaceTermKind::Pi(name, info, kind, ty, body) = curr.kind {
+        binders.push((name, info, kind, *ty));
+        curr = *body;
     }
     (binders, curr)
 }
 
-fn wrap_surface_with_binders(
-    binders: &[(
-        String,
-        BinderInfo,
-        Option<kernel::ast::FunctionKind>,
-        SurfaceTerm,
-    )],
-    body: SurfaceTerm,
-) -> SurfaceTerm {
+fn wrap_surface_with_binders(binders: &[SurfacePiBinder], body: SurfaceTerm) -> SurfaceTerm {
     let mut curr = body;
     for (name, info, kind, ty) in binders.iter().rev() {
         let span = curr.span;

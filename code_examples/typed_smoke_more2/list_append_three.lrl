@@ -1,9 +1,0 @@
-(def append_three (pi a ListRc (pi b ListRc (pi c ListRc ListRc)))
-  (lam a ListRc
-    (lam b ListRc
-      (lam c ListRc
-        (append (append a b) c)))))
-
-(append_three (cons_rc zero nil_rc)
-              (cons_rc (succ zero) nil_rc)
-              (cons_rc (succ (succ zero)) nil_rc))

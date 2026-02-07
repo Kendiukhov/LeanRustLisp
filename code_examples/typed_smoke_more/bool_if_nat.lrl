@@ -1,4 +1,4 @@
-(def if_nat
+(def if_nat_local
   (pi c Bool (pi t Nat (pi f Nat Nat)))
   (lam c Bool
     (lam t Nat
@@ -7,4 +7,4 @@
           (case (true) t)
           (case (false) f))))))
 
-(if_nat true (succ zero) zero)
+(if_nat_local true (succ zero) zero)

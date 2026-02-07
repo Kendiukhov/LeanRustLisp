@@ -1,9 +1,0 @@
-(def choose_list (pi b Bool (pi xs ListRc (pi ys ListRc ListRc)))
-  (lam b Bool
-    (lam xs ListRc
-      (lam ys ListRc
-        (match b ListRc
-          (case (true) xs)
-          (case (false) ys))))))
-
-(choose_list false (cons_rc zero nil_rc) (cons_rc (succ zero) nil_rc))

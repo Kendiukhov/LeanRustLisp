@@ -1,0 +1,5 @@
+;;! tag: excluded
+;;! reason: Uses indexed/runtime bounds-check lowering paths; excluded from overlap subset to keep conformance focused on core MIR semantics without backend-specific panic boundaries.
+
+(def entry Nat
+  zero)

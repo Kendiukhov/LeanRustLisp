@@ -1488,14 +1488,27 @@ fn test_conditional_copy_instance_resolution() {
 
     let list_nat = Term::app(list_ref.clone(), nat_ref);
     assert!(
-        !is_copy_type_in_env(&env, &list_nat),
-        "List Nat should not be Copy"
+        is_copy_type_in_env(&env, &list_nat),
+        "List Nat should be Copy when element type is Copy"
     );
 
-    let option_list_nat = Term::app(option_ref, list_nat);
+    let option_list_nat = Term::app(option_ref.clone(), list_nat.clone());
     assert!(
-        !is_copy_type_in_env(&env, &option_list_nat),
-        "Option (List Nat) should not be Copy"
+        is_copy_type_in_env(&env, &option_list_nat),
+        "Option (List Nat) should be Copy when List Nat is Copy"
+    );
+
+    let non_copy_elem = Term::pi(type0.clone(), type0.clone(), BinderInfo::Default);
+    let list_non_copy = Term::app(list_ref, non_copy_elem);
+    assert!(
+        !is_copy_type_in_env(&env, &list_non_copy),
+        "List (Type -> Type) should not be Copy"
+    );
+
+    let option_list_non_copy = Term::app(option_ref, list_non_copy);
+    assert!(
+        !is_copy_type_in_env(&env, &option_list_non_copy),
+        "Option (List (Type -> Type)) should not be Copy"
     );
 }
 

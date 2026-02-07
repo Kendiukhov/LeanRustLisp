@@ -1,0 +1,149 @@
+;; Public prelude API contract shared by all codegen backends.
+;; Backend-specific implementation layers are loaded after this file.
+
+(defmacro id (x) x)
+
+;; Marker attributes (resolved during elaboration).
+(axiom unsafe interior_mutable Type)
+(axiom unsafe may_panic_on_borrow_violation Type)
+(axiom unsafe concurrency_primitive Type)
+(axiom unsafe atomic_primitive Type)
+(axiom unsafe indexable Type)
+
+(inductive copy Nat (sort 1)
+  (ctor zero Nat)
+  (ctor succ (pi n Nat Nat))
+)
+
+(inductive copy Bool (sort 1)
+  (ctor true Bool)
+  (ctor false Bool)
+)
+
+(inductive False (sort 0))
+
+;; Borrowing primitives (opaque; handled by MIR lowering/codegen).
+(axiom Shared (sort 1))
+(axiom Mut (sort 1))
+(axiom Ref (pi k (sort 1) (pi A (sort 1) (sort 1))))
+(axiom borrow_shared (pi {A (sort 1)} (pi x A (Ref #[r] Shared A))))
+(axiom borrow_mut (pi {A (sort 1)} (pi x A (Ref #[r] Mut A))))
+
+(def add (pi n Nat (pi m Nat Nat))
+  (lam n Nat
+    (lam m Nat
+      (match n Nat
+        (case (zero) m)
+        (case (succ m' ih) (succ ih))
+      )
+    )
+  )
+)
+
+(def not (pi b Bool Bool)
+  (lam b Bool
+    (match b Bool
+      (case (true) false)
+      (case (false) true)
+    )
+  )
+)
+
+(def if_nat (pi c Bool (pi t Nat (pi f Nat Nat)))
+  (lam c Bool
+    (lam t Nat
+      (lam f Nat
+        (match c Nat
+          (case (true) t)
+          (case (false) f)
+        )
+      )
+    )
+  )
+)
+
+(def and (pi a Bool (pi b Bool Bool))
+  (lam a Bool
+    (lam b Bool
+      (match a Bool
+        (case (true) b)
+        (case (false) false)
+      )
+    )
+  )
+)
+
+(def or (pi a Bool (pi b Bool Bool))
+  (lam a Bool
+    (lam b Bool
+      (match a Bool
+        (case (true) true)
+        (case (false) b)
+      )
+    )
+  )
+)
+
+(inductive copy List (pi T (sort 1) (sort 1))
+  (ctor nil (pi {T (sort 1)} (List T)))
+  (ctor cons (pi {T (sort 1)} (pi h T (pi t (List T) (List T)))))
+)
+
+(def append (pi #[once] l1 (List Nat) (pi #[once] l2 (List Nat) (List Nat)))
+  (lam #[once] l1 (List Nat)
+    (lam #[once] l2 (List Nat)
+      (match l1 (List Nat)
+        (case (nil) l2)
+        (case (cons h t ih) (cons h ih))
+      )
+    )
+  )
+)
+
+(inductive (indexable) VecDyn (pi T (sort 1) (sort 1))
+  (ctor mk_vec_dyn (pi {T (sort 1)} (pi data (List T) (VecDyn T))))
+)
+
+(inductive (indexable) Slice (pi T (sort 1) (sort 1))
+  (ctor mk_slice (pi {T (sort 1)} (pi data (List T) (Slice T))))
+)
+
+(inductive (indexable) Array (pi T (sort 1) (sort 1))
+  (ctor mk_array (pi {T (sort 1)} (pi data (List T) (Array T))))
+)
+
+(axiom unsafe index_vec_dyn (pi {T (sort 1)} (pi v (VecDyn T) (pi i Nat T))))
+(axiom unsafe index_slice (pi {T (sort 1)} (pi v (Slice T) (pi i Nat T))))
+(axiom unsafe index_array (pi {T (sort 1)} (pi v (Array T) (pi i Nat T))))
+
+;; Interior mutability primitives.
+(inductive (interior_mutable may_panic_on_borrow_violation) RefCell (pi T (sort 1) (sort 1))
+  (ctor mk_refcell (pi {T (sort 1)} (pi x T (RefCell T))))
+)
+
+(inductive (interior_mutable concurrency_primitive) Mutex (pi T (sort 1) (sort 1))
+  (ctor mk_mutex (pi {T (sort 1)} (pi x T (Mutex T))))
+)
+
+(inductive (interior_mutable concurrency_primitive atomic_primitive) Atomic (pi T (sort 1) (sort 1))
+  (ctor mk_atomic (pi {T (sort 1)} (pi x T (Atomic T))))
+)
+
+(inductive Comp (pi A (sort 1) (sort 1))
+  (ctor ret (pi A (sort 1) (pi x A (Comp A))))
+  (ctor bind (pi A (sort 1) (pi B (sort 1) (pi m (Comp A) (pi f (pi x A (Comp B)) (Comp B))))))
+)
+
+(inductive Eq (pi A (sort 1) (pi a A (pi b A (sort 0))))
+  (ctor refl (pi A (sort 1) (pi a A (Eq A a a))))
+)
+
+;; Print helpers: typed backend special-cases these names to emit println!.
+;; Dynamic backend keeps them as pure identity functions.
+(def print_nat (pi #[fn] n Nat Nat)
+  (lam #[fn] n Nat n)
+)
+
+(def print_bool (pi #[fn] b Bool Bool)
+  (lam #[fn] b Bool b)
+)

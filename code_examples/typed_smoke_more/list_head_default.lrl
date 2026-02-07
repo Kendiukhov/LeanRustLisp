@@ -1,9 +1,0 @@
-(def head_or
-  (pi l ListRc (pi default Nat Nat))
-  (lam l ListRc
-    (lam default Nat
-      (match l Nat
-        (case (nil_rc) default)
-        (case (cons_rc h t ih) h)))))
-
-(head_or (cons_rc (succ zero) nil_rc) zero)

@@ -1,3 +1,4 @@
+use crate::compiler;
 use crate::driver::{self, PipelineOptions};
 use crate::expand::{expand_and_format, ExpandError, ExpandMode};
 use frontend::diagnostics::{Diagnostic, DiagnosticCollector};
@@ -15,6 +16,23 @@ enum ReplLineAction {
     Exit,
 }
 
+#[derive(Clone, Copy)]
+struct ReplOptions {
+    require_axiom_tags: bool,
+    allow_axioms: bool,
+    allow_redefine: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct RunFileOptions {
+    pub verbose: bool,
+    pub panic_free: bool,
+    pub require_axiom_tags: bool,
+    pub allow_axioms: bool,
+    pub prelude_frozen: bool,
+    pub allow_redefine: bool,
+}
+
 pub fn start(
     trace_macros: bool,
     panic_free: bool,
@@ -23,6 +41,12 @@ pub fn start(
     allow_redefine: bool,
     allow_axioms: bool,
 ) {
+    let repl_options = ReplOptions {
+        require_axiom_tags,
+        allow_axioms,
+        allow_redefine,
+    };
+
     let mut env = Env::new();
     let mut expander = Expander::new();
     expander.trace_verbose = trace_macros;
@@ -35,37 +59,50 @@ pub fn start(
     let mut last_defined: Option<String> = None;
 
     let mut panic_free = panic_free;
-    let allow_axioms = allow_axioms;
-    let prelude_path = "stdlib/prelude.lrl";
-    if Path::new(prelude_path).exists() {
-        println!("Loading prelude from {}...", prelude_path);
+    let mut prelude_modules = Vec::new();
+    let mut loaded_any_prelude = false;
+    let allow_reserved = env.allows_reserved_primitives();
+    env.set_allow_reserved_primitives(true);
+    for prelude_path in compiler::prelude_stack_for_backend(compiler::BackendMode::Dynamic) {
+        if !Path::new(prelude_path).exists() {
+            continue;
+        }
+        loaded_any_prelude = true;
+        println!("Loading prelude layer from {}...", prelude_path);
         let prelude_module = driver::module_id_for_source(prelude_path);
         expander.set_macro_boundary_policy(frontend::macro_expander::MacroBoundaryPolicy::Deny);
         crate::set_prelude_macro_boundary_allowlist(&mut expander, &prelude_module);
-        let allow_reserved = env.allows_reserved_primitives();
-        env.set_allow_reserved_primitives(true);
         let _ = run_file(
             prelude_path,
             &mut env,
             &mut expander,
-            false,
-            panic_free,
-            false,
-            true,
-            false,
-            false,
+            RunFileOptions {
+                verbose: false,
+                panic_free,
+                require_axiom_tags: false,
+                allow_axioms: true,
+                prelude_frozen: false,
+                allow_redefine: false,
+            },
         );
-        env.set_allow_reserved_primitives(allow_reserved);
         expander.clear_macro_boundary_allowlist();
-        expander.set_macro_boundary_policy(user_policy);
+        prelude_modules.push(prelude_module);
+    }
+    env.set_allow_reserved_primitives(allow_reserved);
+    expander.set_macro_boundary_policy(user_policy);
+    if loaded_any_prelude {
         if let Err(err) = env.init_marker_registry() {
             println!("Failed to initialize marker registry: {}", err);
             return;
         }
-        expander.set_default_imports(vec![prelude_module]);
+        expander.set_default_imports(prelude_modules);
         expander.enter_module("repl");
     } else {
-        println!("Warning: Prelude not found at {}", prelude_path);
+        println!(
+            "Warning: prelude stack not found ({}, {})",
+            compiler::PRELUDE_API_PATH,
+            compiler::PRELUDE_IMPL_DYNAMIC_PATH
+        );
     }
 
     env.set_allow_redefinition(allow_redefine);
@@ -87,9 +124,7 @@ pub fn start(
                 &mut env,
                 &mut expander,
                 &mut panic_free,
-                require_axiom_tags,
-                allow_axioms,
-                allow_redefine,
+                repl_options,
                 &mut last_defined,
             );
 
@@ -105,9 +140,7 @@ pub fn start(
                     &mut env,
                     &mut expander,
                     &mut panic_free,
-                    require_axiom_tags,
-                    allow_axioms,
-                    allow_redefine,
+                    repl_options,
                     &mut last_defined,
                 );
             }
@@ -121,9 +154,7 @@ pub fn start(
                 &mut env,
                 &mut expander,
                 &mut panic_free,
-                require_axiom_tags,
-                allow_axioms,
-                allow_redefine,
+                repl_options,
                 &mut last_defined,
             );
         }
@@ -135,9 +166,7 @@ fn run_readline_loop(
     env: &mut Env,
     expander: &mut Expander,
     panic_free: &mut bool,
-    require_axiom_tags: bool,
-    allow_axioms: bool,
-    allow_redefine: bool,
+    options: ReplOptions,
     last_defined: &mut Option<String>,
 ) -> bool {
     loop {
@@ -159,16 +188,7 @@ fn run_readline_loop(
                 }
 
                 if matches!(
-                    handle_repl_line(
-                        line,
-                        env,
-                        expander,
-                        panic_free,
-                        require_axiom_tags,
-                        allow_axioms,
-                        allow_redefine,
-                        last_defined,
-                    ),
+                    handle_repl_line(line, env, expander, panic_free, options, last_defined,),
                     ReplLineAction::Exit
                 ) {
                     return false;
@@ -197,9 +217,7 @@ fn run_stdin_loop(
     env: &mut Env,
     expander: &mut Expander,
     panic_free: &mut bool,
-    require_axiom_tags: bool,
-    allow_axioms: bool,
-    allow_redefine: bool,
+    options: ReplOptions,
     last_defined: &mut Option<String>,
 ) {
     let stdin = io::stdin();
@@ -221,16 +239,7 @@ fn run_stdin_loop(
             Ok(_) => {
                 let line = input.trim_end_matches(&['\r', '\n'][..]);
                 if matches!(
-                    handle_repl_line(
-                        line,
-                        env,
-                        expander,
-                        panic_free,
-                        require_axiom_tags,
-                        allow_axioms,
-                        allow_redefine,
-                        last_defined,
-                    ),
+                    handle_repl_line(line, env, expander, panic_free, options, last_defined,),
                     ReplLineAction::Exit
                 ) {
                     break;
@@ -252,9 +261,7 @@ fn handle_repl_line(
     env: &mut Env,
     expander: &mut Expander,
     panic_free: &mut bool,
-    require_axiom_tags: bool,
-    allow_axioms: bool,
-    allow_redefine: bool,
+    options: ReplOptions,
     last_defined: &mut Option<String>,
 ) -> ReplLineAction {
     let line = line.trim();
@@ -343,12 +350,14 @@ fn handle_repl_line(
                         path,
                         env,
                         expander,
-                        true,
-                        *panic_free,
-                        require_axiom_tags,
-                        allow_axioms,
-                        true,
-                        allow_redefine,
+                        RunFileOptions {
+                            verbose: true,
+                            panic_free: *panic_free,
+                            require_axiom_tags: options.require_axiom_tags,
+                            allow_axioms: options.allow_axioms,
+                            prelude_frozen: true,
+                            allow_redefine: options.allow_redefine,
+                        },
                     ) {
                         *last_defined = Some(name);
                     }
@@ -386,10 +395,10 @@ fn handle_repl_line(
                         verbose: false,
                         collect_artifacts: false,
                         panic_free: *panic_free,
-                        require_axiom_tags,
-                        allow_axioms,
+                        require_axiom_tags: options.require_axiom_tags,
+                        allow_axioms: options.allow_axioms,
                         prelude_frozen: true,
-                        allow_redefine,
+                        allow_redefine: options.allow_redefine,
                     };
                     let mut diagnostics = DiagnosticCollector::new();
                     let result = driver::process_code(
@@ -415,10 +424,10 @@ fn handle_repl_line(
                         verbose: false,
                         collect_artifacts: false,
                         panic_free: *panic_free,
-                        require_axiom_tags,
-                        allow_axioms,
+                        require_axiom_tags: options.require_axiom_tags,
+                        allow_axioms: options.allow_axioms,
                         prelude_frozen: true,
-                        allow_redefine,
+                        allow_redefine: options.allow_redefine,
                     };
                     let mut diagnostics = DiagnosticCollector::new();
                     let result = driver::process_code(
@@ -454,10 +463,10 @@ fn handle_repl_line(
             verbose: true,
             collect_artifacts: false,
             panic_free: *panic_free,
-            require_axiom_tags,
-            allow_axioms,
+            require_axiom_tags: options.require_axiom_tags,
+            allow_axioms: options.allow_axioms,
             prelude_frozen: true,
-            allow_redefine,
+            allow_redefine: options.allow_redefine,
         };
         let mut diagnostics = DiagnosticCollector::new();
         let result = driver::process_code(line, "repl", env, expander, &options, &mut diagnostics);
@@ -472,26 +481,21 @@ pub fn run_file(
     path: &str,
     env: &mut Env,
     expander: &mut Expander,
-    verbose: bool,
-    panic_free: bool,
-    require_axiom_tags: bool,
-    allow_axioms: bool,
-    prelude_frozen: bool,
-    allow_redefine: bool,
+    options: RunFileOptions,
 ) -> Option<String> {
     match fs::read_to_string(path) {
         Ok(content) => {
             // For file execution, show_eval=true to see output of top-level expressions
             let options = PipelineOptions {
-                show_types: verbose,
+                show_types: options.verbose,
                 show_eval: true,
-                verbose,
+                verbose: options.verbose,
                 collect_artifacts: false,
-                panic_free,
-                require_axiom_tags,
-                allow_axioms,
-                prelude_frozen,
-                allow_redefine,
+                panic_free: options.panic_free,
+                require_axiom_tags: options.require_axiom_tags,
+                allow_axioms: options.allow_axioms,
+                prelude_frozen: options.prelude_frozen,
+                allow_redefine: options.allow_redefine,
             };
             let mut diagnostics = DiagnosticCollector::new();
             let result =

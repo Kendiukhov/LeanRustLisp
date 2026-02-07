@@ -1,0 +1,26 @@
+;;! tag: overlap-subset
+;;! expect_exit: 0
+;;! expect_result_kind: nat
+;;! expect_result: 3
+;;! prelude: stdlib/prelude_api.lrl
+
+(def append_local (pi #[once] l1 (List Nat) (pi #[once] l2 (List Nat) (List Nat)))
+  (lam #[once] l1 (List Nat)
+    (lam #[once] l2 (List Nat)
+      (match l1 (List Nat)
+        (case (nil) l2)
+        (case (cons h t ih) (cons h ih))
+      ))))
+
+(def len (pi #[once] l (List Nat) Nat)
+  (lam #[once] l (List Nat)
+    (match l Nat
+      (case (nil) zero)
+      (case (cons h t ih) (succ ih))
+    )
+  )
+)
+
+(def entry Nat
+  (len (append_local (cons zero (cons (succ zero) nil))
+                     (cons (succ (succ zero)) nil))))

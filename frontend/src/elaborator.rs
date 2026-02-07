@@ -9,6 +9,11 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use thiserror::Error;
 
+type ElaboratedTermAndType = (Rc<Term>, Rc<Term>);
+type CoercionResult = Option<ElaboratedTermAndType>;
+type MinorPremiseBinder = (Rc<Term>, kernel::ast::BinderInfo, FunctionKind);
+type MinorPremiseSplit = (Vec<MinorPremiseBinder>, Rc<Term>);
+
 const CODE_ELAB_UNBOUND_VAR: &str = "F0200";
 const CODE_ELAB_UNKNOWN_INDUCTIVE: &str = "F0201";
 const CODE_ELAB_AMBIGUOUS_CTOR: &str = "F0202";
@@ -225,6 +230,13 @@ struct CaptureContext {
     depth: usize,
 }
 
+#[derive(Clone, Copy)]
+struct RequiredKindQuery<'a> {
+    captures: &'a [CaptureContext],
+    implicit_noncopy: &'a [bool],
+    outer_param_idx: Option<usize>,
+}
+
 fn bump_captures(captures: &[CaptureContext]) -> Vec<CaptureContext> {
     captures
         .iter()
@@ -367,14 +379,9 @@ fn push_marker_id(markers: &mut Vec<MarkerId>, marker: MarkerId) {
 fn collect_app_spine(term: SurfaceTerm) -> (SurfaceTerm, Vec<(SurfaceTerm, bool)>) {
     let mut args = Vec::new();
     let mut head = term;
-    loop {
-        match head.kind {
-            SurfaceTermKind::App(f, x, is_explicit) => {
-                args.push((*x, is_explicit));
-                head = *f;
-            }
-            _ => break,
-        }
+    while let SurfaceTermKind::App(f, x, is_explicit) = head.kind {
+        args.push((*x, is_explicit));
+        head = *f;
     }
     args.reverse();
     (head, args)
@@ -536,7 +543,7 @@ impl<'a> Elaborator<'a> {
             if !seen.insert(current.clone()) {
                 break;
             }
-            current = next.clone();
+            current.clone_from(next);
         }
         current
     }
@@ -634,7 +641,6 @@ impl<'a> Elaborator<'a> {
     }
 
     fn collect_ref_label_stats(
-        &self,
         term: &SurfaceTerm,
         explicit_labels: &mut HashSet<String>,
         unlabeled_count: &mut usize,
@@ -645,34 +651,34 @@ impl<'a> Elaborator<'a> {
             } else {
                 *unlabeled_count += 1;
             }
-            self.collect_ref_label_stats(&inner, explicit_labels, unlabeled_count);
+            Self::collect_ref_label_stats(&inner, explicit_labels, unlabeled_count);
             return;
         }
 
         match &term.kind {
             SurfaceTermKind::App(f, x, _) => {
-                self.collect_ref_label_stats(f, explicit_labels, unlabeled_count);
-                self.collect_ref_label_stats(x, explicit_labels, unlabeled_count);
+                Self::collect_ref_label_stats(f, explicit_labels, unlabeled_count);
+                Self::collect_ref_label_stats(x, explicit_labels, unlabeled_count);
             }
             SurfaceTermKind::Index(base, index) => {
-                self.collect_ref_label_stats(base, explicit_labels, unlabeled_count);
-                self.collect_ref_label_stats(index, explicit_labels, unlabeled_count);
+                Self::collect_ref_label_stats(base, explicit_labels, unlabeled_count);
+                Self::collect_ref_label_stats(index, explicit_labels, unlabeled_count);
             }
             SurfaceTermKind::Let(_, ty, val, body) => {
-                self.collect_ref_label_stats(ty, explicit_labels, unlabeled_count);
-                self.collect_ref_label_stats(val, explicit_labels, unlabeled_count);
-                self.collect_ref_label_stats(body, explicit_labels, unlabeled_count);
+                Self::collect_ref_label_stats(ty, explicit_labels, unlabeled_count);
+                Self::collect_ref_label_stats(val, explicit_labels, unlabeled_count);
+                Self::collect_ref_label_stats(body, explicit_labels, unlabeled_count);
             }
             SurfaceTermKind::Match(scrutinee, ret_type, cases) => {
-                self.collect_ref_label_stats(scrutinee, explicit_labels, unlabeled_count);
-                self.collect_ref_label_stats(ret_type, explicit_labels, unlabeled_count);
+                Self::collect_ref_label_stats(scrutinee, explicit_labels, unlabeled_count);
+                Self::collect_ref_label_stats(ret_type, explicit_labels, unlabeled_count);
                 for (_, _, body) in cases {
-                    self.collect_ref_label_stats(body, explicit_labels, unlabeled_count);
+                    Self::collect_ref_label_stats(body, explicit_labels, unlabeled_count);
                 }
             }
             SurfaceTermKind::Eval(code, cap) => {
-                self.collect_ref_label_stats(code, explicit_labels, unlabeled_count);
-                self.collect_ref_label_stats(cap, explicit_labels, unlabeled_count);
+                Self::collect_ref_label_stats(code, explicit_labels, unlabeled_count);
+                Self::collect_ref_label_stats(cap, explicit_labels, unlabeled_count);
             }
             SurfaceTermKind::Lam(_, _, _, _, _) | SurfaceTermKind::Pi(_, _, _, _, _) => {}
             SurfaceTermKind::Var(_)
@@ -686,7 +692,6 @@ impl<'a> Elaborator<'a> {
     }
 
     fn ensure_return_refs_labeled(
-        &self,
         term: &SurfaceTerm,
         distinct_arg_labels: usize,
     ) -> Result<(), ElabError> {
@@ -698,34 +703,34 @@ impl<'a> Elaborator<'a> {
             if label.is_none() {
                 return Err(ElabError::AmbiguousRefLifetime { span: term.span });
             }
-            return self.ensure_return_refs_labeled(&inner, distinct_arg_labels);
+            return Self::ensure_return_refs_labeled(&inner, distinct_arg_labels);
         }
 
         match &term.kind {
             SurfaceTermKind::App(f, x, _) => {
-                self.ensure_return_refs_labeled(f, distinct_arg_labels)?;
-                self.ensure_return_refs_labeled(x, distinct_arg_labels)
+                Self::ensure_return_refs_labeled(f, distinct_arg_labels)?;
+                Self::ensure_return_refs_labeled(x, distinct_arg_labels)
             }
             SurfaceTermKind::Index(base, index) => {
-                self.ensure_return_refs_labeled(base, distinct_arg_labels)?;
-                self.ensure_return_refs_labeled(index, distinct_arg_labels)
+                Self::ensure_return_refs_labeled(base, distinct_arg_labels)?;
+                Self::ensure_return_refs_labeled(index, distinct_arg_labels)
             }
             SurfaceTermKind::Let(_, ty, val, body) => {
-                self.ensure_return_refs_labeled(ty, distinct_arg_labels)?;
-                self.ensure_return_refs_labeled(val, distinct_arg_labels)?;
-                self.ensure_return_refs_labeled(body, distinct_arg_labels)
+                Self::ensure_return_refs_labeled(ty, distinct_arg_labels)?;
+                Self::ensure_return_refs_labeled(val, distinct_arg_labels)?;
+                Self::ensure_return_refs_labeled(body, distinct_arg_labels)
             }
             SurfaceTermKind::Match(scrutinee, ret_type, cases) => {
-                self.ensure_return_refs_labeled(scrutinee, distinct_arg_labels)?;
-                self.ensure_return_refs_labeled(ret_type, distinct_arg_labels)?;
+                Self::ensure_return_refs_labeled(scrutinee, distinct_arg_labels)?;
+                Self::ensure_return_refs_labeled(ret_type, distinct_arg_labels)?;
                 for (_, _, body) in cases {
-                    self.ensure_return_refs_labeled(body, distinct_arg_labels)?;
+                    Self::ensure_return_refs_labeled(body, distinct_arg_labels)?;
                 }
                 Ok(())
             }
             SurfaceTermKind::Eval(code, cap) => {
-                self.ensure_return_refs_labeled(code, distinct_arg_labels)?;
-                self.ensure_return_refs_labeled(cap, distinct_arg_labels)
+                Self::ensure_return_refs_labeled(code, distinct_arg_labels)?;
+                Self::ensure_return_refs_labeled(cap, distinct_arg_labels)
             }
             SurfaceTermKind::Lam(_, _, _, _, _) | SurfaceTermKind::Pi(_, _, _, _, _) => Ok(()),
             SurfaceTermKind::Var(_)
@@ -749,7 +754,7 @@ impl<'a> Elaborator<'a> {
         let mut current_body = body;
 
         loop {
-            self.collect_ref_label_stats(current_dom, &mut explicit_labels, &mut unlabeled_count);
+            Self::collect_ref_label_stats(current_dom, &mut explicit_labels, &mut unlabeled_count);
             if let SurfaceTermKind::Pi(_, _, _, next_dom, next_body) = &current_body.kind {
                 current_dom = next_dom;
                 current_body = next_body;
@@ -759,7 +764,7 @@ impl<'a> Elaborator<'a> {
         }
 
         let distinct_arg_labels = explicit_labels.len() + unlabeled_count;
-        self.ensure_return_refs_labeled(current_body, distinct_arg_labels)
+        Self::ensure_return_refs_labeled(current_body, distinct_arg_labels)
     }
 
     fn with_type_context<T>(
@@ -1377,7 +1382,7 @@ impl<'a> Elaborator<'a> {
                         if let Some(decl) = self.env.get_inductive(ind_name) {
                             let num_params = decl.num_params;
                             let num_indices =
-                                self.count_pi_args(&decl.ty).saturating_sub(num_params);
+                                Self::count_pi_args(&decl.ty).saturating_sub(num_params);
                             let num_ctors = decl.ctors.len();
                             let motive_pos = num_params;
                             let indices_start = motive_pos + 1 + num_ctors;
@@ -1581,14 +1586,12 @@ impl<'a> Elaborator<'a> {
         ctx: &Context,
         capture_depth: usize,
         mode: UsageMode,
-        captures: &[CaptureContext],
-        implicit_noncopy: &[bool],
-        outer_param_idx: Option<usize>,
+        query: RequiredKindQuery<'_>,
     ) -> Result<FunctionKind, ElabError> {
         match &**term {
             Term::Var(idx) => {
                 let mut capture_mode = None;
-                for capture in captures {
+                for capture in query.captures {
                     if *idx >= capture.depth {
                         capture_mode = Some(match capture_mode {
                             Some(existing) => usage_mode_min(existing, capture.mode),
@@ -1597,7 +1600,7 @@ impl<'a> Elaborator<'a> {
                     }
                 }
                 let effective_mode = capture_mode.unwrap_or(mode);
-                if implicit_noncopy_at(implicit_noncopy, *idx)
+                if implicit_noncopy_at(query.implicit_noncopy, *idx)
                     && effective_mode != UsageMode::Observational
                 {
                     return Err(ElabError::ImplicitNonCopyUse {
@@ -1605,7 +1608,7 @@ impl<'a> Elaborator<'a> {
                         mode: usage_mode_label(effective_mode),
                     });
                 }
-                if outer_param_idx == Some(*idx) {
+                if query.outer_param_idx == Some(*idx) {
                     return Ok(FunctionKind::Fn);
                 }
                 if *idx >= capture_depth {
@@ -1635,7 +1638,7 @@ impl<'a> Elaborator<'a> {
                         if let Some(decl) = self.env.get_inductive(ind_name) {
                             let num_params = decl.num_params;
                             let num_indices =
-                                self.count_pi_args(&decl.ty).saturating_sub(num_params);
+                                Self::count_pi_args(&decl.ty).saturating_sub(num_params);
                             let num_ctors = decl.ctors.len();
                             let motive_pos = num_params;
                             let indices_start = motive_pos + 1 + num_ctors;
@@ -1655,9 +1658,7 @@ impl<'a> Elaborator<'a> {
                                     ctx,
                                     capture_depth,
                                     arg_mode,
-                                    captures,
-                                    implicit_noncopy,
-                                    outer_param_idx,
+                                    query,
                                 )?;
                                 required_kind = function_kind_max(required_kind, arg_kind);
                                 if required_kind == FunctionKind::FnOnce {
@@ -1674,18 +1675,14 @@ impl<'a> Elaborator<'a> {
                         ctx,
                         capture_depth,
                         mode,
-                        captures,
-                        implicit_noncopy,
-                        outer_param_idx,
+                        query,
                     )?;
                     let needs_a = self.infer_required_function_kind_in_term(
                         a,
                         ctx,
                         capture_depth,
                         mode,
-                        captures,
-                        implicit_noncopy,
-                        outer_param_idx,
+                        query,
                     )?;
                     Ok(function_kind_max(needs_f, needs_a))
                 } else {
@@ -1717,18 +1714,14 @@ impl<'a> Elaborator<'a> {
                         ctx,
                         capture_depth,
                         f_eval_mode,
-                        captures,
-                        implicit_noncopy,
-                        outer_param_idx,
+                        query,
                     )?;
                     let needs_a = self.infer_required_function_kind_in_term(
                         a,
                         ctx,
                         capture_depth,
                         arg_mode,
-                        captures,
-                        implicit_noncopy,
-                        outer_param_idx,
+                        query,
                     )?;
                     Ok(function_kind_max(needs_f, needs_a))
                 }
@@ -1739,31 +1732,32 @@ impl<'a> Elaborator<'a> {
                     ctx,
                     capture_depth,
                     UsageMode::Observational,
-                    captures,
-                    implicit_noncopy,
-                    outer_param_idx,
+                    query,
                 )?;
                 let new_ctx = ctx.push(ty.clone());
                 let is_implicit_noncopy = matches!(
                     info,
                     kernel::ast::BinderInfo::Implicit | kernel::ast::BinderInfo::StrictImplicit
                 ) && !self.is_copy_type_in_ctx(ctx, ty);
-                let mut body_captures = bump_captures(captures);
+                let mut body_captures = bump_captures(query.captures);
                 body_captures.push(CaptureContext {
                     mode: usage_mode_for_kind(*kind),
                     depth: 1,
                 });
-                let mut body_implicit_noncopy = implicit_noncopy.to_vec();
+                let mut body_implicit_noncopy = query.implicit_noncopy.to_vec();
                 body_implicit_noncopy.push(is_implicit_noncopy);
-                let body_outer_param_idx = outer_param_idx.map(|idx| idx + 1);
+                let body_outer_param_idx = query.outer_param_idx.map(|idx| idx + 1);
+                let body_query = RequiredKindQuery {
+                    captures: &body_captures,
+                    implicit_noncopy: &body_implicit_noncopy,
+                    outer_param_idx: body_outer_param_idx,
+                };
                 let needs_body = self.infer_required_function_kind_in_term(
                     body,
                     &new_ctx,
                     capture_depth + 1,
                     mode,
-                    &body_captures,
-                    &body_implicit_noncopy,
-                    body_outer_param_idx,
+                    body_query,
                 )?;
                 Ok(function_kind_max(needs_ty, needs_body))
             }
@@ -1773,27 +1767,28 @@ impl<'a> Elaborator<'a> {
                     ctx,
                     capture_depth,
                     UsageMode::Observational,
-                    captures,
-                    implicit_noncopy,
-                    outer_param_idx,
+                    query,
                 )?;
                 let new_ctx = ctx.push(ty.clone());
                 let is_implicit_noncopy = matches!(
                     info,
                     kernel::ast::BinderInfo::Implicit | kernel::ast::BinderInfo::StrictImplicit
                 ) && !self.is_copy_type_in_ctx(ctx, ty);
-                let body_captures = bump_captures(captures);
-                let mut body_implicit_noncopy = implicit_noncopy.to_vec();
+                let body_captures = bump_captures(query.captures);
+                let mut body_implicit_noncopy = query.implicit_noncopy.to_vec();
                 body_implicit_noncopy.push(is_implicit_noncopy);
-                let body_outer_param_idx = outer_param_idx.map(|idx| idx + 1);
+                let body_outer_param_idx = query.outer_param_idx.map(|idx| idx + 1);
+                let body_query = RequiredKindQuery {
+                    captures: &body_captures,
+                    implicit_noncopy: &body_implicit_noncopy,
+                    outer_param_idx: body_outer_param_idx,
+                };
                 let needs_body = self.infer_required_function_kind_in_term(
                     body,
                     &new_ctx,
                     capture_depth + 1,
                     UsageMode::Observational,
-                    &body_captures,
-                    &body_implicit_noncopy,
-                    body_outer_param_idx,
+                    body_query,
                 )?;
                 Ok(function_kind_max(needs_ty, needs_body))
             }
@@ -1803,32 +1798,31 @@ impl<'a> Elaborator<'a> {
                     ctx,
                     capture_depth,
                     UsageMode::Observational,
-                    captures,
-                    implicit_noncopy,
-                    outer_param_idx,
+                    query,
                 )?;
                 let needs_val = self.infer_required_function_kind_in_term(
                     val,
                     ctx,
                     capture_depth,
                     mode,
-                    captures,
-                    implicit_noncopy,
-                    outer_param_idx,
+                    query,
                 )?;
                 let new_ctx = ctx.push(ty.clone());
-                let body_captures = bump_captures(captures);
-                let mut body_implicit_noncopy = implicit_noncopy.to_vec();
+                let body_captures = bump_captures(query.captures);
+                let mut body_implicit_noncopy = query.implicit_noncopy.to_vec();
                 body_implicit_noncopy.push(false);
-                let body_outer_param_idx = outer_param_idx.map(|idx| idx + 1);
+                let body_outer_param_idx = query.outer_param_idx.map(|idx| idx + 1);
+                let body_query = RequiredKindQuery {
+                    captures: &body_captures,
+                    implicit_noncopy: &body_implicit_noncopy,
+                    outer_param_idx: body_outer_param_idx,
+                };
                 let needs_body = self.infer_required_function_kind_in_term(
                     body,
                     &new_ctx,
                     capture_depth + 1,
                     mode,
-                    &body_captures,
-                    &body_implicit_noncopy,
-                    body_outer_param_idx,
+                    body_query,
                 )?;
                 Ok(function_kind_max(
                     needs_ty,
@@ -1841,23 +1835,24 @@ impl<'a> Elaborator<'a> {
                     ctx,
                     capture_depth,
                     UsageMode::Observational,
-                    captures,
-                    implicit_noncopy,
-                    outer_param_idx,
+                    query,
                 )?;
                 let new_ctx = ctx.push(ty.clone());
-                let body_captures = bump_captures(captures);
-                let mut body_implicit_noncopy = implicit_noncopy.to_vec();
+                let body_captures = bump_captures(query.captures);
+                let mut body_implicit_noncopy = query.implicit_noncopy.to_vec();
                 body_implicit_noncopy.push(false);
-                let body_outer_param_idx = outer_param_idx.map(|idx| idx + 1);
+                let body_outer_param_idx = query.outer_param_idx.map(|idx| idx + 1);
+                let body_query = RequiredKindQuery {
+                    captures: &body_captures,
+                    implicit_noncopy: &body_implicit_noncopy,
+                    outer_param_idx: body_outer_param_idx,
+                };
                 let needs_body = self.infer_required_function_kind_in_term(
                     body,
                     &new_ctx,
                     capture_depth + 1,
                     mode,
-                    &body_captures,
-                    &body_implicit_noncopy,
-                    body_outer_param_idx,
+                    body_query,
                 )?;
                 Ok(function_kind_max(needs_ty, needs_body))
             }
@@ -1910,7 +1905,7 @@ impl<'a> Elaborator<'a> {
         inferred_type: Rc<Term>,
         expected_type: Rc<Term>,
         span: Span,
-    ) -> Result<Option<(Rc<Term>, Rc<Term>)>, ElabError> {
+    ) -> Result<CoercionResult, ElabError> {
         let inferred_whnf = self.whnf(inferred_type.clone())?;
         let expected_whnf = self.whnf(expected_type.clone())?;
         match (&*inferred_whnf, &*expected_whnf) {
@@ -2028,46 +2023,43 @@ impl<'a> Elaborator<'a> {
                 let mut f_ty_whnf = self.whnf(f_ty.clone())?;
 
                 // Insert implicit arguments
-                loop {
-                    match &*f_ty_whnf {
-                        Term::Pi(_, ret_ty, info, _) => match info {
-                            kernel::ast::BinderInfo::Implicit
-                            | kernel::ast::BinderInfo::StrictImplicit => {
-                                if is_explicit {
-                                    let meta_id = self.meta_counter;
-                                    self.meta_counter += 1;
-                                    let meta_term = Rc::new(Term::Meta(meta_id));
-                                    self.meta_contexts.insert(
-                                        meta_id,
-                                        MetaContext {
-                                            binders: self.locals.clone(),
-                                        },
-                                    );
+                while let Term::Pi(_, ret_ty, info, _) = &*f_ty_whnf {
+                    match info {
+                        kernel::ast::BinderInfo::Implicit
+                        | kernel::ast::BinderInfo::StrictImplicit => {
+                            if is_explicit {
+                                let meta_id = self.meta_counter;
+                                self.meta_counter += 1;
+                                let meta_term = Rc::new(Term::Meta(meta_id));
+                                self.meta_contexts.insert(
+                                    meta_id,
+                                    MetaContext {
+                                        binders: self.locals.clone(),
+                                    },
+                                );
 
-                                    f_elab = Term::app(f_elab, meta_term.clone());
-                                    f_ty = ret_ty.subst(0, &meta_term);
-                                    f_ty_whnf = self.whnf(f_ty.clone())?;
-                                } else {
-                                    break;
-                                }
-                            }
-                            kernel::ast::BinderInfo::Default => {
-                                if !is_explicit {
-                                    return Err(ElabError::TypeMismatch {
-                                        expected: "Implicit binder".to_string(),
-                                        got: "Explicit argument".to_string(),
-                                        span,
-                                    });
-                                }
+                                f_elab = Term::app(f_elab, meta_term.clone());
+                                f_ty = ret_ty.subst(0, &meta_term);
+                                f_ty_whnf = self.whnf(f_ty.clone())?;
+                            } else {
                                 break;
                             }
-                        },
-                        _ => break,
+                        }
+                        kernel::ast::BinderInfo::Default => {
+                            if !is_explicit {
+                                return Err(ElabError::TypeMismatch {
+                                    expected: "Implicit binder".to_string(),
+                                    got: "Explicit argument".to_string(),
+                                    span,
+                                });
+                            }
+                            break;
+                        }
                     }
                 }
 
                 if let Term::Pi(arg_ty, ret_ty, _, _) = &*f_ty_whnf {
-                    let x_elab = self.check(arg, &arg_ty)?;
+                    let x_elab = self.check(arg, arg_ty)?;
                     f_elab = Term::app(f_elab, x_elab.clone());
                     f_ty = ret_ty.subst(0, &x_elab);
                 } else {
@@ -2106,7 +2098,7 @@ impl<'a> Elaborator<'a> {
                 let (_base_elab, base_ty) = self.infer(base_term.clone())?;
                 let base_ty_whnf = self.whnf(base_ty)?;
                 let (ind_name, _) =
-                    self.extract_inductive_info(&base_ty_whnf).ok_or_else(|| {
+                    Self::extract_inductive_info(&base_ty_whnf).ok_or_else(|| {
                         ElabError::TypeMismatch {
                             expected: "indexable container".to_string(),
                             got: self.pretty_term(&base_ty_whnf),
@@ -2384,50 +2376,46 @@ impl<'a> Elaborator<'a> {
             let mut f_ty_whnf = self.whnf(f_ty.clone())?;
 
             // Insert implicit arguments
-            loop {
-                match &*f_ty_whnf {
-                    Term::Pi(_, ret_ty, info, _) => match info {
-                        kernel::ast::BinderInfo::Implicit
-                        | kernel::ast::BinderInfo::StrictImplicit => {
-                            if is_explicit {
-                                let meta_id = self.meta_counter;
-                                self.meta_counter += 1;
-                                let meta_term = Rc::new(Term::Meta(meta_id));
-                                self.meta_contexts.insert(
-                                    meta_id,
-                                    MetaContext {
-                                        binders: self.locals.clone(),
-                                    },
-                                );
+            while let Term::Pi(_, ret_ty, info, _) = &*f_ty_whnf {
+                match info {
+                    kernel::ast::BinderInfo::Implicit | kernel::ast::BinderInfo::StrictImplicit => {
+                        if is_explicit {
+                            let meta_id = self.meta_counter;
+                            self.meta_counter += 1;
+                            let meta_term = Rc::new(Term::Meta(meta_id));
+                            self.meta_contexts.insert(
+                                meta_id,
+                                MetaContext {
+                                    binders: self.locals.clone(),
+                                },
+                            );
 
-                                f_elab = Term::app(f_elab, meta_term.clone());
-                                f_ty = ret_ty.subst(0, &meta_term);
-                                f_ty_whnf = self.whnf(f_ty.clone())?;
-                            } else {
-                                break;
-                            }
-                        }
-                        kernel::ast::BinderInfo::Default => {
-                            if !is_explicit {
-                                return Err(ElabError::TypeMismatch {
-                                    expected: "Implicit binder".to_string(),
-                                    got: "Explicit argument".to_string(),
-                                    span,
-                                });
-                            }
+                            f_elab = Term::app(f_elab, meta_term.clone());
+                            f_ty = ret_ty.subst(0, &meta_term);
+                            f_ty_whnf = self.whnf(f_ty.clone())?;
+                        } else {
                             break;
                         }
-                    },
-                    _ => break,
+                    }
+                    kernel::ast::BinderInfo::Default => {
+                        if !is_explicit {
+                            return Err(ElabError::TypeMismatch {
+                                expected: "Implicit binder".to_string(),
+                                got: "Explicit argument".to_string(),
+                                span,
+                            });
+                        }
+                        break;
+                    }
                 }
             }
 
             if let Term::Pi(arg_ty, ret_ty, _, _) = &*f_ty_whnf {
                 let x_elab = if idx == num_params {
-                    self.unify_with_span(&motive_ty, &arg_ty, span)?;
+                    self.unify_with_span(&motive_ty, arg_ty, span)?;
                     motive_term.clone()
                 } else {
-                    self.check(arg, &arg_ty)?
+                    self.check(arg, arg_ty)?
                 };
                 f_elab = Term::app(f_elab, x_elab.clone());
                 f_ty = ret_ty.subst(0, &x_elab);
@@ -2650,12 +2638,13 @@ impl<'a> Elaborator<'a> {
         // Extract the inductive name and args from the scrutinee type
         let scrut_ty_whnf = self.whnf(scrut_ty.clone())?;
         let (ind_name, ind_args) =
-            self.extract_inductive_info(&scrut_ty_whnf)
-                .ok_or_else(|| ElabError::TypeMismatch {
+            Self::extract_inductive_info(&scrut_ty_whnf).ok_or_else(|| {
+                ElabError::TypeMismatch {
                     expected: "inductive type".to_string(),
                     got: self.pretty_term(&scrut_ty_whnf),
                     span,
-                })?;
+                }
+            })?;
 
         // Get the inductive declaration
         let decl = self
@@ -2761,8 +2750,11 @@ impl<'a> Elaborator<'a> {
             kernel::ast::BinderInfo::Default,
             FunctionKind::Fn,
         ));
-        let motive =
-            self.wrap_synthesized_lambdas(&motive_binders, ret_type_elab.shift(0, index_count + 1), span)?;
+        let motive = self.wrap_synthesized_lambdas(
+            &motive_binders,
+            ret_type_elab.shift(0, index_count + 1),
+            span,
+        )?;
 
         // Determine universe level from motive type
         let motive_ty = infer_type(self.env, &self.build_context(), motive.clone())
@@ -2808,7 +2800,7 @@ impl<'a> Elaborator<'a> {
             let case_elab = match case {
                 Some((_, bindings, body)) => {
                     let ctor_inst = self.instantiate_params(ctor.ty.clone(), &param_args);
-                    let ctor_arg_count = self.count_pi_args(&ctor_inst);
+                    let ctor_arg_count = Self::count_pi_args(&ctor_inst);
                     let recursive_args = self.find_recursive_args(&ctor_inst, &ind_name);
                     let expected_binders = ctor_arg_count + recursive_args.len();
                     let (binders, result_ty) =
@@ -2852,11 +2844,11 @@ impl<'a> Elaborator<'a> {
     }
 
     /// Extract the inductive type name and arguments from a type
-    fn extract_inductive_info(&self, ty: &Rc<Term>) -> Option<(String, Vec<Rc<Term>>)> {
+    fn extract_inductive_info(ty: &Rc<Term>) -> Option<(String, Vec<Rc<Term>>)> {
         match &**ty {
             Term::Ind(name, _) => Some((name.clone(), Vec::new())),
             Term::App(f, a, _) => {
-                let (name, mut args) = self.extract_inductive_info(f)?;
+                let (name, mut args) = Self::extract_inductive_info(f)?;
                 args.push(a.clone());
                 Some((name, args))
             }
@@ -2967,11 +2959,8 @@ impl<'a> Elaborator<'a> {
         &self,
         minor_ty: &Rc<Term>,
         expected_binders: usize,
-    ) -> (
-        Vec<(Rc<Term>, kernel::ast::BinderInfo, FunctionKind)>,
-        Rc<Term>,
-    ) {
-        let mut binders: Vec<(Rc<Term>, kernel::ast::BinderInfo, FunctionKind)> = Vec::new();
+    ) -> MinorPremiseSplit {
+        let mut binders: Vec<MinorPremiseBinder> = Vec::new();
         let mut current = minor_ty.clone();
         while binders.len() < expected_binders {
             if let Term::Pi(arg_ty, body_ty, info, kind) = &*current {
@@ -2985,9 +2974,9 @@ impl<'a> Elaborator<'a> {
     }
 
     /// Count the number of Pi arguments in a type
-    fn count_pi_args(&self, ty: &Rc<Term>) -> usize {
+    fn count_pi_args(ty: &Rc<Term>) -> usize {
         match &**ty {
-            Term::Pi(_, body, _, _) => 1 + self.count_pi_args(body),
+            Term::Pi(_, body, _, _) => 1 + Self::count_pi_args(body),
             _ => 0,
         }
     }
@@ -2999,7 +2988,7 @@ impl<'a> Elaborator<'a> {
         let mut idx = 0;
 
         while let Term::Pi(arg_ty, body, _, _) = &**current {
-            if self.type_refers_to_ind(arg_ty, ind_name) {
+            if Self::type_refers_to_ind(arg_ty, ind_name) {
                 result.push(idx);
             }
             current = body;
@@ -3010,10 +2999,10 @@ impl<'a> Elaborator<'a> {
     }
 
     /// Check if a type refers to an inductive type
-    fn type_refers_to_ind(&self, ty: &Rc<Term>, ind_name: &str) -> bool {
+    fn type_refers_to_ind(ty: &Rc<Term>, ind_name: &str) -> bool {
         match &**ty {
             Term::Ind(name, _) => name == ind_name,
-            Term::App(f, _, _) => self.type_refers_to_ind(f, ind_name),
+            Term::App(f, _, _) => Self::type_refers_to_ind(f, ind_name),
             _ => false,
         }
     }
@@ -3188,7 +3177,7 @@ impl<'a> Elaborator<'a> {
 
             // Check if either side contains unsolved metas - if so, it's stuck
             _ => {
-                if self.contains_any_meta(&t1) || self.contains_any_meta(&t2) {
+                if Self::contains_any_meta(&t1) || Self::contains_any_meta(&t2) {
                     UnifyResult::Stuck(t1.clone(), t2.clone())
                 } else {
                     // No metas, types are just incompatible
@@ -3305,7 +3294,7 @@ impl<'a> Elaborator<'a> {
         current_ctx_len: usize,
         meta_ctx_len: usize,
     ) -> Result<(), ElabError> {
-        if self.contains_meta(&term, id) {
+        if Self::contains_meta(&term, id) {
             return Err(ElabError::OccursCheck(id, self.pretty_term(&term)));
         }
         let adapted = self.adapt_term_to_ctx(term.clone(), current_ctx_len, meta_ctx_len)?;
@@ -3383,33 +3372,35 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    fn contains_meta(&self, term: &Rc<Term>, meta_id: usize) -> bool {
+    fn contains_meta(term: &Rc<Term>, meta_id: usize) -> bool {
         match &**term {
             Term::Meta(id) => *id == meta_id,
-            Term::App(f, a, _) => self.contains_meta(f, meta_id) || self.contains_meta(a, meta_id),
+            Term::App(f, a, _) => {
+                Self::contains_meta(f, meta_id) || Self::contains_meta(a, meta_id)
+            }
             Term::Lam(ty, body, _, _) | Term::Pi(ty, body, _, _) | Term::Fix(ty, body) => {
-                self.contains_meta(ty, meta_id) || self.contains_meta(body, meta_id)
+                Self::contains_meta(ty, meta_id) || Self::contains_meta(body, meta_id)
             }
             Term::LetE(ty, val, body) => {
-                self.contains_meta(ty, meta_id)
-                    || self.contains_meta(val, meta_id)
-                    || self.contains_meta(body, meta_id)
+                Self::contains_meta(ty, meta_id)
+                    || Self::contains_meta(val, meta_id)
+                    || Self::contains_meta(body, meta_id)
             }
             _ => false,
         }
     }
 
-    fn contains_any_meta(&self, term: &Rc<Term>) -> bool {
+    fn contains_any_meta(term: &Rc<Term>) -> bool {
         match &**term {
             Term::Meta(_) => true,
-            Term::App(f, a, _) => self.contains_any_meta(f) || self.contains_any_meta(a),
+            Term::App(f, a, _) => Self::contains_any_meta(f) || Self::contains_any_meta(a),
             Term::Lam(ty, body, _, _) | Term::Pi(ty, body, _, _) | Term::Fix(ty, body) => {
-                self.contains_any_meta(ty) || self.contains_any_meta(body)
+                Self::contains_any_meta(ty) || Self::contains_any_meta(body)
             }
             Term::LetE(ty, val, body) => {
-                self.contains_any_meta(ty)
-                    || self.contains_any_meta(val)
-                    || self.contains_any_meta(body)
+                Self::contains_any_meta(ty)
+                    || Self::contains_any_meta(val)
+                    || Self::contains_any_meta(body)
             }
             _ => false,
         }
@@ -3583,7 +3574,7 @@ impl<'a> CoreTermPrettyPrinter<'a> {
         match level {
             Level::Zero => "Prop".to_string(),
             Level::Succ(inner) => {
-                let inner_str = self.level_to_string(inner);
+                let inner_str = Self::level_to_string(inner);
                 if inner_str == "0" {
                     "Type".to_string()
                 } else if Self::level_needs_parens(inner) {
@@ -3592,11 +3583,11 @@ impl<'a> CoreTermPrettyPrinter<'a> {
                     format!("Type {}", inner_str)
                 }
             }
-            _ => format!("Sort {}", self.level_to_string(level)),
+            _ => format!("Sort {}", Self::level_to_string(level)),
         }
     }
 
-    fn level_to_string(&self, level: &Level) -> String {
+    fn level_to_string(level: &Level) -> String {
         if let Some(n) = Self::level_to_nat(level) {
             return n.to_string();
         }
@@ -3604,7 +3595,7 @@ impl<'a> CoreTermPrettyPrinter<'a> {
             Level::Zero => "0".to_string(),
             Level::Param(name) => name.clone(),
             Level::Succ(inner) => {
-                let inner_str = self.level_to_string(inner);
+                let inner_str = Self::level_to_string(inner);
                 if Self::level_needs_parens(inner) {
                     format!("({})+1", inner_str)
                 } else {
@@ -3613,13 +3604,13 @@ impl<'a> CoreTermPrettyPrinter<'a> {
             }
             Level::Max(a, b) => format!(
                 "max({},{})",
-                self.level_to_string(a),
-                self.level_to_string(b)
+                Self::level_to_string(a),
+                Self::level_to_string(b)
             ),
             Level::IMax(a, b) => format!(
                 "imax({},{})",
-                self.level_to_string(a),
-                self.level_to_string(b)
+                Self::level_to_string(a),
+                Self::level_to_string(b)
             ),
         }
     }
@@ -3649,7 +3640,7 @@ impl<'a> CoreTermPrettyPrinter<'a> {
         if levels.is_empty() {
             return String::new();
         }
-        let parts: Vec<String> = levels.iter().map(|lvl| self.level_to_string(lvl)).collect();
+        let parts: Vec<String> = levels.iter().map(Self::level_to_string).collect();
         format!(".{{{}}}", parts.join(","))
     }
 

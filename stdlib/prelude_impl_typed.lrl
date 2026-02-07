@@ -1,0 +1,19 @@
+;; Typed backend platform layer.
+;; Keep backend-specific runtime surface here.
+
+;; Typed dynamic boundary placeholders.
+(inductive copy Dyn (sort 1)
+  (ctor dyn_nat (pi n Nat Dyn))
+  (ctor dyn_bool (pi b Bool Dyn))
+  (ctor dyn_unit Dyn)
+)
+
+(inductive copy EvalCap (sort 1)
+  (ctor eval_cap EvalCap)
+)
+
+(def eval (pi code Dyn (pi cap EvalCap Dyn))
+  (lam code Dyn
+    (lam cap EvalCap
+      code))
+)

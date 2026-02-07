@@ -221,3 +221,45 @@ Typed backend MVP is achieved when:
 - A nontrivial subset (Nat, Bool, one user inductive, basic functions) compiles and runs via typed backend,
 - typed backend produces no tag-check panics for those programs,
 - auto mode falls back cleanly with good diagnostics for unsupported constructs.
+
+---
+
+## Implementation status audit (2026-02-06)
+
+Phase status:
+- [x] Phase -1 complete.
+  - Unified MIR pipeline for both backends in `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/cli/src/compiler.rs`.
+- [x] Phase 0 complete.
+  - `--backend typed|dynamic|auto` implemented with typed-first fallback warnings in auto mode.
+  - Backend default policy tests in `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/cli/src/compiler.rs` and `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/cli/src/main.rs`.
+- [x] Phase 1 complete.
+  - Typed ADT/match/codegen parity coverage in `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/cli/tests/typed_backend.rs`.
+- [x] Phase 2 complete.
+  - Higher-order typed calls and closure/fix adapters covered in `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/cli/tests/typed_backend.rs`.
+- [x] Phase 3 complete.
+  - Parametric ADTs/functions, refs/raw pointers/interior mutability/index/runtime-check lowering in `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/mir/src/typed_codegen.rs`.
+  - Phase-3 scope tests in `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/cli/tests/typed_backend.rs`.
+- [x] Phase 4 complete.
+  - Proof erasure pass wired before codegen in `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/cli/src/compiler.rs`.
+  - Erasure logic in `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/mir/src/transform/erasure.rs`.
+- [x] Phase 5 complete.
+  - Indexed/dependent lowering paths covered by typed backend index/runtime-check tests.
+- [x] Phase 6 complete.
+  - Typed prelude effect/capability surface in `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/stdlib/prelude_typed.lrl`.
+  - Effect/capability execution tests in `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/cli/tests/typed_backend.rs`.
+- [x] Phase 7 (optional) complete.
+  - `compile` and `compile-mir` default to `auto` in `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/cli/src/main.rs`.
+
+Cross-cutting status:
+- [x] No dynamic `Value` tag-check path in typed subset tests (`typed_backend.rs` asserts this repeatedly).
+- [x] Deterministic typed output tests are present (single-case and corpus-level determinism checks).
+- [x] Structured typed codegen is in place (internal `Item`/`Stmt`/`Expr` AST plus renderer in `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/mir/src/typed_codegen.rs`).
+- [x] Stable unsupported reason codes (`TB001`..`TB900`) and guard tests exist.
+
+Documentation status:
+- [x] Typed backend specification: `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/docs/spec/codegen/typed-backend.md`.
+- [x] Conformance subset spec: `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/docs/dev/backend_conformance_subset.md`.
+- [x] Conformance report: `/Volumes/Crucial X6/MacBook/Code/leanrustlisp/docs/dev/backend_conformance_report.md`.
+
+Verification status:
+- [x] `cargo test --all` passes on current workspace snapshot.

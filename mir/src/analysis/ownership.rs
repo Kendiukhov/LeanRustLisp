@@ -371,9 +371,8 @@ impl<'a> OwnershipAnalysis<'a> {
         location: Option<MirSpan>,
         errors: &mut Vec<OwnershipError>,
     ) {
-        match rvalue {
-            Rvalue::Use(op) => self.check_operand_structured(op, state, location, errors),
-            _ => {}
+        if let Rvalue::Use(op) = rvalue {
+            self.check_operand_structured(op, state, location, errors);
         }
     }
 
@@ -513,7 +512,7 @@ impl<'a> OwnershipAnalysis<'a> {
                 }
                 PlaceElem::Index(_) => {
                     if let MirType::Adt(_, args) = &ty {
-                        if let Some(elem_ty) = args.get(0).cloned() {
+                        if let Some(elem_ty) = args.first().cloned() {
                             ty = elem_ty;
                         }
                     }

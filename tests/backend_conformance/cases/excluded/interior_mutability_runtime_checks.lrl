@@ -1,0 +1,5 @@
+;;! tag: excluded
+;;! reason: Uses interior mutability/runtime-check paths (RefCell/Mutex), excluded because conformance subset requires pure first-order semantics without backend-specific runtime guard behavior.
+
+(def entry Nat
+  zero)

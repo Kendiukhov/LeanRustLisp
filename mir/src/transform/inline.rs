@@ -107,7 +107,7 @@ fn build_copy_map(body: &Body) -> HashMap<usize, KnownValue> {
 
     // Resolve chains: if A = B and B = C, then A = C
     let mut resolved = HashMap::new();
-    for (&local, _) in &copy_map {
+    for &local in copy_map.keys() {
         let final_value = resolve_chain(local, &copy_map);
         resolved.insert(local, final_value);
     }
