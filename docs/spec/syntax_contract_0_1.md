@@ -501,7 +501,9 @@ No other general attribute syntax is currently supported.
 **7) CLI/Driver Expectations**
 
 Prelude loading:
-- `compile_file` uses `stdlib/prelude.lrl` if it exists.
+- compile paths load `stdlib/prelude_api.lrl` first, then backend impl:
+  - dynamic: `stdlib/prelude_impl_dynamic.lrl`
+  - typed/auto: `stdlib/prelude_impl_typed.lrl`
 - Prelude macros are set as default imports in the macro expander.
 - Redefinition of prelude names is blocked when prelude is frozen (default behavior).
 
@@ -618,7 +620,101 @@ binder_pair  ::= "(" symbol term ")" | "{" symbol term "}"
 - `&` and `&mut` borrow sugar.
 - Indexing semantics beyond the current VecDyn/Slice/Array rewrite.
 - Future binder-group sugar and arrow sugar (proposed above).
-- Future struct/record sugar (proposed above).
+
+**Stabilization Gates (Accepted)**
+
+1) Canonical modifier authoring form
+- Policy:
+Canonical authoring uses `def` forms with modifiers in fixed positions; legacy spellings remain compatibility aliases with warnings.
+- Why:
+Canonical syntax is required for formatter/linter/style-guide convergence and avoids ecosystem fragmentation.
+- Gate to enforce canonical-only:
+Stdlib compiles cleanly under canonical form and an auto-formatter (or rewrite tool) is available.
+
+2) Dedicated `String` rollout
+- Policy:
+Keep string literals as `List Nat` for 0.1; introduce `String` later with migration sugar.
+- Why:
+Avoids premature runtime representation commitments while typed backend work is still stabilizing.
+- Planned migration:
+Introduce `String` as either inductive or primitive opaque with explicit operation contracts; update literal desugaring to `String`; keep compatibility mode (`--edition 0.1`) where literals remain `List Nat` as needed.
+- Gate to introduce `String`:
+Typed backend Stage 1 is stable and runtime representation contract is ready to freeze.
+
+3) Struct/record freeze
+- Policy:
+Keep struct/record syntax experimental for 0.1.
+- Why:
+Field semantics and derived-instance behavior are expensive to change once libraries depend on them.
+- Gate to freeze:
+Desugaring to inductive/projections is agreed and minimal derivation story (for example `Eq`, `Show`) is decided.
+
+4) `match_list` deprecation
+- Policy:
+Keep `match_list` as compatibility sugar/macro with warnings; do not keep as permanent core syntax.
+- Why:
+Avoids bootstrap breakage while moving toward a single generic `match` core.
+- Gate to remove:
+Generic `match` is stable, macro system can express list-pattern sugar, and stdlib no longer depends on `match_list`.
+
+5) Binder/arrow sugar freeze
+- Policy:
+Keep multi-binder and arrow syntax experimental until module/import/open and name resolution are frozen.
+- Why:
+Sugar stability depends on parser, qualification, and diagnostic behavior being stable first.
+- Gate to freeze:
+Module system contract is frozen and formatter can canonicalize sugar (or canonical desugaring) consistently.
+
+**Implementation Checklist (Gate Tracking)**
+
+1) Canonical modifier authoring form
+- Status: In progress.
+- Implemented now: compatibility warnings for top-level legacy `(opaque ...)` and `(transparent ...)` forms.
+- Remaining to close gate: rewrite stdlib to canonical `def` forms and ship formatter/rewrite support.
+- Code paths: `cli/src/driver.rs` (`emit_syntax_compat_warnings`).
+- Acceptance checks: `cli/tests/syntax_gate_acceptance.rs` (`legacy_modifier_spellings_emit_compatibility_warnings`, `canonical_def_modifiers_do_not_emit_compatibility_warnings`).
+
+2) Dedicated `String` rollout
+- Status: Planned.
+- Implemented now: string literals remain `List Nat` for 0.1.
+- Remaining to close gate: stabilize typed backend Stage 1, define runtime representation contract, introduce edition-gated migration behavior.
+- Code paths: `frontend/src/desugar.rs`, `frontend/src/declaration_parser.rs`.
+- Acceptance checks today: none (gate intentionally deferred).
+
+3) Struct/record freeze
+- Status: Planned/experimental.
+- Implemented now: no freeze; stays experimental sugar.
+- Remaining to close gate: finalize desugaring and minimal derivation policy.
+- Code paths: `frontend/src/declaration_parser.rs`, `frontend/src/desugar.rs`.
+- Acceptance checks today: none (gate intentionally deferred).
+
+4) `match_list` deprecation
+- Status: In progress.
+- Implemented now: deprecation warning emitted on `match_list` syntax.
+- Remaining to close gate: remove stdlib/internal dependency, ensure macro replacement is stable, then remove special-case core form.
+- Code paths: `cli/src/driver.rs` (`emit_match_list_warnings`).
+- Acceptance checks: `cli/tests/syntax_gate_acceptance.rs` (`match_list_emits_deprecation_warning`).
+
+5) Binder/arrow sugar freeze
+- Status: Planned/experimental.
+- Implemented now: still experimental, not frozen in 0.1 contract.
+- Remaining to close gate: freeze module/import/open contract and formatter canonicalization strategy.
+- Code paths: `frontend/src/desugar.rs`, `docs/spec/syntax_contract_0_1.md`.
+- Acceptance checks today: none (gate intentionally deferred).
+
+6) Module/import/open contract
+- Status: In progress with contract tests.
+- Implemented now: explicit `module`, aliased `import`, separate `open`, deterministic ambiguity diagnostics, strict qualified resolution rules.
+- Remaining to close gate: full stdlib migration and additional cross-module coverage as syntax expands.
+- Code paths: `cli/src/driver.rs`, `frontend/src/elaborator.rs`.
+- Acceptance checks: `cli/tests/module_resolution.rs`.
+
+7) Core parser/desugar syntax conformance
+- Status: In progress with executable contract checks.
+- Implemented now: conformance tests cover reader tokenization, quote token expansion, hole/index behavior, import/open declaration shapes, `app` arity, `match` minimum-case rule, and string/quote term desugaring.
+- Remaining to close gate: extend coverage to any newly documented forms as syntax evolves.
+- Code paths: `frontend/src/parser.rs`, `frontend/src/declaration_parser.rs`, `frontend/src/desugar.rs`.
+- Acceptance checks: `frontend/tests/syntax_contract_conformance.rs`.
 
 **Edition Bump Required If Changed**
 - Any change to the tokenization of symbols, integers, strings, or `_`.
@@ -630,7 +726,7 @@ binder_pair  ::= "(" symbol term ")" | "{" symbol term "}"
 
 **Known Discrepancies (Code vs. Expected Contract)**
 
-None known after the 2026-02-05 discrepancy fixes.
+None known after the 2026-02-06 conformance fixes.
 
 ---
 
