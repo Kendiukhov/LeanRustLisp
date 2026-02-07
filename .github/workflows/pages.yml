@@ -34,4 +34,14 @@ jobs:
 
       - run: pip install mkdocs-material 
 
-      - run: mkdocs gh-deploy --force
+      # Copy repo docs into website/docs for the build
+      # Explicitly copy sub-folders to avoid overwriting website/docs/index.md
+      - name: Prepare Docs
+        run: |
+          cp -r docs/book website/docs/
+          cp -r docs/reference website/docs/
+          cp -r docs/internals website/docs/
+          cp -r docs/spec website/docs/
+          cp -r docs/dev website/docs/
+
+      - run: mkdocs gh-deploy --force --config-file website/mkdocs.yml
