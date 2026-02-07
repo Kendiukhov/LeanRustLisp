@@ -69,6 +69,7 @@ nav:
       - Glossary: book/99-glossary.md
     - Reference:
       - Overview: reference/INDEX.md
+      - Standard Library: reference/stdlib.md
       - Versioning: reference/versioning.md
       - Lexical: reference/lexical.md
       - Grammar: reference/grammar.md
