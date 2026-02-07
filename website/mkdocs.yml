@@ -71,7 +71,7 @@ nav:
       - Overview: reference/INDEX.md
       - Versioning: reference/versioning.md
       - Lexical: reference/lexical.md
-      - Grammar: reference/grammar.ebnf
+      - Grammar: reference/grammar.md
       - Surface Syntax: reference/surface-syntax.md
       - Macros: reference/macro-system.md
       - Name Resolution: reference/name-resolution.md
