@@ -43,5 +43,7 @@ jobs:
           cp -r docs/internals website/docs/
           cp -r docs/spec website/docs/
           cp -r docs/dev website/docs/
+          echo "File structure after copy:"
+          ls -R website/docs
 
       - run: mkdocs gh-deploy --force --config-file website/mkdocs.yml
