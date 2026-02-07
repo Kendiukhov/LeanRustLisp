@@ -31,6 +31,10 @@
 - Commit messages are short, capitalized imperatives (e.g., "Add ...", "Implement ...", "Remove ...").
 - PRs should describe scope, list tests run, and call out snapshot/output changes. Link relevant issues or design docs when available.
 
+## Branch Discipline
+- Always work on `main` by default.
+- Only create, switch to, or operate on a non-`main` branch when the user explicitly requests it.
+
 ## Advice
 If you were stuck with an error for a long time and finally found a solution, please document it here in concise form.
 - Persistent borrow errors in MIR often trace back to erased/Unit locals being marked non-Copy. Ensure `push_local`/`push_temp_local` set `is_copy` based on the lowered `MirType` and then refresh snapshots; otherwise closures may borrow ephemeral erased args and fail later in borrowck.
