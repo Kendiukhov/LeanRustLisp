@@ -89,6 +89,11 @@
   (ctor cons (pi {T (sort 1)} (pi h T (pi t (List T) (List T)))))
 )
 
+;; Runtime text payload stored as UTF-32 code points (List Nat).
+(inductive copy Text (sort 1)
+  (ctor text (pi data (List Nat) Text))
+)
+
 (def append (pi #[once] l1 (List Nat) (pi #[once] l2 (List Nat) (List Nat)))
   (lam #[once] l1 (List Nat)
     (lam #[once] l2 (List Nat)
@@ -146,4 +151,27 @@
 
 (def print_bool (pi #[fn] b Bool Bool)
   (lam #[fn] b Bool b)
+)
+
+;; Text/IO helpers: typed backend special-cases these names.
+;; Dynamic backend keeps these definitions pure.
+(def print_text (pi #[fn] t Text Text)
+  (lam #[fn] t Text t)
+)
+
+;; User-facing print entrypoint for string/text values.
+(def print (pi #[fn] t Text Text)
+  (lam #[fn] t Text
+    (print_text t))
+)
+
+;; File IO surface. Typed backend executes side effects; dynamic backend is pure.
+(def read_file (pi #[fn] path Text Text)
+  (lam #[fn] path Text path)
+)
+
+(def write_file (pi #[fn] path Text (pi #[fn] contents Text Text))
+  (lam #[fn] path Text
+    (lam #[fn] contents Text
+      contents))
 )

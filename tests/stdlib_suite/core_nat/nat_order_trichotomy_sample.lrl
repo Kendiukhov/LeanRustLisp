@@ -1,0 +1,16 @@
+;; sample trichotomy witness: exactly one of lt/eq/gt should hold.
+;; expected true-count = 1
+
+(def bool_to_nat (pi b Bool Nat)
+  (lam b Bool
+    (if_nat b (succ zero) zero)))
+
+(def x Nat (succ (succ zero)))
+(def y Nat (succ (succ (succ zero))))
+
+(def entry Nat
+  (add
+    (add
+      (bool_to_nat (nat_lt x y))
+      (bool_to_nat (nat_eq x y)))
+    (bool_to_nat (nat_gt x y))))

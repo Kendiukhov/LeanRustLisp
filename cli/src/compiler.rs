@@ -36,13 +36,45 @@ pub struct CompileOptions {
 }
 
 pub const PRELUDE_API_PATH: &str = "stdlib/prelude_api.lrl";
+pub const PRELUDE_STD_CORE_NAT_PATH: &str = "stdlib/std/core/nat.lrl";
+pub const PRELUDE_STD_CORE_NAT_LITERALS_PATH: &str = "stdlib/std/core/nat_literals.lrl";
+pub const PRELUDE_STD_CORE_BOOL_PATH: &str = "stdlib/std/core/bool.lrl";
+pub const PRELUDE_STD_DATA_LIST_PATH: &str = "stdlib/std/data/list.lrl";
+pub const PRELUDE_STD_DATA_OPTION_PATH: &str = "stdlib/std/data/option.lrl";
+pub const PRELUDE_STD_DATA_RESULT_PATH: &str = "stdlib/std/data/result.lrl";
+pub const PRELUDE_STD_DATA_PAIR_PATH: &str = "stdlib/std/data/pair.lrl";
+pub const PRELUDE_STD_CONTROL_COMP_PATH: &str = "stdlib/std/control/comp.lrl";
 pub const PRELUDE_IMPL_DYNAMIC_PATH: &str = "stdlib/prelude_impl_dynamic.lrl";
 pub const PRELUDE_IMPL_TYPED_PATH: &str = "stdlib/prelude_impl_typed.lrl";
 
+const PRELUDE_DYNAMIC_STACK: &[&str] = &[
+    PRELUDE_API_PATH,
+    PRELUDE_STD_CORE_NAT_PATH,
+    PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+    PRELUDE_STD_CORE_BOOL_PATH,
+    PRELUDE_STD_DATA_LIST_PATH,
+    PRELUDE_STD_DATA_OPTION_PATH,
+    PRELUDE_STD_DATA_RESULT_PATH,
+    PRELUDE_STD_DATA_PAIR_PATH,
+    PRELUDE_IMPL_DYNAMIC_PATH,
+];
+
+const PRELUDE_TYPED_STACK: &[&str] = &[
+    PRELUDE_API_PATH,
+    PRELUDE_STD_CORE_NAT_PATH,
+    PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+    PRELUDE_STD_CORE_BOOL_PATH,
+    PRELUDE_STD_DATA_LIST_PATH,
+    PRELUDE_STD_DATA_OPTION_PATH,
+    PRELUDE_STD_DATA_RESULT_PATH,
+    PRELUDE_STD_DATA_PAIR_PATH,
+    PRELUDE_IMPL_TYPED_PATH,
+];
+
 pub fn prelude_stack_for_backend(backend: BackendMode) -> &'static [&'static str] {
     match backend {
-        BackendMode::Typed | BackendMode::Auto => &[PRELUDE_API_PATH, PRELUDE_IMPL_TYPED_PATH],
-        BackendMode::Dynamic => &[PRELUDE_API_PATH, PRELUDE_IMPL_DYNAMIC_PATH],
+        BackendMode::Typed | BackendMode::Auto => PRELUDE_TYPED_STACK,
+        BackendMode::Dynamic => PRELUDE_DYNAMIC_STACK,
     }
 }
 
@@ -297,6 +329,9 @@ fn compile_with_mir(
         let prelude_module = crate::driver::module_id_for_source(prelude_path);
         expander.set_macro_boundary_policy(frontend::macro_expander::MacroBoundaryPolicy::Deny);
         crate::set_prelude_macro_boundary_allowlist(&mut expander, &prelude_module);
+        if !prelude_modules.is_empty() {
+            expander.set_default_imports(prelude_modules.clone());
+        }
         let allow_reserved = env.allows_reserved_primitives();
         env.set_allow_reserved_primitives(true);
         let _ = crate::driver::process_code(
@@ -979,7 +1014,7 @@ fn build_dynamic_code(
     code.push_str("fn main() {\n");
     if let Some(name) = main_def_name {
         code.push_str(&format!("    let result = {}();\n", name));
-        code.push_str("    println!(\"Result: {:?}\", result);\n");
+        code.push_str("    println!(\"Result: {}\", runtime_result_to_string(&result));\n");
     }
     code.push_str("}\n");
 
@@ -1267,15 +1302,45 @@ inductive copy Nat (sort 1)
     fn backend_mode_uses_expected_preludes() {
         assert_eq!(
             prelude_stack_for_backend(BackendMode::Typed),
-            &[PRELUDE_API_PATH, PRELUDE_IMPL_TYPED_PATH]
+            &[
+                PRELUDE_API_PATH,
+                PRELUDE_STD_CORE_NAT_PATH,
+                PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+                PRELUDE_STD_CORE_BOOL_PATH,
+                PRELUDE_STD_DATA_LIST_PATH,
+                PRELUDE_STD_DATA_OPTION_PATH,
+                PRELUDE_STD_DATA_RESULT_PATH,
+                PRELUDE_STD_DATA_PAIR_PATH,
+                PRELUDE_IMPL_TYPED_PATH,
+            ]
         );
         assert_eq!(
             prelude_stack_for_backend(BackendMode::Auto),
-            &[PRELUDE_API_PATH, PRELUDE_IMPL_TYPED_PATH]
+            &[
+                PRELUDE_API_PATH,
+                PRELUDE_STD_CORE_NAT_PATH,
+                PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+                PRELUDE_STD_CORE_BOOL_PATH,
+                PRELUDE_STD_DATA_LIST_PATH,
+                PRELUDE_STD_DATA_OPTION_PATH,
+                PRELUDE_STD_DATA_RESULT_PATH,
+                PRELUDE_STD_DATA_PAIR_PATH,
+                PRELUDE_IMPL_TYPED_PATH,
+            ]
         );
         assert_eq!(
             prelude_stack_for_backend(BackendMode::Dynamic),
-            &[PRELUDE_API_PATH, PRELUDE_IMPL_DYNAMIC_PATH]
+            &[
+                PRELUDE_API_PATH,
+                PRELUDE_STD_CORE_NAT_PATH,
+                PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+                PRELUDE_STD_CORE_BOOL_PATH,
+                PRELUDE_STD_DATA_LIST_PATH,
+                PRELUDE_STD_DATA_OPTION_PATH,
+                PRELUDE_STD_DATA_RESULT_PATH,
+                PRELUDE_STD_DATA_PAIR_PATH,
+                PRELUDE_IMPL_DYNAMIC_PATH,
+            ]
         );
     }
 

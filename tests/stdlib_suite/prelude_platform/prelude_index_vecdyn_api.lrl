@@ -1,0 +1,6 @@
+;; prelude index_vec_dyn API smoke.
+
+(unsafe entry (pi v (VecDyn Nat) (pi i Nat Nat))
+  (lam v (VecDyn Nat)
+    (lam i Nat
+      (index_vec_dyn v i))))

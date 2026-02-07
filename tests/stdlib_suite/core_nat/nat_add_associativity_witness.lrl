@@ -1,0 +1,10 @@
+;; stdlib nat.add associativity witness on sample values.
+;; expected: entry = true
+
+(def a Nat (succ zero))
+(def b Nat (succ (succ zero)))
+(def c Nat (succ (succ (succ zero))))
+
+(def entry Bool
+  (nat_eq (add (add a b) c)
+          (add a (add b c))))

@@ -1,0 +1,4 @@
+;; prelude Mutex constructor smoke under unsafe.
+
+(unsafe entry (Mutex Nat)
+  (mk_mutex (succ zero)))

@@ -1,0 +1,5 @@
+;; stdlib bool.if_nat: true branch.
+;; expected: entry = 2
+
+(def entry Nat
+  (if_nat true (succ (succ zero)) zero))

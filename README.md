@@ -32,6 +32,21 @@ Alpha constraints you should expect:
   - `stdlib/prelude_api.lrl` + `stdlib/prelude_impl_typed.lrl` (typed / auto compile)
 - You may see startup warnings from prelude axiom/primitive declarations in alpha workflows.
 
+## Stdlib Status (Alpha)
+
+- Milestone-1 core surface is present in shared stdlib modules:
+  - core: Nat/Bool helpers
+  - data: List/Option/Result/Pair basics
+  - control: minimal `Comp` helpers (`comp_pure`, `comp_bind`)
+- Prelude loading now includes shared core/data stdlib modules plus backend platform layer:
+  - typed/auto: `prelude_api + std/core(nat,bool) + std/data(list,option,result,pair) + prelude_impl_typed`
+  - dynamic: `prelude_api + std/core(nat,bool) + std/data(list,option,result,pair) + prelude_impl_dynamic`
+- `std/control/comp.lrl` exists as an alpha helper module but is not in the default prelude stack yet.
+- Current backend caveat:
+  - typed backend is the primary target for Option/Result/Pair alpha smoke workflows
+  - Option/Result helper behavior is currently guaranteed only for the smoke-tested positive paths
+  - dynamic overlap remains conservative (Nat/Bool/List-first)
+
 ## Quick Start
 
 ### Prerequisites

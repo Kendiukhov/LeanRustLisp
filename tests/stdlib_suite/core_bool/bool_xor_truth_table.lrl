@@ -1,0 +1,15 @@
+;; stdlib bool.xor: full truth table.
+;; expected true-count = 2
+
+(def bool_to_nat (pi b Bool Nat)
+  (lam b Bool
+    (if_nat b (succ zero) zero)))
+
+(def entry Nat
+  (add
+    (add
+      (bool_to_nat (xor true true))
+      (bool_to_nat (xor true false)))
+    (add
+      (bool_to_nat (xor false true))
+      (bool_to_nat (xor false false)))))

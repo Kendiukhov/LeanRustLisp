@@ -1,0 +1,5 @@
+;; prelude print_nat identity behavior smoke.
+;; expected: entry = 1
+
+(def entry Nat
+  (print_nat (succ zero)))

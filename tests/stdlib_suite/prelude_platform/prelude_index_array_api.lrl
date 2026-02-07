@@ -1,0 +1,6 @@
+;; prelude index_array API smoke.
+
+(unsafe entry (pi a (Array Nat) (pi i Nat Nat))
+  (lam a (Array Nat)
+    (lam i Nat
+      (index_array a i))))

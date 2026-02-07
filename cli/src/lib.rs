@@ -1,6 +1,7 @@
 pub mod compiler;
 pub mod driver;
 pub mod expand;
+pub mod package_manager;
 pub mod repl;
 
 use frontend::macro_expander::Expander;

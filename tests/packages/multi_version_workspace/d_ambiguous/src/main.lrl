@@ -1,0 +1,6 @@
+(module d_ambiguous)
+(import b)
+
+(def bad Nat
+  (add b.value zero)
+)

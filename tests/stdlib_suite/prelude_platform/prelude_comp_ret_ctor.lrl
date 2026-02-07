@@ -1,0 +1,4 @@
+;; prelude Comp.ret constructor smoke.
+
+(def entry (Comp Nat)
+  (ret Nat (succ zero)))

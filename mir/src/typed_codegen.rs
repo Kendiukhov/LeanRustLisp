@@ -109,6 +109,7 @@ pub fn codegen_program(
     items.extend(ctx.emit_callable_runtime_items());
     items.extend(ctx.emit_adts()?);
     items.extend(ctx.emit_index_runtime_impls()?);
+    items.extend(ctx.emit_text_io_runtime_items()?);
     items.extend(ctx.emit_ctors()?);
     items.extend(ctx.emit_recursors()?);
     items.extend(ctx.emit_closure_bodies(program)?);
@@ -672,7 +673,7 @@ impl<'a> CodegenContext<'a> {
             }
             items.push(Item::Enum {
                 name: adt_decl_name,
-                derives: vec!["Clone".to_string(), "Debug".to_string()],
+                derives: vec!["Clone".to_string()],
                 variants,
             });
         }
@@ -994,6 +995,89 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
         Ok(items)
     }
 
+    fn emit_text_io_runtime_items(&self) -> Result<Vec<Item>, TypedCodegenError> {
+        let Some(text_adt_id) = self.ids.adt_id("Text") else {
+            return Ok(Vec::new());
+        };
+        let Some(list_adt_id) = self.ids.adt_id("List") else {
+            return Ok(Vec::new());
+        };
+
+        let text_ty = self.rust_type(&MirType::Adt(text_adt_id.clone(), Vec::new()))?;
+        let list_nat_ty = self.rust_type(&MirType::Adt(list_adt_id.clone(), vec![MirType::Nat]))?;
+
+        let text_enum = self.adt_name(&text_adt_id).to_string();
+        let list_enum = self.adt_name(&list_adt_id).to_string();
+        let text_ctor = self
+            .ctor_name_map
+            .get(&CtorId::new(text_adt_id, 0))
+            .cloned()
+            .unwrap_or_else(|| "text".to_string());
+        let list_nil_ctor = self
+            .ctor_name_map
+            .get(&CtorId::new(list_adt_id.clone(), 0))
+            .cloned()
+            .unwrap_or_else(|| "nil".to_string());
+        let list_cons_ctor = self
+            .ctor_name_map
+            .get(&CtorId::new(list_adt_id, 1))
+            .cloned()
+            .unwrap_or_else(|| "cons".to_string());
+
+        let runtime_helpers = format!(
+            "fn runtime_list_nat_to_string(mut list: {list_nat_ty}) -> String {{
+    let mut output = String::new();
+    loop {{
+        match list {{
+            {list_enum}::{list_nil_ctor} => return output,
+            {list_enum}::{list_cons_ctor}(head, tail) => {{
+                if let Some(ch) = char::from_u32(head as u32) {{
+                    output.push(ch);
+                }}
+                list = *tail;
+            }},
+            _ => return output,
+        }}
+    }}
+}}
+
+fn runtime_string_to_list_nat(input: &str) -> {list_nat_ty} {{
+    input
+        .chars()
+        .rev()
+        .fold({list_enum}::{list_nil_ctor}, |acc, ch| {list_enum}::{list_cons_ctor}(ch as u64, Box::new(acc)))
+}}
+
+fn runtime_string_to_text(input: &str) -> {text_ty} {{
+    {text_enum}::{text_ctor}(runtime_string_to_list_nat(input))
+}}
+
+fn runtime_text_to_string(value: {text_ty}) -> String {{
+    match value {{
+        {text_enum}::{text_ctor}(data) => runtime_list_nat_to_string(data),
+        _ => String::new(),
+    }}
+}}
+
+fn runtime_read_file_text(path: {text_ty}) -> {text_ty} {{
+    let path_string = runtime_text_to_string(path);
+    match std::fs::read_to_string(&path_string) {{
+        Ok(content) => runtime_string_to_text(&content),
+        Err(_) => runtime_string_to_text(\"\"), 
+    }}
+}}
+
+fn runtime_write_file_text(path: {text_ty}, contents: {text_ty}) -> {text_ty} {{
+    let path_string = runtime_text_to_string(path);
+    let content_string = runtime_text_to_string(contents.clone());
+    let _ = std::fs::write(&path_string, &content_string);
+    contents
+}}",
+        );
+
+        Ok(vec![Item::Raw(runtime_helpers)])
+    }
+
     fn collect_closure_usage(&mut self, program: &TypedProgram) -> Result<(), TypedCodegenError> {
         let mut usage: HashMap<usize, ClosureUsage> = HashMap::new();
         for body in program.defs.iter().chain(program.closures.iter()) {
@@ -1206,7 +1290,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
     fn emit_def_bodies(&self, program: &TypedProgram) -> Result<Vec<Item>, TypedCodegenError> {
         let mut items = Vec::new();
         for body in &program.defs {
-            if let Some(item) = self.emit_print_builtin(body)? {
+            if let Some(item) = self.emit_special_builtin(body)? {
                 items.push(item);
                 continue;
             }
@@ -1215,23 +1299,185 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
         Ok(items)
     }
 
-    fn emit_print_builtin(&self, body: &TypedBody) -> Result<Option<Item>, TypedCodegenError> {
-        let (name, expected_arg) = match body.name.as_str() {
-            "print_nat" => ("print_nat", MirType::Nat),
-            "print_bool" => ("print_bool", MirType::Bool),
-            _ => return Ok(None),
-        };
+    fn emit_special_builtin(&self, body: &TypedBody) -> Result<Option<Item>, TypedCodegenError> {
+        match body.name.as_str() {
+            "print_nat" => self.emit_debug_print_builtin(body, "print_nat", &MirType::Nat),
+            "print_bool" => self.emit_debug_print_builtin(body, "print_bool", &MirType::Bool),
+            "print_text" | "print" => {
+                let text_ty = self.text_mir_type().ok_or_else(|| {
+                    TypedCodegenError::new("Text type is required to emit text print builtins")
+                })?;
+                if !self.unary_identity_builtin_signature_matches(body, &text_ty) {
+                    return Err(TypedCodegenError::new(format!(
+                        "print builtin '{}' must have type {} -> {}",
+                        body.name,
+                        self.rust_type(&text_ty)?,
+                        self.rust_type(&text_ty)?
+                    )));
+                }
+                let arg_ty = self.rust_type(&text_ty)?;
+                let ret_ty = self.curried_fn_type(&[arg_ty.clone()], arg_ty.clone());
+                let arg_name = "value".to_string();
+                let rendered = self.expr_call_path(
+                    "runtime_text_to_string",
+                    vec![self.expr_clone(self.expr_path(arg_name.clone()))],
+                );
+                let print_stmt = Stmt::Expr(Expr::MacroCall {
+                    name: "println".to_string(),
+                    args: vec![self.expr_lit_str("{}"), rendered],
+                });
+                let closure = Expr::Closure {
+                    params: vec![Param {
+                        name: arg_name.clone(),
+                        ty: Some(arg_ty),
+                    }],
+                    body: Block {
+                        stmts: vec![print_stmt],
+                        tail: Some(Box::new(self.expr_path(arg_name))),
+                    },
+                    is_move: true,
+                };
+                let callable_expr = self.callable_literal_expr(&text_ty, &text_ty, closure)?;
+                Ok(Some(Item::Fn {
+                    name: body.name.clone(),
+                    params: Vec::new(),
+                    ret: Some(ret_ty),
+                    body: Block {
+                        stmts: Vec::new(),
+                        tail: Some(Box::new(callable_expr)),
+                    },
+                }))
+            }
+            "read_file" => {
+                let text_ty = self.text_mir_type().ok_or_else(|| {
+                    TypedCodegenError::new("Text type is required to emit read_file builtin")
+                })?;
+                if !self.unary_identity_builtin_signature_matches(body, &text_ty) {
+                    return Err(TypedCodegenError::new(format!(
+                        "read_file builtin must have type {} -> {}",
+                        self.rust_type(&text_ty)?,
+                        self.rust_type(&text_ty)?
+                    )));
+                }
+                let arg_ty = self.rust_type(&text_ty)?;
+                let ret_ty = self.curried_fn_type(&[arg_ty.clone()], arg_ty.clone());
+                let arg_name = "path".to_string();
+                let closure = Expr::Closure {
+                    params: vec![Param {
+                        name: arg_name.clone(),
+                        ty: Some(arg_ty),
+                    }],
+                    body: Block {
+                        stmts: Vec::new(),
+                        tail: Some(Box::new(self.expr_call_path(
+                            "runtime_read_file_text",
+                            vec![self.expr_path(arg_name)],
+                        ))),
+                    },
+                    is_move: true,
+                };
+                let callable_expr = self.callable_literal_expr(&text_ty, &text_ty, closure)?;
+                Ok(Some(Item::Fn {
+                    name: body.name.clone(),
+                    params: Vec::new(),
+                    ret: Some(ret_ty),
+                    body: Block {
+                        stmts: Vec::new(),
+                        tail: Some(Box::new(callable_expr)),
+                    },
+                }))
+            }
+            "write_file" => {
+                let text_ty = self.text_mir_type().ok_or_else(|| {
+                    TypedCodegenError::new("Text type is required to emit write_file builtin")
+                })?;
+                if !self.write_file_builtin_signature_matches(body, &text_ty) {
+                    return Err(TypedCodegenError::new(format!(
+                        "write_file builtin must have type {} -> {} -> {}",
+                        self.rust_type(&text_ty)?,
+                        self.rust_type(&text_ty)?,
+                        self.rust_type(&text_ty)?
+                    )));
+                }
+                let text_rust_ty = self.rust_type(&text_ty)?;
+                let ret_ty = self.curried_fn_type(
+                    &[text_rust_ty.clone(), text_rust_ty.clone()],
+                    text_rust_ty.clone(),
+                );
+                let outer_arg = "path".to_string();
+                let inner_arg = "contents".to_string();
+                let inner_closure = Expr::Closure {
+                    params: vec![Param {
+                        name: inner_arg.clone(),
+                        ty: Some(text_rust_ty.clone()),
+                    }],
+                    body: Block {
+                        stmts: Vec::new(),
+                        tail: Some(Box::new(self.expr_call_path(
+                            "runtime_write_file_text",
+                            vec![
+                                self.expr_clone(self.expr_path(outer_arg.clone())),
+                                self.expr_path(inner_arg),
+                            ],
+                        ))),
+                    },
+                    is_move: true,
+                };
+                let inner_callable_expr =
+                    self.callable_literal_expr(&text_ty, &text_ty, inner_closure)?;
+                let outer_ret_ty = match self.local_type(body, 0) {
+                    Some(MirType::Fn(_, _, _, outer_ret))
+                    | Some(MirType::FnItem(_, _, _, _, outer_ret))
+                    | Some(MirType::Closure(_, _, _, _, outer_ret)) => outer_ret.as_ref(),
+                    _ => {
+                        return Err(TypedCodegenError::new(
+                            "write_file builtin has invalid top-level function type",
+                        ))
+                    }
+                };
+                let outer_closure = Expr::Closure {
+                    params: vec![Param {
+                        name: outer_arg,
+                        ty: Some(text_rust_ty),
+                    }],
+                    body: Block {
+                        stmts: Vec::new(),
+                        tail: Some(Box::new(inner_callable_expr)),
+                    },
+                    is_move: true,
+                };
+                let outer_callable_expr =
+                    self.callable_literal_expr(&text_ty, outer_ret_ty, outer_closure)?;
+                Ok(Some(Item::Fn {
+                    name: body.name.clone(),
+                    params: Vec::new(),
+                    ret: Some(ret_ty),
+                    body: Block {
+                        stmts: Vec::new(),
+                        tail: Some(Box::new(outer_callable_expr)),
+                    },
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
 
-        if !self.print_builtin_signature_matches(body, &expected_arg) {
+    fn emit_debug_print_builtin(
+        &self,
+        body: &TypedBody,
+        name: &str,
+        expected_arg: &MirType,
+    ) -> Result<Option<Item>, TypedCodegenError> {
+        if !self.unary_identity_builtin_signature_matches(body, expected_arg) {
             return Err(TypedCodegenError::new(format!(
                 "print builtin '{}' must have type {} -> {}",
                 name,
-                self.rust_type(&expected_arg)?,
-                self.rust_type(&expected_arg)?
+                self.rust_type(expected_arg)?,
+                self.rust_type(expected_arg)?
             )));
         }
 
-        let arg_ty = self.rust_type(&expected_arg)?;
+        let arg_ty = self.rust_type(expected_arg)?;
         let ret_ty = self.curried_fn_type(&[arg_ty.clone()], arg_ty.clone());
         let arg_name = "value".to_string();
         let print_stmt = Stmt::Expr(Expr::MacroCall {
@@ -1249,9 +1495,10 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             },
             is_move: true,
         };
+        let callable_expr = self.callable_literal_expr(expected_arg, expected_arg, closure)?;
         let body = Block {
             stmts: Vec::new(),
-            tail: Some(Box::new(self.expr_call_path("Rc::new", vec![closure]))),
+            tail: Some(Box::new(callable_expr)),
         };
 
         Ok(Some(Item::Fn {
@@ -1392,7 +1639,11 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
         })
     }
 
-    fn print_builtin_signature_matches(&self, body: &TypedBody, expected_arg: &MirType) -> bool {
+    fn unary_identity_builtin_signature_matches(
+        &self,
+        body: &TypedBody,
+        expected_arg: &MirType,
+    ) -> bool {
         let ty = match self.local_type(body, 0) {
             Some(ty) => ty,
             None => return false,
@@ -1408,6 +1659,78 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
         }
     }
 
+    fn write_file_builtin_signature_matches(&self, body: &TypedBody, text_ty: &MirType) -> bool {
+        let ty = match self.local_type(body, 0) {
+            Some(ty) => ty,
+            None => return false,
+        };
+        match ty {
+            MirType::Fn(_, _, outer_args, outer_ret)
+            | MirType::FnItem(_, _, _, outer_args, outer_ret)
+            | MirType::Closure(_, _, _, outer_args, outer_ret) => {
+                if outer_args.len() != 1 || outer_args[0] != *text_ty {
+                    return false;
+                }
+                match outer_ret.as_ref() {
+                    MirType::Fn(_, _, inner_args, inner_ret)
+                    | MirType::FnItem(_, _, _, inner_args, inner_ret)
+                    | MirType::Closure(_, _, _, inner_args, inner_ret) => {
+                        inner_args.len() == 1
+                            && inner_args[0] == *text_ty
+                            && inner_ret.as_ref() == text_ty
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn text_mir_type(&self) -> Option<MirType> {
+        self.ids
+            .adt_id("Text")
+            .map(|adt_id| MirType::Adt(adt_id, Vec::new()))
+    }
+
+    fn adt_variant_tag_expr(&self, adt_id: &AdtId, value_name: &str) -> Option<Expr> {
+        let layout = self.adt_layouts.get(adt_id)?;
+        let adt_name = self.adt_name(adt_id).to_string();
+        let mut arms = Vec::with_capacity(layout.variants.len());
+
+        for (variant_idx, variant) in layout.variants.iter().enumerate() {
+            let ctor_id = CtorId::new(adt_id.clone(), variant_idx);
+            let ctor_name = self.ctor_name_map.get(&ctor_id)?.clone();
+            let path = format!("{}::{}", adt_name, ctor_name);
+            let pat = if variant.fields.is_empty() {
+                Pat::Path(path)
+            } else {
+                Pat::Tuple {
+                    path,
+                    args: vec![Pat::Wild; variant.fields.len()],
+                }
+            };
+            arms.push(MatchArm {
+                pat,
+                body: Block {
+                    stmts: Vec::new(),
+                    tail: Some(Box::new(Expr::Lit(Lit::Str(ctor_name)))),
+                },
+            });
+        }
+        arms.push(MatchArm {
+            pat: Pat::Wild,
+            body: Block {
+                stmts: Vec::new(),
+                tail: Some(Box::new(Expr::Lit(Lit::Str("<value>".to_string())))),
+            },
+        });
+
+        Some(Expr::Match {
+            scrutinee: Box::new(Expr::Path(value_name.to_string())),
+            arms,
+        })
+    }
+
     fn emit_main(&self, program: &TypedProgram) -> Result<Item, TypedCodegenError> {
         let mut stmts = Vec::new();
         if let Some(name) = &program.main_name {
@@ -1420,23 +1743,59 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                     args: Vec::new(),
                 }),
             });
-            let print_expr = if self
-                .find_def_return_type(program, name)
-                .filter(|ty| !self.is_fn_type(ty))
-                .is_some()
-            {
-                Expr::MacroCall {
-                    name: "println".to_string(),
-                    args: vec![
-                        Expr::Lit(Lit::Str("Result: {:?}".to_string())),
-                        Expr::Path("result".to_string()),
-                    ],
+            let print_expr = match self.find_def_return_type(program, name) {
+                Some(ty) if !self.is_fn_type(ty) => {
+                    if matches!(ty, MirType::Nat | MirType::Bool) {
+                        Expr::MacroCall {
+                            name: "println".to_string(),
+                            args: vec![
+                                Expr::Lit(Lit::Str("Result: {}".to_string())),
+                                Expr::Path("result".to_string()),
+                            ],
+                        }
+                    } else if self.text_mir_type().as_ref() == Some(ty) {
+                        Expr::MacroCall {
+                            name: "println".to_string(),
+                            args: vec![
+                                Expr::Lit(Lit::Str("Result: {}".to_string())),
+                                Expr::Call {
+                                    func: Box::new(Expr::Path(
+                                        "runtime_text_to_string".to_string(),
+                                    )),
+                                    args: vec![Expr::MethodCall {
+                                        receiver: Box::new(Expr::Path("result".to_string())),
+                                        method: "clone".to_string(),
+                                        args: Vec::new(),
+                                    }],
+                                },
+                            ],
+                        }
+                    } else if let MirType::Adt(adt_id, _args) = ty {
+                        if let Some(tag_expr) = self.adt_variant_tag_expr(adt_id, "result") {
+                            Expr::MacroCall {
+                                name: "println".to_string(),
+                                args: vec![
+                                    Expr::Lit(Lit::Str("Result: {}".to_string())),
+                                    tag_expr,
+                                ],
+                            }
+                        } else {
+                            Expr::MacroCall {
+                                name: "println".to_string(),
+                                args: vec![Expr::Lit(Lit::Str("Result: <value>".to_string()))],
+                            }
+                        }
+                    } else {
+                        Expr::MacroCall {
+                            name: "println".to_string(),
+                            args: vec![Expr::Lit(Lit::Str("Result: <value>".to_string()))],
+                        }
+                    }
                 }
-            } else {
-                Expr::MacroCall {
+                _ => Expr::MacroCall {
                     name: "println".to_string(),
                     args: vec![Expr::Lit(Lit::Str("Result: <func>".to_string()))],
-                }
+                },
             };
             stmts.push(Stmt::Expr(print_expr));
         }
@@ -2269,6 +2628,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
     fn emit_body(&self, body: &TypedBody, is_closure: bool) -> Result<Item, TypedCodegenError> {
         let generics = self.body_generics(body);
         let bound_generics = self.body_generic_indices(body);
+        let used_locals = self.collect_used_local_indices(&body.body);
         let ret_ty = self.rust_type(
             self.local_type(body, 0)
                 .ok_or_else(|| TypedCodegenError::new("missing return type"))?,
@@ -2315,10 +2675,12 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
         stmts.push(Stmt::Let {
             name: "_0".to_string(),
             mutable: true,
-            ty: self.option_local_type_annotation(
+            ty: self.option_local_type_annotation_with_usage(
+                0,
                 self.local_type(body, 0)
                     .ok_or_else(|| TypedCodegenError::new("missing return type"))?,
                 &bound_generics,
+                &used_locals,
             )?,
             value: Some(self.expr_none()),
         });
@@ -2327,7 +2689,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             stmts.push(Stmt::Let {
                 name: "_1".to_string(),
                 mutable: true,
-                ty: Some("Option<()>".to_string()),
+                ty: Some("std::option::Option<()>".to_string()),
                 value: Some(self.expr_none()),
             });
             let arg_ty = self
@@ -2336,7 +2698,12 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             stmts.push(Stmt::Let {
                 name: "_2".to_string(),
                 mutable: true,
-                ty: self.option_local_type_annotation(arg_ty, &bound_generics)?,
+                ty: self.option_local_type_annotation_with_usage(
+                    2,
+                    arg_ty,
+                    &bound_generics,
+                    &used_locals,
+                )?,
                 value: Some(self.expr_some(self.expr_path("__arg"))),
             });
             for i in 3..body.body.local_decls.len() {
@@ -2346,7 +2713,12 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                 stmts.push(Stmt::Let {
                     name: format!("_{}", i),
                     mutable: true,
-                    ty: self.option_local_type_annotation(local_ty, &bound_generics)?,
+                    ty: self.option_local_type_annotation_with_usage(
+                        i,
+                        local_ty,
+                        &bound_generics,
+                        &used_locals,
+                    )?,
                     value: Some(self.expr_none()),
                 });
             }
@@ -2358,7 +2730,12 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                 stmts.push(Stmt::Let {
                     name: format!("_{}", i),
                     mutable: true,
-                    ty: self.option_local_type_annotation(local_ty, &bound_generics)?,
+                    ty: self.option_local_type_annotation_with_usage(
+                        i,
+                        local_ty,
+                        &bound_generics,
+                        &used_locals,
+                    )?,
                     value: Some(self.expr_none()),
                 });
             }
@@ -2772,7 +3149,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
         closure_env: Option<&ClosureEnv>,
     ) -> Result<Expr, TypedCodegenError> {
         if place.projection.is_empty() {
-            return self.local_expr(place.local.index(), access);
+            return self.local_expr(body, place.local.index(), access);
         }
 
         if let Some(env) = closure_env {
@@ -2790,6 +3167,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                             TypedCodegenError::new("invalid closure capture index")
                         })?;
                         return self.project_from_expr(
+                            body,
                             capture_expr,
                             cap_ty,
                             &place.projection[1..],
@@ -2799,15 +3177,16 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             }
         }
 
-        let base_expr = self.local_expr(place.local.index(), AccessKind::Copy)?;
+        let base_expr = self.local_expr(body, place.local.index(), AccessKind::Copy)?;
         let base_ty = self
             .local_type(body, place.local.index())
             .ok_or_else(|| TypedCodegenError::new("missing local type"))?;
-        self.project_from_expr(base_expr, base_ty, &place.projection)
+        self.project_from_expr(body, base_expr, base_ty, &place.projection)
     }
 
     fn project_from_expr(
         &self,
+        body: &TypedBody,
         base_expr: Expr,
         base_ty: &MirType,
         projections: &[PlaceElem],
@@ -3048,7 +3427,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                                     "index projection only supported on indexable containers",
                                 )
                             })?;
-                    let index_expr = self.local_expr(local.index(), AccessKind::Copy)?;
+                    let index_expr = self.local_expr(body, local.index(), AccessKind::Copy)?;
                     expr = self.expr_call_path("runtime_index", vec![expr, index_expr]);
                     current_ty = elem_ty;
                     variant = None;
@@ -3152,10 +3531,24 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
         }
     }
 
-    fn local_expr(&self, local_idx: usize, access: AccessKind) -> Result<Expr, TypedCodegenError> {
+    fn local_expr(
+        &self,
+        body: &TypedBody,
+        local_idx: usize,
+        access: AccessKind,
+    ) -> Result<Expr, TypedCodegenError> {
+        let local_decl = body
+            .body
+            .local_decls
+            .get(local_idx)
+            .ok_or_else(|| TypedCodegenError::new("missing local type"))?;
+        let move_is_non_consuming = local_decl.is_copy || self.is_fn_type(&local_decl.ty);
         let base = self.expr_path(format!("_{}", local_idx));
         match access {
             AccessKind::Copy => Ok(
+                self.expr_clone(self.expr_expect(self.expr_as_ref(base), "uninitialized local"))
+            ),
+            AccessKind::Move if move_is_non_consuming => Ok(
                 self.expr_clone(self.expr_expect(self.expr_as_ref(base), "uninitialized local"))
             ),
             AccessKind::Move => Ok(self.expr_expect(self.expr_take(base), "moved local")),
@@ -3228,6 +3621,15 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
 
     fn generic_param_name(&self, idx: usize) -> String {
         format!("T{}", idx)
+    }
+
+    fn interior_mutable_wrapper_for_adt(&self, adt_id: &AdtId) -> Option<&'static str> {
+        match self.adt_name(adt_id) {
+            "RefCell" => Some("LrlRefCell"),
+            "Mutex" => Some("LrlMutex"),
+            "Atomic" => Some("LrlAtomic"),
+            _ => None,
+        }
     }
 
     fn name_with_generics(&self, name: &str, generics: &[String]) -> String {
@@ -3341,7 +3743,111 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             return Ok(None);
         }
         let local_ty = self.rust_type(ty)?;
-        Ok(Some(format!("Option<{}>", local_ty)))
+        Ok(Some(format!("std::option::Option<{}>", local_ty)))
+    }
+
+    fn option_local_type_annotation_with_usage(
+        &self,
+        local_idx: usize,
+        ty: &MirType,
+        bound_generics: &BTreeSet<usize>,
+        used_locals: &HashSet<usize>,
+    ) -> Result<Option<String>, TypedCodegenError> {
+        match self.option_local_type_annotation(ty, bound_generics)? {
+            Some(ty) => Ok(Some(ty)),
+            None if !used_locals.contains(&local_idx) => {
+                Ok(Some("std::option::Option<()>".to_string()))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn collect_used_local_indices(&self, body: &Body) -> HashSet<usize> {
+        let mut used = HashSet::new();
+        for block in &body.basic_blocks {
+            for stmt in &block.statements {
+                match stmt {
+                    Statement::Assign(place, rv) => {
+                        self.collect_place_local_indices(place, &mut used);
+                        self.collect_rvalue_local_indices(rv, &mut used);
+                    }
+                    Statement::RuntimeCheck(check) => match check {
+                        RuntimeCheckKind::RefCellBorrow { local }
+                        | RuntimeCheckKind::MutexLock { local } => {
+                            used.insert(local.index());
+                        }
+                        RuntimeCheckKind::BoundsCheck { local, index } => {
+                            used.insert(local.index());
+                            used.insert(index.index());
+                        }
+                    },
+                    Statement::StorageLive(_) | Statement::StorageDead(_) | Statement::Nop => {}
+                }
+            }
+            if let Some(term) = &block.terminator {
+                self.collect_terminator_local_indices(term, &mut used);
+            }
+        }
+        used
+    }
+
+    fn collect_terminator_local_indices(&self, term: &Terminator, used: &mut HashSet<usize>) {
+        match term {
+            Terminator::Return | Terminator::Goto { .. } | Terminator::Unreachable => {}
+            Terminator::SwitchInt { discr, .. } => self.collect_operand_local_indices(discr, used),
+            Terminator::Call {
+                func,
+                args,
+                destination,
+                ..
+            } => {
+                self.collect_call_operand_local_indices(func, used);
+                for arg in args {
+                    self.collect_operand_local_indices(arg, used);
+                }
+                self.collect_place_local_indices(destination, used);
+            }
+        }
+    }
+
+    fn collect_rvalue_local_indices(&self, rv: &Rvalue, used: &mut HashSet<usize>) {
+        match rv {
+            Rvalue::Use(op) => self.collect_operand_local_indices(op, used),
+            Rvalue::Ref(_, place) | Rvalue::Discriminant(place) => {
+                self.collect_place_local_indices(place, used)
+            }
+        }
+    }
+
+    fn collect_call_operand_local_indices(&self, op: &CallOperand, used: &mut HashSet<usize>) {
+        match op {
+            CallOperand::Operand(operand) => self.collect_operand_local_indices(operand, used),
+            CallOperand::Borrow(_, place) => self.collect_place_local_indices(place, used),
+        }
+    }
+
+    fn collect_operand_local_indices(&self, op: &Operand, used: &mut HashSet<usize>) {
+        match op {
+            Operand::Copy(place) | Operand::Move(place) => {
+                self.collect_place_local_indices(place, used)
+            }
+            Operand::Constant(constant) => {
+                if let Some(captures) = constant.literal.capture_operands() {
+                    for capture in captures {
+                        self.collect_operand_local_indices(capture, used);
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_place_local_indices(&self, place: &Place, used: &mut HashSet<usize>) {
+        used.insert(place.local.index());
+        for proj in &place.projection {
+            if let PlaceElem::Index(local) = proj {
+                used.insert(local.index());
+            }
+        }
     }
 
     fn rust_field_type(
@@ -3384,6 +3890,20 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             }
             let arg_types = self.ctor_runtime_arg_types(adt_id, variant_idx, arity)?;
             let mut ty = "()".to_string();
+            for arg_ty in arg_types.iter().rev() {
+                let arg_ty = self.rust_type(arg_ty)?;
+                ty = format!("Rc<dyn LrlCallable<{}, {}>>", arg_ty, ty);
+            }
+            return Ok(ty);
+        }
+        if let Some(wrapper_name) = self.interior_mutable_wrapper_for_adt(adt_id) {
+            let wrapper_ty =
+                self.name_with_generics(wrapper_name, &self.adt_generic_params(adt_id));
+            if arity == 0 {
+                return Ok(wrapper_ty);
+            }
+            let arg_types = self.ctor_runtime_arg_types(adt_id, variant_idx, arity)?;
+            let mut ty = wrapper_ty;
             for arg_ty in arg_types.iter().rev() {
                 let arg_ty = self.rust_type(arg_ty)?;
                 ty = format!("Rc<dyn LrlCallable<{}, {}>>", arg_ty, ty);
@@ -3507,6 +4027,43 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             .get(&variant.ctor)
             .cloned()
             .unwrap_or_else(|| format!("Ctor{}", variant_idx));
+
+        if let Some(wrapper_name) = self.interior_mutable_wrapper_for_adt(adt_id) {
+            if variant.fields.len() != 1 {
+                return Err(TypedCodegenError::new(
+                    "interior mutable constructor must have exactly one payload field",
+                ));
+            }
+            if arity == 0 {
+                return Err(TypedCodegenError::new(
+                    "interior mutable constructor missing payload",
+                ));
+            }
+            let wrapper_ty =
+                self.name_with_generics(wrapper_name, &self.adt_generic_params(adt_id));
+            let arg_types = self.ctor_runtime_arg_types(adt_id, variant_idx, arity)?;
+            let mut arg_names = Vec::new();
+            for i in 0..arity {
+                arg_names.push(format!("a{}", i));
+            }
+            let arg_type_names: Vec<String> = arg_types
+                .iter()
+                .map(|ty| self.rust_type(ty))
+                .collect::<Result<_, _>>()?;
+            let value_arg_name = format!("a{}", arity - variant.fields.len());
+            let final_expr = Expr::StructInit {
+                // Use the nominal wrapper path here; generic arguments are inferred from context.
+                path: wrapper_name.to_string(),
+                fields: vec![("value".to_string(), self.expr_path(value_arg_name))],
+            };
+            return Ok(self.curried_entry_expr(
+                &arg_names,
+                &arg_type_names,
+                &[],
+                &final_expr,
+                &wrapper_ty,
+            ));
+        }
 
         if arity == 0 {
             return Ok(self.expr_path(format!("{}::{}", adt_name, ctor_name)));
@@ -3835,6 +4392,25 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
         ))
     }
 
+    fn callable_literal_expr(
+        &self,
+        arg_ty: &MirType,
+        ret_ty: &MirType,
+        closure: Expr,
+    ) -> Result<Expr, TypedCodegenError> {
+        let callable_ty = self.callable_dyn_type(arg_ty, ret_ty)?;
+        let rc_expr = self.expr_call_path("Rc::new", vec![closure]);
+        Ok(Expr::Block(Block {
+            stmts: vec![Stmt::Let {
+                name: "__callable".to_string(),
+                mutable: false,
+                ty: Some(callable_ty),
+                value: Some(rc_expr),
+            }],
+            tail: Some(Box::new(self.expr_path("__callable"))),
+        }))
+    }
+
     fn is_fn_type(&self, ty: &MirType) -> bool {
         matches!(
             ty,
@@ -3922,11 +4498,11 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
     }
 
     fn expr_some(&self, expr: Expr) -> Expr {
-        self.expr_call_path("Some", vec![expr])
+        self.expr_call_path("std::option::Option::Some", vec![expr])
     }
 
     fn expr_none(&self) -> Expr {
-        self.expr_path("None")
+        self.expr_path("std::option::Option::None")
     }
 
     fn expr_unreachable(&self) -> Expr {

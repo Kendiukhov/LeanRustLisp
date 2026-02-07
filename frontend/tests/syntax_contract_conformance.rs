@@ -2,6 +2,7 @@ use frontend::declaration_parser::DeclarationParser;
 use frontend::macro_expander::Expander;
 use frontend::parser::Parser;
 use frontend::surface::{Declaration, SurfaceTerm, SurfaceTermKind, Syntax, SyntaxKind};
+use std::collections::HashMap;
 
 fn parse_syntax(source: &str) -> Vec<Syntax> {
     let mut parser = Parser::new(source);
@@ -15,25 +16,55 @@ fn parse_declarations(source: &str) -> Result<Vec<Declaration>, String> {
     decl_parser.parse(syntax).map_err(|err| err.to_string())
 }
 
-fn decode_nat(term: &SurfaceTerm) -> Option<usize> {
-    let mut value = 0usize;
-    let mut current = term;
-    loop {
-        match &current.kind {
-            SurfaceTermKind::Ctor(name, idx) if name == "Nat" && *idx == 0 => return Some(value),
-            SurfaceTermKind::App(fun, arg, true) => match &fun.kind {
-                SurfaceTermKind::Ctor(name, idx) if name == "Nat" && *idx == 1 => {
-                    value += 1;
-                    current = arg.as_ref();
-                }
-                _ => return None,
-            },
-            _ => return None,
+fn decode_nat_with_env(term: &SurfaceTerm, env: &mut HashMap<String, usize>) -> Option<usize> {
+    if let SurfaceTermKind::Var(name) = &term.kind {
+        if let Some(rest) = name.strip_prefix("__nat_ascii_") {
+            return rest.parse::<usize>().ok();
         }
+        if let Some(rest) = name.strip_prefix("nat_") {
+            return rest.parse::<usize>().ok();
+        }
+        if let Some(value) = env.get(name) {
+            return Some(*value);
+        }
+    }
+    match &term.kind {
+        SurfaceTermKind::Ctor(name, idx) if name == "Nat" && *idx == 0 => Some(0),
+        SurfaceTermKind::App(fun, arg, true) => match &fun.kind {
+            SurfaceTermKind::Ctor(name, idx) if name == "Nat" && *idx == 1 => {
+                Some(decode_nat_with_env(arg.as_ref(), env)? + 1)
+            }
+            SurfaceTermKind::App(add_fn, lhs, true) => match &add_fn.kind {
+                SurfaceTermKind::Var(name) if name == "add" => Some(
+                    decode_nat_with_env(lhs.as_ref(), env)?
+                        + decode_nat_with_env(arg.as_ref(), env)?,
+                ),
+                _ => None,
+            },
+            _ => None,
+        },
+        SurfaceTermKind::Let(name, _ty, val, body) => {
+            let value = decode_nat_with_env(val.as_ref(), env)?;
+            let prev = env.insert(name.clone(), value);
+            let result = decode_nat_with_env(body.as_ref(), env);
+            match prev {
+                Some(old) => {
+                    env.insert(name.clone(), old);
+                }
+                None => {
+                    env.remove(name);
+                }
+            }
+            result
+        }
+        _ => None,
     }
 }
 
-fn decode_nat_list(term: &SurfaceTerm) -> Option<Vec<usize>> {
+fn decode_nat_list_with_env(
+    term: &SurfaceTerm,
+    env: &mut HashMap<String, usize>,
+) -> Option<Vec<usize>> {
     let mut items = Vec::new();
     let mut current = term;
     loop {
@@ -42,7 +73,7 @@ fn decode_nat_list(term: &SurfaceTerm) -> Option<Vec<usize>> {
             SurfaceTermKind::App(cons_head, tail, true) => match &cons_head.kind {
                 SurfaceTermKind::App(cons_ctor, head, true) => match &cons_ctor.kind {
                     SurfaceTermKind::Ctor(name, idx) if name == "List" && *idx == 1 => {
-                        items.push(decode_nat(head.as_ref())?);
+                        items.push(decode_nat_with_env(head.as_ref(), env)?);
                         current = tail.as_ref();
                     }
                     _ => return None,
@@ -51,6 +82,25 @@ fn decode_nat_list(term: &SurfaceTerm) -> Option<Vec<usize>> {
             },
             _ => return None,
         }
+    }
+}
+
+fn decode_text_codes(term: &SurfaceTerm) -> Option<Vec<usize>> {
+    let mut env = HashMap::new();
+    let mut current = term;
+    while let SurfaceTermKind::Let(name, _ty, val, body) = &current.kind {
+        let value = decode_nat_with_env(val.as_ref(), &mut env)?;
+        env.insert(name.clone(), value);
+        current = body.as_ref();
+    }
+    match &current.kind {
+        SurfaceTermKind::App(text_ctor, list_term, true) => match &text_ctor.kind {
+            SurfaceTermKind::Ctor(name, idx) if name == "Text" && *idx == 0 => {
+                decode_nat_list_with_env(list_term.as_ref(), &mut env)
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -210,13 +260,13 @@ fn lam_rejects_non_symbol_binders() {
 }
 
 #[test]
-fn string_literals_desugar_to_list_nat_codes() {
+fn string_literals_desugar_to_text_codes() {
     let decls = parse_declarations("\"Az\"").expect("string expression should parse");
     let term = match &decls[0] {
         Declaration::Expr(term) => term,
         other => panic!("expected expression declaration, got {:?}", other),
     };
-    let codes = decode_nat_list(term).expect("expected List Nat encoding");
+    let codes = decode_text_codes(term).expect("expected Text encoding");
     assert_eq!(codes, vec![65, 122]);
 }
 

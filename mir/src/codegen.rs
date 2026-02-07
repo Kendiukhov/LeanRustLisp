@@ -260,6 +260,109 @@ fn runtime_index(container: &Value, index: &Value) -> Value {
     }
 }
 
+fn runtime_nat_to_char(value: &Value) -> Option<char> {
+    match value {
+        Value::Nat(n) => {
+            if *n > u32::MAX as u64 {
+                None
+            } else {
+                char::from_u32(*n as u32)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn runtime_list_nat_to_string(list: &Rc<List>) -> String {
+    let mut out = String::new();
+    let mut current = list.clone();
+    loop {
+        match &*current {
+            List::Nil => break,
+            List::Cons(head, tail) => {
+                match runtime_nat_to_char(head) {
+                    Some(ch) => out.push(ch),
+                    None => out.push('\u{FFFD}'),
+                }
+                current = tail.clone();
+            }
+        }
+    }
+    out
+}
+
+fn runtime_text_to_string(value: &Value) -> String {
+    match value {
+        Value::Inductive(name, idx, args) if name == "Text" && *idx == 0 => match args.first() {
+            Some(Value::List(list)) => runtime_list_nat_to_string(list),
+            _ => String::new(),
+        },
+        _ => format!("{:?}", value),
+    }
+}
+
+fn runtime_string_to_list(input: &str) -> Rc<List> {
+    let mut list = Rc::new(List::Nil);
+    for ch in input.chars().rev() {
+        list = Rc::new(List::Cons(Value::Nat(ch as u64), list));
+    }
+    list
+}
+
+fn runtime_string_to_text(input: &str) -> Value {
+    Value::Inductive(
+        "Text".to_string(),
+        0,
+        vec![Value::List(runtime_string_to_list(input))],
+    )
+}
+
+fn runtime_print_nat(value: Value) -> Value {
+    match &value {
+        Value::Nat(n) => println!("{}", n),
+        _ => println!("{:?}", value),
+    }
+    value
+}
+
+fn runtime_print_bool(value: Value) -> Value {
+    match &value {
+        Value::Bool(b) => println!("{}", b),
+        _ => println!("{:?}", value),
+    }
+    value
+}
+
+fn runtime_print_text(value: Value) -> Value {
+    println!("{}", runtime_text_to_string(&value));
+    value
+}
+
+fn runtime_read_file_text(path: Value) -> Value {
+    let path_string = runtime_text_to_string(&path);
+    match std::fs::read_to_string(&path_string) {
+        Ok(contents) => runtime_string_to_text(&contents),
+        Err(err) => panic!("read_file failed for '{}': {}", path_string, err),
+    }
+}
+
+fn runtime_write_file_text(path: Value, contents: Value) -> Value {
+    let path_string = runtime_text_to_string(&path);
+    let content_string = runtime_text_to_string(&contents);
+    if let Err(err) = std::fs::write(&path_string, content_string.as_bytes()) {
+        panic!("write_file failed for '{}': {}", path_string, err);
+    }
+    contents
+}
+
+fn runtime_result_to_string(value: &Value) -> String {
+    match value {
+        Value::Inductive(name, idx, _) if name == "Text" && *idx == 0 => runtime_text_to_string(value),
+        Value::Func(_) => "<func>".to_string(),
+        _ => format!("{:?}", value),
+    }
+}
+
 fn list_len(list: &Rc<List>) -> usize {
     match &**list {
         List::Nil => 0,
@@ -726,7 +829,16 @@ pub fn codegen_constant(lit: &Literal, closure_base: usize) -> String {
         Literal::Unit => "Value::Unit".to_string(),
         Literal::Nat(n) => format!("Value::Nat({})", n),
         Literal::Bool(b) => format!("Value::Bool({})", b),
-        Literal::GlobalDef(name) => format!("{}()", sanitize_name(name)),
+        Literal::GlobalDef(name) => match name.as_str() {
+            "print_nat" => "Value::Func(Rc::new(|n| runtime_print_nat(n)))".to_string(),
+            "print_bool" => "Value::Func(Rc::new(|b| runtime_print_bool(b)))".to_string(),
+            "print_text" | "print" => {
+                "Value::Func(Rc::new(|t| runtime_print_text(t)))".to_string()
+            }
+            "read_file" => "Value::Func(Rc::new(|path| runtime_read_file_text(path)))".to_string(),
+            "write_file" => "Value::Func(Rc::new(|path| { let path = path.clone(); Value::Func(Rc::new(move |contents| runtime_write_file_text(path.clone(), contents))) }))".to_string(),
+            _ => format!("{}()", sanitize_name(name)),
+        },
         Literal::Recursor(name) => {
             if name == "Nat" {
                 "Value::Func(Rc::new(rec_nat_entry))".to_string()

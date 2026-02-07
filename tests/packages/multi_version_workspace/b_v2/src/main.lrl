@@ -1,0 +1,6 @@
+(module b_v2_mod)
+
+;; Shared stdlib-backed payload for v2.
+(def value Nat
+  (add (succ (succ zero)) zero)
+)

@@ -4,17 +4,17 @@
 ;;! expect_result: 2
 
 (inductive copy MaybeNat (sort 1)
-  (ctor none MaybeNat)
-  (ctor some (pi n Nat MaybeNat)))
+  (ctor maybe_none MaybeNat)
+  (ctor maybe_some (pi n Nat MaybeNat)))
 
 (def unwrap_twice (pi m MaybeNat Nat)
   (lam m MaybeNat
     (match m Nat
-      (case (none) zero)
-      (case (some x)
+      (case (maybe_none) zero)
+      (case (maybe_some x)
         (match x Nat
           (case (zero) zero)
           (case (succ y) (succ y)))))))
 
 (def entry Nat
-  (unwrap_twice (some (succ (succ zero)))))
+  (unwrap_twice (maybe_some (succ (succ zero)))))

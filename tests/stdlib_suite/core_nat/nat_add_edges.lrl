@@ -1,0 +1,10 @@
+;; stdlib nat.add edge variants.
+;; expected: entry = 8
+
+(def three Nat (succ (succ (succ zero))))
+(def two Nat (succ (succ zero)))
+
+(def entry Nat
+  (add
+    (add (add zero zero) (add zero three))
+    (add (add three zero) (add three two))))

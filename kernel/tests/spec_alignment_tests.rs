@@ -5,7 +5,8 @@ fn read_spec(path: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join(path);
-    fs::read_to_string(&path).unwrap_or_else(|err| panic!("Failed to read {}: {}", path.display(), err))
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("Failed to read {}: {}", path.display(), err))
 }
 
 #[test]

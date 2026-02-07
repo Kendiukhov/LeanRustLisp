@@ -1,0 +1,4 @@
+;; prelude Array constructor smoke.
+
+(def entry (Array Nat)
+  (mk_array (cons zero (cons (succ zero) nil))))

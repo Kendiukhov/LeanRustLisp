@@ -1,0 +1,16 @@
+;; filter edges: always-true keeps all, always-false keeps none.
+;; expected: entry = 3
+
+(def keep_all (pi #[fn] x Nat Bool)
+  (lam #[fn] x Nat true))
+
+(def keep_none (pi #[fn] x Nat Bool)
+  (lam #[fn] x Nat false))
+
+(def xs (List Nat)
+  (cons zero (cons (succ zero) (cons (succ (succ zero)) nil))))
+
+(def entry Nat
+  (add
+    (length (filter keep_all xs))
+    (length (filter keep_none xs))))

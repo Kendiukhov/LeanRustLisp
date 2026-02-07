@@ -1,0 +1,4 @@
+;; prelude Slice constructor smoke.
+
+(def entry (Slice Nat)
+  (mk_slice (cons zero (cons (succ zero) nil))))

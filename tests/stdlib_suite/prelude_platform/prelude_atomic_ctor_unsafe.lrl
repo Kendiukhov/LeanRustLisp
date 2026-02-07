@@ -1,0 +1,4 @@
+;; prelude Atomic constructor smoke under unsafe.
+
+(unsafe entry (Atomic Nat)
+  (mk_atomic (succ zero)))

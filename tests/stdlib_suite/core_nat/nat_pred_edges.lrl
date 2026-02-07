@@ -1,0 +1,7 @@
+;; stdlib nat_pred edge variants.
+;; expected: entry = 3
+
+(def entry Nat
+  (add
+    (nat_pred zero)
+    (nat_pred (succ (succ (succ (succ zero)))))))

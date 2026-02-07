@@ -45,7 +45,7 @@ struct CaseMeta {
     expect_exit: i32,
     expected_result: Option<ExpectedResult>,
     reason: Option<String>,
-    prelude_source: String,
+    prelude_sources: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,7 +89,7 @@ fn parse_case_meta(source: &str, path: &Path) -> Result<CaseMeta, String> {
     let mut expect_result_kind: Option<String> = None;
     let mut expect_result_value: Option<String> = None;
     let mut reason: Option<String> = None;
-    let mut prelude_source: Option<String> = None;
+    let mut prelude_sources: Option<Vec<String>> = None;
 
     for line in source.lines() {
         let trimmed = line.trim();
@@ -133,7 +133,7 @@ fn parse_case_meta(source: &str, path: &Path) -> Result<CaseMeta, String> {
                 if value.is_empty() {
                     return Err(format!("empty prelude metadata in {:?}", path));
                 }
-                prelude_source = Some(value.to_string());
+                prelude_sources = Some(parse_prelude_sources(value, path)?);
             }
             _ => {
                 return Err(format!("unknown metadata key '{}' in {:?}", key, path));
@@ -142,7 +142,8 @@ fn parse_case_meta(source: &str, path: &Path) -> Result<CaseMeta, String> {
     }
 
     let tag = tag.ok_or_else(|| format!("missing 'tag' metadata in {:?}", path))?;
-    let prelude_source = prelude_source.unwrap_or_else(|| CONFORMANCE_PRELUDE_REL.to_string());
+    let prelude_sources =
+        prelude_sources.unwrap_or_else(|| vec![CONFORMANCE_PRELUDE_REL.to_string()]);
 
     match tag {
         CaseTag::OverlapSubset => {
@@ -183,7 +184,7 @@ fn parse_case_meta(source: &str, path: &Path) -> Result<CaseMeta, String> {
                 expect_exit,
                 expected_result: Some(expected_result),
                 reason,
-                prelude_source,
+                prelude_sources,
             })
         }
         CaseTag::Excluded => {
@@ -198,10 +199,23 @@ fn parse_case_meta(source: &str, path: &Path) -> Result<CaseMeta, String> {
                 expect_exit: 0,
                 expected_result: None,
                 reason: Some(reason),
-                prelude_source,
+                prelude_sources,
             })
         }
     }
+}
+
+fn parse_prelude_sources(raw: &str, path: &Path) -> Result<Vec<String>, String> {
+    let sources: Vec<String> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(ToString::to_string)
+        .collect();
+    if sources.is_empty() {
+        return Err(format!("empty prelude metadata in {:?}", path));
+    }
+    Ok(sources)
 }
 
 fn collect_conformance_cases() -> Result<Vec<ConformanceCase>, String> {
@@ -289,7 +303,7 @@ fn validate_body(name: &str, body: &mut mir::Body) -> Result<(), String> {
 
 fn lower_program_with_prelude(
     source: &str,
-    prelude_source_path: &str,
+    prelude_source_paths: &[String],
 ) -> Result<(Env, IdRegistry, Vec<LoweredDef>, Option<String>), String> {
     let mut env = Env::new();
     let mut expander = Expander::new();
@@ -297,32 +311,41 @@ fn lower_program_with_prelude(
     let mut diagnostics = DiagnosticCollector::new();
     let options = PipelineOptions::default();
 
-    let prelude_path = repo_root().join(prelude_source_path);
-    let prelude = fs::read_to_string(&prelude_path)
-        .map_err(|e| format!("failed to read prelude {:?}: {}", prelude_path, e))?;
-    let prelude_module = module_id_for_source(prelude_source_path);
-    expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
-    set_prelude_macro_boundary_allowlist(&mut expander, &prelude_module);
-    let mut prelude_diagnostics = DiagnosticCollector::new();
     let allow_reserved = env.allows_reserved_primitives();
     env.set_allow_reserved_primitives(true);
-    process_code(
-        &prelude,
-        prelude_source_path,
-        &mut env,
-        &mut expander,
-        &PipelineOptions::default(),
-        &mut prelude_diagnostics,
-    )
-    .map_err(|e| format!("prelude processing failed for {:?}: {:?}", prelude_path, e))?;
-    expander.clear_macro_boundary_allowlist();
+    let mut prelude_modules = Vec::new();
+    for prelude_source_path in prelude_source_paths {
+        let mut prelude_diagnostics = DiagnosticCollector::new();
+        let prelude_path = repo_root().join(prelude_source_path);
+        let prelude = fs::read_to_string(&prelude_path)
+            .map_err(|e| format!("failed to read prelude {:?}: {}", prelude_path, e))?;
+        let prelude_module = module_id_for_source(prelude_source_path);
+        expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
+        set_prelude_macro_boundary_allowlist(&mut expander, &prelude_module);
+        if !prelude_modules.is_empty() {
+            expander.set_default_imports(prelude_modules.clone());
+        }
+        process_code(
+            &prelude,
+            prelude_source_path,
+            &mut env,
+            &mut expander,
+            &PipelineOptions::default(),
+            &mut prelude_diagnostics,
+        )
+        .map_err(|e| format!("prelude processing failed for {:?}: {:?}", prelude_path, e))?;
+        expander.clear_macro_boundary_allowlist();
+        if prelude_diagnostics.has_errors() {
+            return Err(format!(
+                "prelude diagnostics contained errors:\n{}",
+                diagnostics_to_string(&prelude_diagnostics)
+            ));
+        }
+        prelude_modules.push(prelude_module);
+    }
     env.set_allow_reserved_primitives(allow_reserved);
-    expander.set_default_imports(vec![prelude_module]);
-    if prelude_diagnostics.has_errors() {
-        return Err(format!(
-            "prelude diagnostics contained errors:\n{}",
-            diagnostics_to_string(&prelude_diagnostics)
-        ));
+    if !prelude_modules.is_empty() {
+        expander.set_default_imports(prelude_modules);
     }
 
     let result = process_code(
@@ -708,7 +731,7 @@ fn run_overlap_case(case: &ConformanceCase) -> Result<(), String> {
         .ok_or_else(|| format!("missing expected result metadata in {:?}", case.path))?;
 
     let (env, ids, defs, main_name) =
-        lower_program_with_prelude(&case.source, &case.meta.prelude_source)?;
+        lower_program_with_prelude(&case.source, &case.meta.prelude_sources)?;
     let mir_hash = mir_fingerprint(&defs);
 
     let typed_program = build_typed_program(&defs, main_name.clone());

@@ -1,0 +1,7 @@
+(def pair_value (Pair Nat Nat)
+  (mk_pair {Nat} {Nat} (succ zero) (succ (succ zero))))
+
+(def entry Nat
+  (match pair_value Nat
+    (case (mk_pair fst snd)
+      (add fst snd))))

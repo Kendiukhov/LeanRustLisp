@@ -1,0 +1,25 @@
+;; Stream F regression: sugared multi-binder/arrow style with stdlib APIs.
+
+(def one Nat (succ zero))
+
+(def add_three (pi (a Nat) (b Nat) (c Nat) Nat)
+  (lam (a Nat) (b Nat) (c Nat)
+    (add (add a b) c)))
+
+(def compose_nat (-> (-> Nat Nat) (-> Nat Nat) Nat Nat)
+  (lam (f (-> Nat Nat)) (g (-> Nat Nat)) (x Nat)
+    (f (g x))))
+
+(def bump_if_match (pi (value Nat) (target Nat) Nat)
+  (lam (value Nat) (target Nat)
+    (if_nat (xor (nat_eq value target) false)
+      (succ value)
+      value)))
+
+(def inc (-> Nat Nat)
+  (lam (n Nat) (succ n)))
+
+(def entry Nat
+  (bump_if_match
+    (compose_nat inc inc (add_three one one one))
+    (succ (succ (succ (succ (succ zero)))))))

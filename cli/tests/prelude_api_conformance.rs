@@ -1,6 +1,8 @@
 use cli::compiler::{
     prelude_stack_for_backend, BackendMode, PRELUDE_API_PATH, PRELUDE_IMPL_DYNAMIC_PATH,
-    PRELUDE_IMPL_TYPED_PATH,
+    PRELUDE_IMPL_TYPED_PATH, PRELUDE_STD_CONTROL_COMP_PATH, PRELUDE_STD_CORE_BOOL_PATH,
+    PRELUDE_STD_CORE_NAT_LITERALS_PATH, PRELUDE_STD_CORE_NAT_PATH, PRELUDE_STD_DATA_LIST_PATH,
+    PRELUDE_STD_DATA_OPTION_PATH, PRELUDE_STD_DATA_PAIR_PATH, PRELUDE_STD_DATA_RESULT_PATH,
 };
 use cli::driver::{module_id_for_source, process_code, PipelineOptions};
 use frontend::diagnostics::DiagnosticCollector;
@@ -9,6 +11,8 @@ use kernel::checker::Env;
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::thread;
 
 fn load_prelude_stack(paths: &[&str]) -> Env {
     let mut env = Env::new();
@@ -30,6 +34,9 @@ fn load_prelude_stack(paths: &[&str]) -> Env {
     let mut diagnostics = DiagnosticCollector::new();
     let mut prelude_modules = Vec::new();
     for rel_path in paths {
+        if !prelude_modules.is_empty() {
+            expander.set_default_imports(prelude_modules.clone());
+        }
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join(rel_path);
@@ -40,16 +47,21 @@ fn load_prelude_stack(paths: &[&str]) -> Env {
         let content = fs::read_to_string(&path).expect("failed to read prelude file");
         let prelude_module = module_id_for_source(&path_str);
         cli::set_prelude_macro_boundary_allowlist(&mut expander, &prelude_module);
-        process_code(
+        let _ = process_code(
             &content,
             &path_str,
             &mut env,
             &mut expander,
             &options,
             &mut diagnostics,
-        )
-        .expect("prelude processing failed");
+        );
         expander.clear_macro_boundary_allowlist();
+        assert!(
+            !diagnostics.has_errors(),
+            "prelude load emitted errors in {}: {:?}",
+            rel_path,
+            diagnostics.diagnostics
+        );
         prelude_modules.push(prelude_module);
     }
 
@@ -69,7 +81,7 @@ fn load_prelude_stack(paths: &[&str]) -> Env {
 fn assert_api_surface(env: &Env) {
     for name in [
         "Nat", "Bool", "False", "List", "VecDyn", "Slice", "Array", "RefCell", "Mutex", "Atomic",
-        "Comp", "Eq",
+        "Comp", "Eq", "Text", "Option", "Result", "Pair",
     ] {
         assert!(
             env.get_inductive(name).is_some(),
@@ -85,8 +97,26 @@ fn assert_api_surface(env: &Env) {
         "if_nat",
         "and",
         "or",
+        "bool_eq",
         "print_nat",
         "print_bool",
+        "print_text",
+        "print",
+        "read_file",
+        "write_file",
+        "option_map",
+        "option_and_then",
+        "option_flat_map",
+        "option_unwrap_or",
+        "result_map",
+        "result_map_err",
+        "result_and_then",
+        "result_unwrap_or",
+        "pair_fst",
+        "pair_snd",
+        "pair_map_fst",
+        "pair_map_snd",
+        "pair_map",
         "Shared",
         "Mut",
         "Ref",
@@ -113,7 +143,9 @@ fn extract_def_names(source: &str) -> Vec<String> {
             let mut parts = rest.split_whitespace();
             let first = parts.next()?;
             let name = match first {
-                "opaque" | "transparent" | "partial" | "unsafe" | "noncomputable" => parts.next()?,
+                "opaque" | "transparent" | "partial" | "unsafe" | "noncomputable" => {
+                    parts.next()?
+                }
                 _ => first,
             };
             Some(name.trim_end_matches(')').to_string())
@@ -121,51 +153,116 @@ fn extract_def_names(source: &str) -> Vec<String> {
         .collect()
 }
 
+fn run_with_large_stack<F>(f: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    thread::Builder::new()
+        .name("prelude-api-conformance".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(f)
+        .expect("failed to spawn large-stack test worker")
+        .join()
+        .expect("large-stack test worker panicked");
+}
+
+fn prelude_test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 #[test]
 fn prelude_stack_constants_are_expected() {
+    let _guard = prelude_test_lock()
+        .lock()
+        .expect("prelude test lock poisoned");
     assert_eq!(PRELUDE_API_PATH, "stdlib/prelude_api.lrl");
+    assert_eq!(PRELUDE_STD_CORE_NAT_PATH, "stdlib/std/core/nat.lrl");
+    assert_eq!(
+        PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+        "stdlib/std/core/nat_literals.lrl"
+    );
+    assert_eq!(PRELUDE_STD_CORE_BOOL_PATH, "stdlib/std/core/bool.lrl");
+    assert_eq!(PRELUDE_STD_DATA_LIST_PATH, "stdlib/std/data/list.lrl");
+    assert_eq!(PRELUDE_STD_DATA_OPTION_PATH, "stdlib/std/data/option.lrl");
+    assert_eq!(PRELUDE_STD_DATA_RESULT_PATH, "stdlib/std/data/result.lrl");
+    assert_eq!(PRELUDE_STD_DATA_PAIR_PATH, "stdlib/std/data/pair.lrl");
+    assert_eq!(PRELUDE_STD_CONTROL_COMP_PATH, "stdlib/std/control/comp.lrl");
     assert_eq!(PRELUDE_IMPL_DYNAMIC_PATH, "stdlib/prelude_impl_dynamic.lrl");
     assert_eq!(PRELUDE_IMPL_TYPED_PATH, "stdlib/prelude_impl_typed.lrl");
     assert_eq!(
         prelude_stack_for_backend(BackendMode::Dynamic),
-        &[PRELUDE_API_PATH, PRELUDE_IMPL_DYNAMIC_PATH]
+        &[
+            PRELUDE_API_PATH,
+            PRELUDE_STD_CORE_NAT_PATH,
+            PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+            PRELUDE_STD_CORE_BOOL_PATH,
+            PRELUDE_STD_DATA_LIST_PATH,
+            PRELUDE_STD_DATA_OPTION_PATH,
+            PRELUDE_STD_DATA_RESULT_PATH,
+            PRELUDE_STD_DATA_PAIR_PATH,
+            PRELUDE_IMPL_DYNAMIC_PATH,
+        ]
     );
     assert_eq!(
         prelude_stack_for_backend(BackendMode::Typed),
-        &[PRELUDE_API_PATH, PRELUDE_IMPL_TYPED_PATH]
+        &[
+            PRELUDE_API_PATH,
+            PRELUDE_STD_CORE_NAT_PATH,
+            PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+            PRELUDE_STD_CORE_BOOL_PATH,
+            PRELUDE_STD_DATA_LIST_PATH,
+            PRELUDE_STD_DATA_OPTION_PATH,
+            PRELUDE_STD_DATA_RESULT_PATH,
+            PRELUDE_STD_DATA_PAIR_PATH,
+            PRELUDE_IMPL_TYPED_PATH,
+        ]
     );
 }
 
 #[test]
 fn prelude_api_conformance_dynamic_stack() {
-    let env = load_prelude_stack(prelude_stack_for_backend(BackendMode::Dynamic));
-    assert_api_surface(&env);
+    let _guard = prelude_test_lock()
+        .lock()
+        .expect("prelude test lock poisoned");
+    run_with_large_stack(|| {
+        let env = load_prelude_stack(prelude_stack_for_backend(BackendMode::Dynamic));
+        assert_api_surface(&env);
 
-    for name in ["Dyn", "EvalCap", "eval"] {
-        assert!(
-            env.get_definition(name).is_some() || env.get_inductive(name).is_some(),
-            "expected dynamic platform symbol '{}'",
-            name
-        );
-    }
+        for name in ["Dyn", "EvalCap", "eval"] {
+            assert!(
+                env.get_definition(name).is_some() || env.get_inductive(name).is_some(),
+                "expected dynamic platform symbol '{}'",
+                name
+            );
+        }
+    });
 }
 
 #[test]
 fn prelude_api_conformance_typed_stack() {
-    let env = load_prelude_stack(prelude_stack_for_backend(BackendMode::Typed));
-    assert_api_surface(&env);
+    let _guard = prelude_test_lock()
+        .lock()
+        .expect("prelude test lock poisoned");
+    run_with_large_stack(|| {
+        let env = load_prelude_stack(prelude_stack_for_backend(BackendMode::Typed));
+        assert_api_surface(&env);
 
-    for name in ["Dyn", "EvalCap", "eval"] {
-        assert!(
-            env.get_definition(name).is_some() || env.get_inductive(name).is_some(),
-            "expected typed platform symbol '{}'",
-            name
-        );
-    }
+        for name in ["Dyn", "EvalCap", "eval"] {
+            assert!(
+                env.get_definition(name).is_some() || env.get_inductive(name).is_some(),
+                "expected typed platform symbol '{}'",
+                name
+            );
+        }
+    });
 }
 
 #[test]
 fn prelude_impl_layers_stay_small_and_platform_only() {
+    let _guard = prelude_test_lock()
+        .lock()
+        .expect("prelude test lock poisoned");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let dynamic_impl = fs::read_to_string(root.join(PRELUDE_IMPL_DYNAMIC_PATH))
         .expect("failed to read dynamic impl prelude");

@@ -1,0 +1,12 @@
+;; stdlib list.map identity length preservation.
+;; expected: entry = true
+
+(def id_nat (pi #[fn] x Nat Nat)
+  (lam #[fn] x Nat x))
+
+(def xs (List Nat)
+  (cons zero (cons (succ zero) (cons (succ (succ zero)) nil))))
+
+(def entry Bool
+  (nat_eq (length (map id_nat xs))
+          (length xs)))

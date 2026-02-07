@@ -1,0 +1,7 @@
+[package]
+name = "b"
+version = "2.0.0"
+edition = "2026"
+module = "b_v2_mod"
+
+[dependencies]

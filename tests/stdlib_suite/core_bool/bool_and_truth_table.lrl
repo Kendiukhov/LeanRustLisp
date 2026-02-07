@@ -1,0 +1,15 @@
+;; stdlib bool.and: full truth table.
+;; expected true-count = 1
+
+(def bool_to_nat (pi b Bool Nat)
+  (lam b Bool
+    (if_nat b (succ zero) zero)))
+
+(def entry Nat
+  (add
+    (add
+      (bool_to_nat (and true true))
+      (bool_to_nat (and true false)))
+    (add
+      (bool_to_nat (and false true))
+      (bool_to_nat (and false false)))))

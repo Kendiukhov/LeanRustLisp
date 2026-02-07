@@ -1,0 +1,4 @@
+;; prelude Eq.refl constructor smoke.
+
+(def entry (Eq Nat zero zero)
+  (refl Nat zero))

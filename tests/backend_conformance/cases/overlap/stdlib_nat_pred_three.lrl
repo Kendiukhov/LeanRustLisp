@@ -1,0 +1,8 @@
+;;! tag: overlap-subset
+;;! expect_exit: 0
+;;! expect_result_kind: nat
+;;! expect_result: 2
+;;! prelude: stdlib/prelude_api.lrl,stdlib/std/core/nat.lrl,stdlib/std/core/bool.lrl,stdlib/std/data/list.lrl
+
+(def entry Nat
+  (nat_pred (succ (succ (succ zero)))))

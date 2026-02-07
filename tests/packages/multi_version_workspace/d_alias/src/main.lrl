@@ -1,0 +1,15 @@
+(module d_alias)
+(import b@1.0.0 as b1)
+(import b@2.0.0 as b2)
+
+(def pick_b1 Nat
+  b1.value
+)
+
+(def pick_b2 Nat
+  b2.value
+)
+
+(def pair_len Nat
+  (length (append (cons b1.value nil) (cons b2.value nil)))
+)

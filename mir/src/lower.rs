@@ -1,7 +1,9 @@
 use crate::errors::{MirSpan, MirSpanMap, SourceSpan};
 use crate::types::{AdtId, CtorId, DefId, IMKind, IdRegistry, MirType, Mutability, Region};
 use crate::*;
-use kernel::ast::{BorrowWrapperMarker, FunctionKind, Level, MarkerId, Term, TypeMarker};
+use kernel::ast::{
+    BinderInfo, BorrowWrapperMarker, FunctionKind, Level, MarkerId, Term, TypeMarker,
+};
 use kernel::checker::{
     compute_recursor_type, infer, is_prop_like_with_transparency, whnf_in_ctx, Builtin, Context,
     Env, PropTransparencyContext, TypeError,
@@ -2023,6 +2025,18 @@ impl<'a> LoweringContext<'a> {
     ) -> LoweringResult<()> {
         self.ensure_closure_id_map(term);
         let _span_guard = self.enter_term_span(term);
+        if let Some(nat_value) = self.try_nat_literal(term) {
+            let constant = Constant {
+                literal: Literal::Nat(nat_value),
+                ty: MirType::Nat,
+            };
+            self.push_statement(Statement::Assign(
+                destination,
+                Rvalue::Use(Operand::Constant(Box::new(constant))),
+            ));
+            self.terminate(Terminator::Goto { target });
+            return Ok(());
+        }
         match &**term {
             Term::Var(idx) => {
                 let env_idx = self
@@ -2831,6 +2845,10 @@ impl<'a> LoweringContext<'a> {
         let major_block = self.new_block();
         self.lower_term(major_premise, Place::from(temp_major), major_block)?;
         self.set_block(major_block);
+        let major_adt = match &self.body.local_decls[temp_major.index()].ty {
+            MirType::Adt(adt_id, args) => Some((adt_id.clone(), args.clone())),
+            _ => None,
+        };
 
         let discr_temp = self.push_mir_local(MirType::Nat, None);
         self.push_statement(Statement::StorageLive(discr_temp));
@@ -2878,7 +2896,25 @@ impl<'a> LoweringContext<'a> {
                     local: temp_major,
                     projection: vec![PlaceElem::Downcast(i), PlaceElem::Field(field_pos)],
                 };
-                let field_local = self.push_temp_local(field_ty.clone(), None)?;
+                let field_local = if let Some((major_adt_id, major_adt_args)) = &major_adt {
+                    if major_adt_id.name() == "Pair" || major_adt_id.name() == "Comp" {
+                        let field_mir_ty = self
+                            .ids
+                            .adt_layouts()
+                            .field_type(major_adt_id, Some(i), field_pos, major_adt_args)
+                            .ok_or_else(|| {
+                                self.lowering_error(format!(
+                                    "Missing Pair field type for variant {} field {}",
+                                    i, field_pos
+                                ))
+                            })?;
+                        self.push_mir_local(field_mir_ty, None)
+                    } else {
+                        self.push_temp_local(field_ty.clone(), None)?
+                    }
+                } else {
+                    self.push_temp_local(field_ty.clone(), None)?
+                };
                 self.push_statement(Statement::StorageLive(field_local));
                 let field_is_copy = self.body.local_decls[field_local.index()].is_copy;
                 let field_operand = if field_is_copy {
@@ -3009,6 +3045,25 @@ impl<'a> LoweringContext<'a> {
     fn is_type_copy(&self, ty: &Rc<Term>) -> bool {
         kernel::checker::is_copy_type_in_env(self.kernel_env, ty)
     }
+
+    fn try_nat_literal(&self, term: &Rc<Term>) -> Option<u64> {
+        match &**term {
+            Term::Ctor(name, idx, _)
+                if *idx == 0 && self.kernel_env.is_builtin(Builtin::Nat, name) =>
+            {
+                Some(0)
+            }
+            Term::App(fun, arg, _) => match &**fun {
+                Term::Ctor(name, idx, _)
+                    if *idx == 1 && self.kernel_env.is_builtin(Builtin::Nat, name) =>
+                {
+                    self.try_nat_literal(arg)?.checked_add(1)
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 fn collect_app_spine(term: &Rc<Term>) -> (Rc<Term>, Vec<Rc<Term>>) {
@@ -3101,8 +3156,10 @@ fn instantiate_params(mut ty: Rc<Term>, params: &[Rc<Term>]) -> Rc<Term> {
 fn peel_pi_binders(ty: &Rc<Term>) -> (Vec<Rc<Term>>, Rc<Term>) {
     let mut binders = Vec::new();
     let mut current = ty.clone();
-    while let Term::Pi(dom, body, _, _) = &*current {
-        binders.push(dom.clone());
+    while let Term::Pi(dom, body, info, _) = &*current {
+        if *info == BinderInfo::Default {
+            binders.push(dom.clone());
+        }
         current = body.clone();
     }
     (binders, current)

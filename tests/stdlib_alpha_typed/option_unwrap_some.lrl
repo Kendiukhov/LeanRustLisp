@@ -1,0 +1,2 @@
+(def entry Nat
+  (option_unwrap_or Nat zero (some (succ zero))))

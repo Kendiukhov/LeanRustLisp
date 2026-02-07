@@ -1,0 +1,24 @@
+;; reverse(reverse xs) preserves an order-sensitive fold encoding.
+;; expected: entry = true
+
+(def double (pi n Nat Nat)
+  (lam n Nat
+    (add n n)))
+
+(def encode_step (pi acc Nat (pi x Nat Nat))
+  (lam acc Nat
+    (lam x Nat
+      (add (double acc) x))))
+
+(def encode (pi xs (List Nat) Nat)
+  (lam xs (List Nat)
+    (foldl encode_step zero xs)))
+
+(def xs (List Nat)
+  (cons (succ zero)
+    (cons (succ (succ zero))
+      (cons (succ (succ (succ zero))) nil))))
+
+(def entry Bool
+  (nat_eq (encode xs)
+          (encode (reverse (reverse xs)))))

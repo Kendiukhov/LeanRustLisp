@@ -1,0 +1,17 @@
+;; map succ then foldl sum over [0,1,2] => 6.
+;; expected: entry = 6
+
+(def inc (pi #[fn] x Nat Nat)
+  (lam #[fn] x Nat
+    (succ x)))
+
+(def plus_step (pi acc Nat (pi x Nat Nat))
+  (lam acc Nat
+    (lam x Nat
+      (add acc x))))
+
+(def xs (List Nat)
+  (cons zero (cons (succ zero) (cons (succ (succ zero)) nil))))
+
+(def entry Nat
+  (foldl plus_step zero (map inc xs)))

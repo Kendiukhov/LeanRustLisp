@@ -1,0 +1,4 @@
+;; prelude VecDyn constructor smoke.
+
+(def entry (VecDyn Nat)
+  (mk_vec_dyn (cons zero (cons (succ zero) nil))))

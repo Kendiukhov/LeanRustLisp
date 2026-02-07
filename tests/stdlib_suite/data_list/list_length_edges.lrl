@@ -1,0 +1,13 @@
+;; stdlib list.length edges: nil + singleton + triple.
+;; expected: entry = 4
+
+(def singleton (List Nat)
+  (cons zero nil))
+
+(def triple (List Nat)
+  (cons zero (cons (succ zero) (cons (succ (succ zero)) nil))))
+
+(def entry Nat
+  (add (length nil)
+       (add (length singleton)
+            (length triple))))

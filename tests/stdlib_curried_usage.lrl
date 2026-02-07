@@ -1,0 +1,22 @@
+;; Stream F regression: curried stdlib-style program should compile on both backends.
+
+(def list_len_after_append (pi xs (List Nat) (pi ys (List Nat) Nat))
+  (lam xs (List Nat)
+    (lam ys (List Nat)
+      (length (append xs ys)))))
+
+(def remaining_budget (pi total Nat (pi spent Nat Nat))
+  (lam total Nat
+    (lam spent Nat
+      (if_nat (nat_ge total spent)
+        (nat_sub total spent)
+        zero))))
+
+(def entry Nat
+  (add
+    (list_len_after_append
+      (cons (succ zero) (cons (succ (succ zero)) nil))
+      (cons (succ (succ (succ zero))) nil))
+    (remaining_budget
+      (succ (succ (succ (succ (succ zero)))))
+      (succ (succ zero)))))

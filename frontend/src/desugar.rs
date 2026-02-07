@@ -25,6 +25,9 @@ impl Default for Desugarer {
 }
 
 impl Desugarer {
+    const ASCII_CACHE_MAX: usize = 99;
+    const TEXT_LITERAL_CHUNK_SIZE: usize = 16;
+
     pub fn new() -> Self {
         Desugarer { gensym_counter: 0 }
     }
@@ -1225,28 +1228,174 @@ impl Desugarer {
                 ))
             }
             SyntaxKind::Hole => Ok(mk_term(SurfaceTermKind::Hole, span)),
-            SyntaxKind::Int(n) => {
-                // Desugar Int to Nat constructors
-                let mut t = mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 0), span); // Zero
-                let succ = mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 1), span); // Succ
-                for _ in 0..n {
-                    t = mk_term(
-                        SurfaceTermKind::App(Box::new(succ.clone()), Box::new(t), true),
-                        span,
-                    );
-                }
-                Ok(t)
-            }
-            SyntaxKind::String(s) => {
-                let syntax = Syntax {
-                    kind: SyntaxKind::String(s),
-                    span,
-                    scopes: Vec::new(),
-                };
-                Ok(Self::quote_syntax(&syntax, span))
-            }
+            SyntaxKind::Int(n) => Ok(Self::nat_literal_term(n, span)),
+            SyntaxKind::String(s) => Ok(Self::text_literal_term(&s, span)),
             _ => Err(ExpansionError::UnknownForm(format!("{:?}", syntax.kind))),
         }
+    }
+
+    fn nat_literal_term(value: usize, span: Span) -> SurfaceTerm {
+        let mut term = mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 0), span);
+        let succ_ctor = mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 1), span);
+        for _ in 0..value {
+            term = mk_term(
+                SurfaceTermKind::App(Box::new(succ_ctor.clone()), Box::new(term), true),
+                span,
+            );
+        }
+        term
+    }
+
+    fn compact_nat_literal_term(value: usize, span: Span) -> SurfaceTerm {
+        if value <= 1 {
+            return Self::nat_literal_term(value, span);
+        }
+
+        let half_value = value / 2;
+        let half_name = format!("__nat_half_{}", value);
+        let nat_ty = mk_term(SurfaceTermKind::Ind("Nat".to_string()), span);
+        let half_term = Self::compact_nat_literal_term(half_value, span);
+        let half_var_lhs = mk_term(SurfaceTermKind::Var(half_name.clone()), span);
+        let half_var_rhs = mk_term(SurfaceTermKind::Var(half_name.clone()), span);
+        let add_fn = mk_term(SurfaceTermKind::Var("add".to_string()), span);
+        let add_lhs = mk_term(
+            SurfaceTermKind::App(Box::new(add_fn), Box::new(half_var_lhs), true),
+            span,
+        );
+        let doubled = mk_term(
+            SurfaceTermKind::App(Box::new(add_lhs), Box::new(half_var_rhs), true),
+            span,
+        );
+        let body = if value % 2 == 0 {
+            doubled
+        } else {
+            let succ_ctor = mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 1), span);
+            mk_term(
+                SurfaceTermKind::App(Box::new(succ_ctor), Box::new(doubled), true),
+                span,
+            )
+        };
+        mk_term(
+            SurfaceTermKind::Let(
+                half_name,
+                Box::new(nat_ty),
+                Box::new(half_term),
+                Box::new(body),
+            ),
+            span,
+        )
+    }
+
+    fn text_literal_term(value: &str, span: Span) -> SurfaceTerm {
+        let codepoints: Vec<usize> = value.chars().map(|ch| ch as usize).collect();
+        let mut high_codepoint_bindings: BTreeMap<usize, String> = BTreeMap::new();
+        for code in &codepoints {
+            if *code > Self::ASCII_CACHE_MAX {
+                high_codepoint_bindings
+                    .entry(*code)
+                    .or_insert_with(|| format!("__text_cp_{}", code));
+            }
+        }
+
+        let nil_list = mk_term(SurfaceTermKind::Ctor("List".to_string(), 0), span);
+        let cons_ctor = mk_term(SurfaceTermKind::Ctor("List".to_string(), 1), span);
+        let mut chunks: Vec<SurfaceTerm> = Vec::new();
+        let mut current_chunk: Vec<usize> = Vec::new();
+        for code in codepoints {
+            current_chunk.push(code);
+            if current_chunk.len() == Self::TEXT_LITERAL_CHUNK_SIZE {
+                chunks.push(Self::list_chunk_term(
+                    &current_chunk,
+                    &cons_ctor,
+                    &nil_list,
+                    &high_codepoint_bindings,
+                    span,
+                ));
+                current_chunk.clear();
+            }
+        }
+        if !current_chunk.is_empty() {
+            chunks.push(Self::list_chunk_term(
+                &current_chunk,
+                &cons_ctor,
+                &nil_list,
+                &high_codepoint_bindings,
+                span,
+            ));
+        }
+
+        let append_fn = mk_term(SurfaceTermKind::Var("append".to_string()), span);
+        while chunks.len() > 1 {
+            let mut next = Vec::with_capacity((chunks.len() + 1) / 2);
+            for pair in chunks.chunks(2) {
+                if pair.len() == 1 {
+                    next.push(pair[0].clone());
+                } else {
+                    let left = pair[0].clone();
+                    let right = pair[1].clone();
+                    let append_left = mk_term(
+                        SurfaceTermKind::App(Box::new(append_fn.clone()), Box::new(left), true),
+                        span,
+                    );
+                    let merged = mk_term(
+                        SurfaceTermKind::App(Box::new(append_left), Box::new(right), true),
+                        span,
+                    );
+                    next.push(merged);
+                }
+            }
+            chunks = next;
+        }
+        let list_value = chunks.into_iter().next().unwrap_or(nil_list);
+        let text_ctor = mk_term(SurfaceTermKind::Ctor("Text".to_string(), 0), span);
+        let mut text_term = mk_term(
+            SurfaceTermKind::App(Box::new(text_ctor), Box::new(list_value), true),
+            span,
+        );
+        if !high_codepoint_bindings.is_empty() {
+            let nat_ty = mk_term(SurfaceTermKind::Ind("Nat".to_string()), span);
+            for (code, name) in high_codepoint_bindings.iter().rev() {
+                let code_term = Self::compact_nat_literal_term(*code, span);
+                text_term = mk_term(
+                    SurfaceTermKind::Let(
+                        name.clone(),
+                        Box::new(nat_ty.clone()),
+                        Box::new(code_term),
+                        Box::new(text_term),
+                    ),
+                    span,
+                );
+            }
+        }
+        text_term
+    }
+
+    fn list_chunk_term(
+        values: &[usize],
+        cons_ctor: &SurfaceTerm,
+        nil_list: &SurfaceTerm,
+        high_codepoint_bindings: &BTreeMap<usize, String>,
+        span: Span,
+    ) -> SurfaceTerm {
+        let mut term = nil_list.clone();
+        for code in values.iter().rev() {
+            let head = if *code <= Self::ASCII_CACHE_MAX {
+                mk_term(SurfaceTermKind::Var(format!("__nat_ascii_{}", code)), span)
+            } else if let Some(binding) = high_codepoint_bindings.get(code) {
+                mk_term(SurfaceTermKind::Var(binding.clone()), span)
+            } else {
+                Self::compact_nat_literal_term(*code, span)
+            };
+            let cons_head = mk_term(
+                SurfaceTermKind::App(Box::new(cons_ctor.clone()), Box::new(head), true),
+                span,
+            );
+            term = mk_term(
+                SurfaceTermKind::App(Box::new(cons_head), Box::new(term), true),
+                span,
+            );
+        }
+        term
     }
 
     fn quote_syntax(syntax: &Syntax, span: Span) -> SurfaceTerm {
@@ -1266,17 +1415,6 @@ impl Desugarer {
             }
             term
         };
-        let build_nat = |n: usize| {
-            let mut t = mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 0), span); // Zero
-            let succ = mk_term(SurfaceTermKind::Ctor("Nat".to_string(), 1), span); // Succ
-            for _ in 0..n {
-                t = mk_term(
-                    SurfaceTermKind::App(Box::new(succ.clone()), Box::new(t), true),
-                    span,
-                );
-            }
-            t
-        };
         match &syntax.kind {
             SyntaxKind::List(list) => {
                 let items = list
@@ -1285,13 +1423,19 @@ impl Desugarer {
                     .collect();
                 build_list(items)
             }
-            SyntaxKind::Int(n) => build_nat(*n),
+            SyntaxKind::Int(n) => Self::nat_literal_term(*n, span),
             SyntaxKind::String(s) => {
-                let items = s.chars().map(|ch| build_nat(ch as usize)).collect();
+                let items = s
+                    .chars()
+                    .map(|ch| Self::nat_literal_term(ch as usize, span))
+                    .collect();
                 build_list(items)
             }
             SyntaxKind::Symbol(s) => {
-                let items = s.chars().map(|ch| build_nat(ch as usize)).collect();
+                let items = s
+                    .chars()
+                    .map(|ch| Self::nat_literal_term(ch as usize, span))
+                    .collect();
                 build_list(items)
             }
             _ => mk_term(SurfaceTermKind::Hole, span),

@@ -1,0 +1,5 @@
+;; prelude print_bool identity behavior smoke.
+;; expected: entry = true
+
+(def entry Bool
+  (print_bool true))

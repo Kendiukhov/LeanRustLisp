@@ -1,0 +1,15 @@
+;; filter selective keep: elements > 1 from [0,1,2,3].
+;; expected: entry = 2
+
+(def gt_one (pi #[fn] x Nat Bool)
+  (lam #[fn] x Nat
+    (nat_gt x (succ zero))))
+
+(def xs (List Nat)
+  (cons zero
+    (cons (succ zero)
+      (cons (succ (succ zero))
+        (cons (succ (succ (succ zero))) nil)))))
+
+(def entry Nat
+  (length (filter gt_one xs)))

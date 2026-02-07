@@ -1,0 +1,5 @@
+;; stdlib bool.if_bool: true branch.
+;; expected: entry = true
+
+(def entry Bool
+  (if_bool true true false))

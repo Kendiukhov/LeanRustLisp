@@ -1,0 +1,11 @@
+(module app)
+(import dep)
+
+;; Import from a workspace dependency and compose with shared stdlib helpers.
+(def use_dep Nat
+  (nat_pred dep.value)
+)
+
+(def combined_len Nat
+  (length (append dep.as_list (cons zero nil)))
+)

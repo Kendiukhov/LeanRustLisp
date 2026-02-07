@@ -1,0 +1,13 @@
+;; stdlib nat_sub edge variants: underflow/exact/regular.
+;; expected: entry = 3
+
+(def one Nat (succ zero))
+(def three Nat (succ (succ (succ zero))))
+(def five Nat (succ (succ (succ (succ (succ zero))))))
+
+(def entry Nat
+  (add
+    (add
+      (nat_sub one three)
+      (nat_sub three three))
+    (nat_sub five (succ (succ zero)))))

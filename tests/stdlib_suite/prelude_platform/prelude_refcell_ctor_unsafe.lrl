@@ -1,0 +1,4 @@
+;; prelude RefCell constructor smoke under unsafe.
+
+(unsafe entry (RefCell Nat)
+  (mk_refcell (succ zero)))

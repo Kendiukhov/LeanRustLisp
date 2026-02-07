@@ -1,0 +1,10 @@
+(module dep_module)
+
+;; Exercise shared stdlib Nat/List APIs from a dependency package.
+(def value Nat
+  (add (succ zero) (succ (succ zero)))
+)
+
+(def as_list (List Nat)
+  (cons value nil)
+)

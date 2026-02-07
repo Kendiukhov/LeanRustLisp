@@ -1,0 +1,12 @@
+;; prelude borrow_mut surface smoke.
+
+(noncomputable use_mut (pi r (Ref #[r] Mut Nat) Nat)
+  (lam r (Ref #[r] Mut Nat) zero))
+
+(noncomputable borrow_mut_local (pi x Nat Nat)
+  (lam x Nat
+    (let r (Ref #[r] Mut Nat) (&mut x)
+      (use_mut r))))
+
+(def entry Nat
+  (borrow_mut_local (succ zero)))

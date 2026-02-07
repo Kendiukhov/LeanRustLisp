@@ -1,0 +1,8 @@
+;;! tag: overlap-subset
+;;! expect_exit: 0
+;;! expect_result_kind: bool
+;;! expect_result: true
+;;! prelude: stdlib/prelude_api.lrl,stdlib/std/core/nat.lrl,stdlib/std/core/bool.lrl,stdlib/std/data/list.lrl
+
+(def entry Bool
+  (and true true))

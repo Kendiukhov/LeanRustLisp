@@ -1,0 +1,25 @@
+;; foldl/foldr order-sensitive witness on [1,2].
+;; step(acc,x)=2*acc+x and step(x,acc)=2*acc+x.
+;; expected: foldl=4, foldr=5, entry=true
+
+(def double (pi n Nat Nat)
+  (lam n Nat
+    (add n n)))
+
+(def step_l (pi acc Nat (pi x Nat Nat))
+  (lam acc Nat
+    (lam x Nat
+      (add (double acc) x))))
+
+(def step_r (pi x Nat (pi acc Nat Nat))
+  (lam x Nat
+    (lam acc Nat
+      (add (double acc) x))))
+
+(def xs (List Nat)
+  (cons (succ zero) (cons (succ (succ zero)) nil)))
+
+(def entry Bool
+  (nat_eq
+    (foldl step_l zero xs)
+    (nat_pred (foldr step_r zero xs))))

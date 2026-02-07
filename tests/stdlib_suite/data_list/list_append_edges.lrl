@@ -1,0 +1,17 @@
+;; stdlib list.append edges.
+;; expected: entry = 6
+
+(def one (List Nat)
+  (cons zero nil))
+
+(def two (List Nat)
+  (cons zero (cons (succ zero) nil)))
+
+(def entry Nat
+  (add
+    (add
+      (length (append nil nil))
+      (length (append nil two)))
+    (add
+      (length (append one nil))
+      (length (append one two)))))

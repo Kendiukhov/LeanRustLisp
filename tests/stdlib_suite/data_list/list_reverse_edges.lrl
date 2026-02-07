@@ -1,0 +1,15 @@
+;; reverse edge variants: nil/single/triple preserve lengths.
+;; expected: entry = true
+
+(def single (List Nat)
+  (cons (succ zero) nil))
+
+(def triple (List Nat)
+  (cons zero (cons (succ zero) (cons (succ (succ zero)) nil))))
+
+(def entry Bool
+  (and
+    (nat_eq (length (reverse nil)) (length nil))
+    (and
+      (nat_eq (length (reverse single)) (length single))
+      (nat_eq (length (reverse triple)) (length triple)))))

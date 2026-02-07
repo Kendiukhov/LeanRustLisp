@@ -1,0 +1,11 @@
+;; stress: larger add chain.
+;; expected: entry = 24
+
+(def n8 Nat
+  (succ (succ (succ (succ (succ (succ (succ (succ zero)))))))))
+
+(def n16 Nat
+  (add n8 n8))
+
+(def entry Nat
+  (add n16 n8))

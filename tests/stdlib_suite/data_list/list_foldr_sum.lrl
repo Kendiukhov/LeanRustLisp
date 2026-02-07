@@ -1,0 +1,16 @@
+;; foldr sum over [1,2,3,4] => 10.
+;; expected: entry = 10
+
+(def plus_step (pi x Nat (pi acc Nat Nat))
+  (lam x Nat
+    (lam acc Nat
+      (add x acc))))
+
+(def xs (List Nat)
+  (cons (succ zero)
+    (cons (succ (succ zero))
+      (cons (succ (succ (succ zero)))
+        (cons (succ (succ (succ (succ zero)))) nil)))))
+
+(def entry Nat
+  (foldr plus_step zero xs))

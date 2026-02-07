@@ -1,0 +1,6 @@
+;; prelude index_slice API smoke.
+
+(unsafe entry (pi s (Slice Nat) (pi i Nat Nat))
+  (lam s (Slice Nat)
+    (lam i Nat
+      (index_slice s i))))

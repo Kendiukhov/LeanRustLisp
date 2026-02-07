@@ -1,0 +1,9 @@
+;; prelude borrow_shared surface smoke.
+
+(noncomputable borrow_shared_local (pi x Nat Nat)
+  (lam x Nat
+    (let r (Ref #[r] Shared Nat) (& x)
+      zero)))
+
+(def entry Nat
+  (borrow_shared_local (succ zero)))

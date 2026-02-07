@@ -1,0 +1,17 @@
+;; stdlib nat_ge representative cases.
+;; expected true-count = 2
+
+(def bool_to_nat (pi b Bool Nat)
+  (lam b Bool
+    (if_nat b (succ zero) zero)))
+
+(def one Nat (succ zero))
+(def two Nat (succ one))
+(def three Nat (succ two))
+
+(def entry Nat
+  (add
+    (add
+      (bool_to_nat (nat_ge three one))
+      (bool_to_nat (nat_ge two two)))
+    (bool_to_nat (nat_ge one three))))

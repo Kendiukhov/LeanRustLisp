@@ -1,0 +1,6 @@
+(module a)
+(import b)
+
+(def from_b1 Nat
+  (nat_pred b.value)
+)

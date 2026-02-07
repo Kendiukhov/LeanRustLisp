@@ -1,0 +1,11 @@
+;; stdlib nat_is_zero edge variants.
+;; expected: entry = 1
+
+(def bool_to_nat (pi b Bool Nat)
+  (lam b Bool
+    (if_nat b (succ zero) zero)))
+
+(def entry Nat
+  (add
+    (bool_to_nat (nat_is_zero zero))
+    (bool_to_nat (nat_is_zero (succ zero)))))

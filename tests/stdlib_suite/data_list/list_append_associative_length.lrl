@@ -1,0 +1,16 @@
+;; append associativity witness via length equality on sample lists.
+;; expected: entry = true
+
+(def xs (List Nat)
+  (cons zero (cons (succ zero) nil)))
+
+(def ys (List Nat)
+  (cons (succ (succ zero)) nil))
+
+(def zs (List Nat)
+  (cons (succ (succ (succ zero))) (cons (succ (succ (succ (succ zero)))) nil)))
+
+(def entry Bool
+  (nat_eq
+    (length (append (append xs ys) zs))
+    (length (append xs (append ys zs)))))

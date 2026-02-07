@@ -1,0 +1,29 @@
+;; stress pipeline: map -> filter -> reverse -> foldl.
+;; expected: deterministic Nat output
+
+(def inc (pi #[fn] x Nat Nat)
+  (lam #[fn] x Nat
+    (succ x)))
+
+(def gt_two (pi #[fn] x Nat Bool)
+  (lam #[fn] x Nat
+    (nat_gt x (succ (succ zero)))))
+
+(def plus_step (pi acc Nat (pi x Nat Nat))
+  (lam acc Nat
+    (lam x Nat
+      (add acc x))))
+
+(def xs (List Nat)
+  (cons zero
+    (cons (succ zero)
+      (cons (succ (succ zero))
+        (cons (succ (succ (succ zero)))
+          (cons (succ (succ (succ (succ zero))))
+            (cons (succ (succ (succ (succ (succ zero)))))
+              (cons (succ (succ (succ (succ (succ (succ zero))))))
+                (cons (succ (succ (succ (succ (succ (succ (succ zero))))))) nil)))))))))
+
+(def entry Nat
+  (foldl plus_step zero
+    (reverse (filter gt_two (map inc xs)))))

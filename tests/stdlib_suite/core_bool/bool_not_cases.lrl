@@ -1,0 +1,11 @@
+;; stdlib bool.not: both truth-table edges.
+;; expected: entry = 1
+
+(def bool_to_nat (pi b Bool Nat)
+  (lam b Bool
+    (if_nat b (succ zero) zero)))
+
+(def entry Nat
+  (add
+    (bool_to_nat (not false))
+    (bool_to_nat (not true))))

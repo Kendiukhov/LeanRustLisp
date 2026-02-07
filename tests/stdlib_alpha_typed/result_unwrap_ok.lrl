@@ -1,0 +1,2 @@
+(def entry Nat
+  (result_unwrap_or Nat Nat zero (ok (succ zero))))

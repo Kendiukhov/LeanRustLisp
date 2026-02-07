@@ -1,0 +1,2 @@
+[workspace]
+members = ["b_v1", "b_v2", "a", "c", "d_alias", "d_ambiguous"]

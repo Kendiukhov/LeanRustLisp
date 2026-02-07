@@ -1,0 +1,17 @@
+;; Shared stdlib Comp helpers built on prelude's ret/bind constructors.
+
+(def comp_pure
+  (pi A (sort 1)
+    (pi x A (Comp A)))
+  (lam A (sort 1)
+    (lam x A
+      (ret A x)))
+)
+
+(def comp_bind
+  (pi A (sort 1)
+    (pi B (sort 1)
+      (pi m (Comp A)
+        (pi f (pi x A (Comp B)) (Comp B)))))
+  bind
+)

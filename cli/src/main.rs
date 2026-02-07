@@ -1,9 +1,10 @@
 use clap::{Parser, Subcommand};
 use cli::expand::{expand_source_with_imports, load_macros_from_source, ExpandMode};
+use cli::package_manager::{self, BuildOptions};
 use cli::{compiler, driver, repl};
 use frontend::macro_expander::MacroBoundaryPolicy;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -63,6 +64,32 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Create a new LRL package scaffold
+    New {
+        /// Package name
+        name: String,
+        /// Optional destination path (defaults to ./<name>)
+        #[arg(short, long)]
+        path: Option<String>,
+    },
+    /// Build workspace/package using lrl.toml + lrl.lock
+    Build {
+        /// Require lockfile and fail if stale
+        #[arg(long)]
+        locked: bool,
+        /// Enable release lockfile policy
+        #[arg(long)]
+        release: bool,
+    },
+    /// Run a workspace member or a single .lrl file
+    Run {
+        /// Package name/label or file path
+        target: Option<String>,
+    },
+    /// Run Rust test suite from current workspace directory
+    Test,
+    /// Remove package manager build cache artifacts
+    Clean,
     /// Compile a file to Rust
     Compile {
         file: String,
@@ -111,6 +138,74 @@ fn main() {
     }
 
     match &cli.command {
+        Some(Commands::New { name, path }) => {
+            let cwd = std::env::current_dir().expect("failed to get current directory");
+            let explicit_path = path.as_ref().map(PathBuf::from);
+            match package_manager::scaffold_new_package(&cwd, name, explicit_path.as_deref()) {
+                Ok(created) => {
+                    println!("Created package at {}", created.display());
+                }
+                Err(err) => {
+                    eprintln!("{}", err);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some(Commands::Build { locked, release }) => {
+            let cwd = std::env::current_dir().expect("failed to get current directory");
+            let options = BuildOptions {
+                release: *release,
+                locked: *locked,
+            };
+            match package_manager::build_workspace(&cwd, options) {
+                Ok(report) => {
+                    println!(
+                        "Build finished. built={} skipped={} lockfile_updated={}",
+                        report.built.len(),
+                        report.skipped.len(),
+                        report.lockfile_updated
+                    );
+                    if !report.built.is_empty() {
+                        println!("Built packages: {}", report.built.join(", "));
+                    }
+                    if !report.skipped.is_empty() {
+                        println!("Skipped packages: {}", report.skipped.join(", "));
+                    }
+                }
+                Err(err) => {
+                    eprintln!("{}", err);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some(Commands::Run { target }) => {
+            let cwd = std::env::current_dir().expect("failed to get current directory");
+            let result = match target {
+                Some(value) if value.ends_with(".lrl") || Path::new(value).exists() => {
+                    package_manager::run_workspace_file(Path::new(value))
+                }
+                Some(value) => package_manager::run_workspace_package(&cwd, Some(value.as_str())),
+                None => package_manager::run_workspace_package(&cwd, None),
+            };
+            if let Err(err) = result {
+                eprintln!("{}", err);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Test) => {
+            let cwd = std::env::current_dir().expect("failed to get current directory");
+            if let Err(err) = package_manager::run_workspace_tests(&cwd) {
+                eprintln!("{}", err);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Clean) => {
+            let cwd = std::env::current_dir().expect("failed to get current directory");
+            if let Err(err) = package_manager::clean_workspace(&cwd) {
+                eprintln!("{}", err);
+                std::process::exit(1);
+            }
+        }
         Some(Commands::Compile {
             file,
             output,
@@ -190,6 +285,9 @@ fn main() {
                     let prelude_module = driver::module_id_for_source(prelude_path);
                     expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
                     cli::set_prelude_macro_boundary_allowlist(&mut expander, &prelude_module);
+                    if !prelude_modules.is_empty() {
+                        expander.set_default_imports(prelude_modules.clone());
+                    }
                     let _ = repl::run_file(
                         prelude_path,
                         &mut env,
