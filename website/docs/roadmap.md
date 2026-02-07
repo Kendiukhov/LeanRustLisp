@@ -12,7 +12,7 @@ Current status and future plans for LeanRustLisp.
 | **Typed Backend** | :white_check_mark: **Done (Subset)** | Typed pipeline is implemented for the documented subset; `auto` uses typed-first with dynamic fallback diagnostics. |
 | **Closures** | :construction: **In Progress** | Closure lowering/capture analysis and lifting paths are implemented; copyability/call-policy semantics are being tightened. |
 | **Interpreter** | :hourglass: **Later** | Pure interpreter for scripts. |
-| **Package Manager** | :hourglass: **Later** | Dependency management. |
+| **Package Manager** | :white_check_mark: **Done** | Dependency management. |
 
 ## Milestones
 
@@ -32,4 +32,3 @@ Current status and future plans for LeanRustLisp.
 - [ ] Generics / Polymorphism in Backend
 - [ ] Optimizations
 
-[View GitHub Projects](https://github.com/users/Kendiukhov/projects/){ .md-button .md-button--primary }
