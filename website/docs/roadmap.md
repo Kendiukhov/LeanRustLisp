@@ -9,8 +9,8 @@ Current status and future plans for LeanRustLisp.
 | **Core Kernel** | :white_check_mark: **Done** | CIC, Universes, Inductives verified. |
 | **MIR & NLL** | :white_check_mark: **Done** | Borrow checker and Mid-level IR working. |
 | **Macro System** | :white_check_mark: **Done** | Hygiene, staging, quasiquotes implemented. |
-| **Typed Backend** | :construction: **Stage 1** | Compiles basic constructs to Rust. |
-| **Closures** | :memo: **Planned** | Closure conversion and lambda lifting. |
+| **Typed Backend** | :white_check_mark: **Done (Subset)** | Typed pipeline is implemented for the documented subset; `auto` uses typed-first with dynamic fallback diagnostics. |
+| **Closures** | :construction: **In Progress** | Closure lowering/capture analysis and lifting paths are implemented; copyability/call-policy semantics are being tightened. |
 | **Interpreter** | :hourglass: **Later** | Pure interpreter for scripts. |
 | **Package Manager** | :hourglass: **Later** | Dependency management. |
 
