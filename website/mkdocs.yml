@@ -3,6 +3,7 @@ site_url: https://kendiukhov.github.io/LeanRustLisp/
 repo_url: https://github.com/Kendiukhov/LeanRustLisp
 repo_name: Kendiukhov/LeanRustLisp
 edit_uri: edit/main/docs/
+docs_dir: docs
 
 theme:
   name: material
