@@ -38,6 +38,7 @@ jobs:
       # Explicitly copy sub-folders to avoid overwriting website/docs/index.md
       - name: Prepare Docs
         run: |
+          mkdir -p website/docs
           cp -r docs/book website/docs/
           cp -r docs/reference website/docs/
           cp -r docs/internals website/docs/
