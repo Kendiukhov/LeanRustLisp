@@ -66,10 +66,11 @@ Create a new file called `hello.lrl`:
 ```lisp
 ;; hello.lrl - Your first LRL program
 
-(print "Hello, World!")
+(def main Text
+  (print "Hello, World!"))
 ```
 
-Yes, that's it! Just one line of actual code.
+The program defines a `main` entry point that prints a greeting.
 
 ### Step 2: Run It
 
@@ -101,31 +102,32 @@ Lines starting with `;;` are comments. They're ignored by the compiler.
 "Hello, World!"
 ```
 
-Text enclosed in double quotes `"..."` is a **string literal**. LRL automatically converts this into a `Text` value (internally represented as a list of Unicode code points).
+Text enclosed in double quotes `"..."` is a **string literal**. LRL automatically converts this into a `Text` value.
 
-#### The Print Function
+#### The Program Structure
 
 ```lisp
-(print "Hello, World!")
+(def main Text
+  (print "Hello, World!"))
 ```
 
+- **`def`** — Introduces a new definition
+- **`main`** — The entry point of the program (by convention)
+- **`Text`** — The return type (print returns the text it prints)
+- **`(print ...)`** — The body of the definition
 - **`print`** — A built-in function that outputs `Text` to the console
-- The parentheses `(...)` are **function application** — we're calling `print` with our string as the argument
-- When compiled, this generates actual I/O code; in the interpreter, it returns the string unchanged
 
 ### A More Interesting Example
 
-Let's create a program with variables and computation:
+Let's create a program with multiple definitions:
 
 ```lisp
 ;; greet.lrl - A greeting program
 
 (def name Text "LRL User")
-(def greeting Text "Welcome to LeanRustLisp, ")
 
-(print greeting)
-(print name)
-(print "!")
+(def main Text
+  (print name))
 ```
 
 Run it:
@@ -135,20 +137,18 @@ cargo run -p cli -- compile greet.lrl && ./build/output
 
 Output:
 ```
-Welcome to LeanRustLisp, 
 LRL User
-!
 ```
 
-#### Defining Variables
+#### Defining Values
 
 ```lisp
 (def name Text "LRL User")
 ```
 
-- **`def`** — Introduces a new definition
-- **`name`** — The name we're binding
-- **`Text`** — The type (required for all definitions)
+- **`def`** — Introduces a definition
+- **`name`** — The identifier
+- **`Text`** — The type (required)
 - **`"LRL User"`** — The value
 
 ### Printing Numbers
