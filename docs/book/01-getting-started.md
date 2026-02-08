@@ -53,6 +53,135 @@ For example, try running one of the tests:
 cargo run -p cli -- tests/simple_test.lrl
 ```
 
+---
+
+## Your First Program: Hello World
+
+Let's write and understand a complete Hello World program in LRL.
+
+### Step 1: Create the File
+
+Create a new file called `hello.lrl`:
+
+```lisp
+;; hello.lrl - Your first LRL program
+
+(def greeting Text
+  (text (cons 72 (cons 101 (cons 108 (cons 108 (cons 111 (cons 32 
+    (cons 87 (cons 111 (cons 114 (cons 108 (cons 100 (cons 33 
+    nil))))))))))))))
+
+(print greeting)
+```
+
+### Step 2: Run It
+
+```bash
+cargo run -p cli -- compile hello.lrl
+./build/output
+```
+
+You should see:
+```
+Hello World!
+```
+
+### Step 3: Understanding the Code
+
+Let's break down each element:
+
+#### Comments
+
+```lisp
+;; hello.lrl - Your first LRL program
+```
+
+Lines starting with `;;` are comments. They're ignored by the compiler.
+
+#### Defining a Value
+
+```lisp
+(def greeting Text ...)
+```
+
+- **`def`** — Introduces a new definition
+- **`greeting`** — The name we're binding
+- **`Text`** — The type of the value (a text string)
+- **`...`** — The value itself
+
+In LRL, every definition has an explicit type. This enables the compiler to verify your program is well-formed.
+
+#### Constructing Text
+
+```lisp
+(text (cons 72 (cons 101 ...)))
+```
+
+- **`Text`** is LRL's string type, defined as a wrapper around a list of Unicode code points
+- **`text`** is the constructor that creates a `Text` value from a `List Nat`
+- Each number is a Unicode code point:
+  - `72` = 'H', `101` = 'e', `108` = 'l', `111` = 'o', `32` = ' ', etc.
+
+#### Building Lists
+
+```lisp
+(cons 72 (cons 101 ... nil))
+```
+
+- **`nil`** — The empty list
+- **`cons h t`** — Prepends element `h` to list `t`
+
+So `(cons 72 (cons 101 nil))` creates the list `[72, 101]`.
+
+#### Printing Output
+
+```lisp
+(print greeting)
+```
+
+- **`print`** — A built-in function that outputs `Text` to the console
+- When compiled, this generates actual I/O code; in the interpreter, it's a pure identity function
+
+### A Simpler Version (Using Nat)
+
+If you just want to see output without dealing with strings:
+
+```lisp
+;; simple.lrl - Print a number
+
+(def answer Nat (succ (succ (succ zero))))  ;; 3
+(print_nat answer)
+```
+
+Run it:
+```bash
+cargo run -p cli -- compile simple.lrl && ./build/output
+```
+
+Output:
+```
+3
+```
+
+#### Understanding Nat
+
+- **`Nat`** — Natural numbers (0, 1, 2, ...)
+- **`zero`** — The number 0
+- **`succ n`** — The successor of `n` (i.e., `n + 1`)
+- So `(succ (succ (succ zero)))` = `succ(succ(1))` = `succ(2)` = `3`
+
+### Why S-Expressions?
+
+You might wonder why LRL uses parentheses everywhere. This is called **S-expression syntax** (from Lisp). The benefits:
+
+1. **Homoiconicity** — Code is data, making macros natural
+2. **Unambiguous parsing** — No precedence rules to remember
+3. **Easy to extend** — Adding new syntax forms is trivial
+
+Once you get used to it, `(add 1 2)` reads just as naturally as `1 + 2`.
+
+---
+
 ## Compiling to Binary
 
 To compile an LRL program to a standalone executable:
