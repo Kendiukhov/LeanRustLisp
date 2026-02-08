@@ -10,7 +10,7 @@ stdlib/
 ├── prelude_impl_dynamic.lrl # Dynamic backend platform layer
 ├── prelude_impl_typed.lrl   # Typed backend platform layer
 └── std/
-    ├── core/                # Primitives: Bool, Nat
+    ├── core/                # Primitives: Bool, Nat, Int, Float
     ├── data/                # Collections: List, Option, Result, Pair
     └── control/             # Effects: Comp
 ```
@@ -19,11 +19,11 @@ stdlib/
 
 ---
 
-## Core Types
+## Numeric Types
 
 ### Nat
 
-Natural numbers with Peano encoding.
+Natural numbers (non-negative integers) with Peano encoding.
 
 ```lisp
 (inductive copy Nat (sort 1)
@@ -35,7 +35,9 @@ Natural numbers with Peano encoding.
 
 | Function | Type | Description |
 |----------|------|-------------|
-| `add` | `Nat → Nat → Nat` | Addition |
+| `add` / `+` | `Nat → Nat → Nat` | Addition |
+| `nat_mul` / `*` | `Nat → Nat → Nat` | Multiplication |
+| `nat_div` / `/` | `Nat → Nat → Nat` | Floor division (div by 0 → 0) |
 | `nat_pred` | `Nat → Nat` | Saturating predecessor (0 for zero) |
 | `nat_sub` | `Nat → Nat → Nat` | Bounded subtraction (clamps to 0) |
 | `nat_is_zero` | `Nat → Bool` | Test if zero |
@@ -46,6 +48,59 @@ Natural numbers with Peano encoding.
 | `nat_ge` | `Nat → Nat → Bool` | Greater or equal |
 
 ---
+
+### Int
+
+Signed integers represented as sign + magnitude.
+
+```lisp
+(inductive copy Int (sort 1)
+  (ctor int_pos (pi n Nat Int))   ;; Positive or zero
+  (ctor int_neg (pi n Nat Int)))  ;; Negative
+```
+
+#### Functions
+
+| Function | Type | Description |
+|----------|------|-------------|
+| `int_from_nat` | `Nat → Int` | Convert Nat to positive Int |
+| `int_to_nat` | `Int → Nat` | Clamp to Nat (negative → 0) |
+| `int_abs` | `Int → Nat` | Absolute value |
+| `int_negate` | `Int → Int` | Negate sign |
+| `int_normalize` | `Int → Int` | Normalize (−0 → +0) |
+| `int_add` / `+i` | `Int → Int → Int` | Addition |
+| `int_sub` / `-i` | `Int → Int → Int` | Subtraction |
+| `int_mul` / `*i` | `Int → Int → Int` | Multiplication |
+| `int_div` / `/i` | `Int → Int → Int` | Truncating division (toward zero) |
+| `-` | `Nat → Nat → Int` | Subtraction returning signed result |
+
+---
+
+### Float
+
+Half-precision floating point (IEEE-754 binary16).
+
+```lisp
+(inductive copy Float (sort 1)
+  (ctor float16 (pi bits Nat Float)))  ;; 16-bit payload in Nat
+```
+
+#### Functions
+
+| Function | Type | Description |
+|----------|------|-------------|
+| `float_from_bits` | `Nat → Float` | Create from IEEE-754 bits |
+| `float_to_bits` | `Float → Nat` | Extract IEEE-754 bits |
+| `+f` | `Float → Float → Float` | Addition |
+| `-f` | `Float → Float → Float` | Subtraction |
+| `*f` | `Float → Float → Float` | Multiplication |
+| `/f` | `Float → Float → Float` | Division |
+
+> **Note**: Float arithmetic is implemented as backend builtins. The bodies in std are placeholders.
+
+---
+
+## Boolean Type
 
 ### Bool
 
@@ -186,6 +241,7 @@ UTF-32 encoded string type.
 | `print_text` | `Text → Text` | Print text (typed backend) |
 | `print_nat` | `Nat → Nat` | Print Nat to stdout |
 | `print_bool` | `Bool → Bool` | Print Bool to stdout |
+| `print_float` | `Float → Float` | Print Float to stdout |
 | `read_file` | `Text → Text` | Read file contents |
 | `write_file` | `Text → Text → Text` | Write contents to file |
 
@@ -227,12 +283,39 @@ UTF-32 encoded string type.
 
 ## Usage Examples
 
+### Hello World
+
+```lisp
+;; Print text to console
+(print (text (cons 72 (cons 101 (cons 108 (cons 108 (cons 111 nil)))))))
+```
+
 ### Basic Arithmetic
 
 ```lisp
 (def two Nat (succ (succ zero)))
-(def four Nat (add two two))
-(def is_positive Bool (not (nat_is_zero four)))
+(def four Nat (+ two two))           ;; Using operator alias
+(def product Nat (* two four))       ;; Multiplication
+(def quotient Nat (/ product two))   ;; Division
+```
+
+### Signed Integer Arithmetic
+
+```lisp
+;; Create negative numbers
+(def neg_five Int (int_neg (succ (succ (succ (succ (succ zero)))))))
+
+;; Arithmetic with Int
+(def sum Int (+i (int_pos two) neg_five))  ;; -3
+(def diff Int (- (succ zero) two))         ;; -1 (Nat subtraction returning Int)
+```
+
+### Floating Point
+
+```lisp
+(def x Float (float16 (succ (succ zero))))  ;; Create float from bits
+(def y Float (+f x x))                       ;; Add floats
+(def z Float (*f x (float16 zero)))          ;; Multiply
 ```
 
 ### List Operations
@@ -240,7 +323,7 @@ UTF-32 encoded string type.
 ```lisp
 (def nums (List Nat) (cons (succ zero) (cons (succ (succ zero)) nil)))
 (def len Nat (length nums))
-(def doubled (List Nat) (map (lam #[fn] x Nat (add x x)) nums))
+(def doubled (List Nat) (map (lam #[fn] x Nat (+ x x)) nums))
 ```
 
 ### Option Handling
@@ -256,6 +339,6 @@ UTF-32 encoded string type.
 (def success (Result Nat Nat) (ok (succ zero)))
 (def doubled (Result Nat Nat) 
   (result_map Nat Nat Nat 
-    (lam #[fn] x Nat (add x x)) 
+    (lam #[fn] x Nat (+ x x)) 
     success))
 ```
