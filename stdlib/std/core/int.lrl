@@ -1,0 +1,177 @@
+;; Shared stdlib Int algorithms.
+;; Int is represented as sign + Nat magnitude.
+
+(def int_from_nat (pi n Nat Int)
+  (lam n Nat
+    (int_pos n)
+  )
+)
+
+(def int_abs (pi i Int Nat)
+  (lam i Int
+    (match i Nat
+      (case (int_pos n) n)
+      (case (int_neg n) n)
+    )
+  )
+)
+
+(def int_normalize (pi i Int Int)
+  (lam i Int
+    (match i Int
+      (case (int_pos n) (int_pos n))
+      (case (int_neg n)
+        (match (nat_is_zero n) Int
+          (case (true) (int_pos zero))
+          (case (false) (int_neg n))
+        )
+      )
+    )
+  )
+)
+
+(def int_negate (pi i Int Int)
+  (lam i Int
+    (int_normalize
+      (match i Int
+        (case (int_pos n) (int_neg n))
+        (case (int_neg n) (int_pos n))
+      )
+    )
+  )
+)
+
+(def int_add (pi a Int (pi b Int Int))
+  (lam a Int
+    (lam b Int
+      (int_normalize
+        (match a Int
+          (case (int_pos a_mag)
+            (match b Int
+              (case (int_pos b_mag)
+                (int_pos (add a_mag b_mag))
+              )
+              (case (int_neg b_mag)
+                (match (nat_lt a_mag b_mag) Int
+                  (case (true) (int_neg (nat_sub b_mag a_mag)))
+                  (case (false) (int_pos (nat_sub a_mag b_mag)))
+                )
+              )
+            )
+          )
+          (case (int_neg a_mag)
+            (match b Int
+              (case (int_neg b_mag)
+                (int_neg (add a_mag b_mag))
+              )
+              (case (int_pos b_mag)
+                (match (nat_lt a_mag b_mag) Int
+                  (case (true) (int_pos (nat_sub b_mag a_mag)))
+                  (case (false) (int_neg (nat_sub a_mag b_mag)))
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+(def int_sub (pi a Int (pi b Int Int))
+  (lam a Int
+    (lam b Int
+      (int_add a (int_negate b))
+    )
+  )
+)
+
+(def int_mul (pi a Int (pi b Int Int))
+  (lam a Int
+    (lam b Int
+      (int_normalize
+        (match a Int
+          (case (int_pos a_mag)
+            (match b Int
+              (case (int_pos b_mag) (int_pos (nat_mul a_mag b_mag)))
+              (case (int_neg b_mag) (int_neg (nat_mul a_mag b_mag)))
+            )
+          )
+          (case (int_neg a_mag)
+            (match b Int
+              (case (int_pos b_mag) (int_neg (nat_mul a_mag b_mag)))
+              (case (int_neg b_mag) (int_pos (nat_mul a_mag b_mag)))
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+;; Truncating division toward zero.
+;; Division by zero returns +0.
+(def int_div (pi a Int (pi b Int Int))
+  (lam a Int
+    (lam b Int
+      (match (nat_is_zero (int_abs b)) Int
+        (case (true) (int_pos zero))
+        (case (false)
+          (int_normalize
+            (match a Int
+              (case (int_pos a_mag)
+                (match b Int
+                  (case (int_pos b_mag) (int_pos (nat_div a_mag b_mag)))
+                  (case (int_neg b_mag) (int_neg (nat_div a_mag b_mag)))
+                )
+              )
+              (case (int_neg a_mag)
+                (match b Int
+                  (case (int_pos b_mag) (int_neg (nat_div a_mag b_mag)))
+                  (case (int_neg b_mag) (int_pos (nat_div a_mag b_mag)))
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+;; Clamp to Nat by dropping negative values to zero.
+(def int_to_nat (pi i Int Nat)
+  (lam i Int
+    (match i Nat
+      (case (int_pos n) n)
+      (case (int_neg n) zero)
+    )
+  )
+)
+
+;; User-facing subtraction symbol.
+;; Accepts Nat literals directly and returns signed Int.
+(def - (pi a Nat (pi b Nat Int))
+  (lam a Nat
+    (lam b Nat
+      (int_sub (int_from_nat a) (int_from_nat b))
+    )
+  )
+)
+
+;; Prefix aliases for Int arithmetic.
+(def +i (pi a Int (pi b Int Int))
+  int_add
+)
+
+(def -i (pi a Int (pi b Int Int))
+  int_sub
+)
+
+(def *i (pi a Int (pi b Int Int))
+  int_mul
+)
+
+(def /i (pi a Int (pi b Int Int))
+  int_div
+)

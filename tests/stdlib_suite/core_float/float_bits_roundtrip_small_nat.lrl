@@ -1,0 +1,5 @@
+;; stdlib float bit payload roundtrip through constructors.
+;; expected: entry = 7
+
+(def entry Nat
+  (float_to_bits (float_from_bits 7)))

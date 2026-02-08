@@ -301,6 +301,160 @@ fn runtime_text_to_string(value: &Value) -> String {
     }
 }
 
+fn runtime_int_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::Inductive(name, idx, args) if name == "Int" => {
+            let magnitude = match args.first() {
+                Some(Value::Nat(n)) => *n,
+                _ => return None,
+            };
+            match idx {
+                0 => Some(magnitude.to_string()),
+                1 => {
+                    if magnitude == 0 {
+                        Some("0".to_string())
+                    } else {
+                        Some(format!("-{}", magnitude))
+                    }
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn runtime_f16_bits_to_f32(bits: u16) -> f32 {
+    let sign = ((bits & 0x8000) as u32) << 16;
+    let exp = ((bits >> 10) & 0x1f) as u32;
+    let mant = (bits & 0x03ff) as u32;
+
+    let f_bits = if exp == 0 {
+        if mant == 0 {
+            sign
+        } else {
+            let mut mantissa = mant;
+            let mut exponent: i32 = -14;
+            while (mantissa & 0x0400) == 0 {
+                mantissa <<= 1;
+                exponent -= 1;
+            }
+            mantissa &= 0x03ff;
+            let exp32 = ((exponent + 127) as u32) << 23;
+            sign | exp32 | (mantissa << 13)
+        }
+    } else if exp == 0x1f {
+        sign | 0x7f80_0000 | (mant << 13)
+    } else {
+        let exp32 = ((exp as i32 - 15 + 127) as u32) << 23;
+        sign | exp32 | (mant << 13)
+    };
+
+    f32::from_bits(f_bits)
+}
+
+fn runtime_f32_to_f16_bits(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exp = ((bits >> 23) & 0xff) as i32;
+    let mantissa = bits & 0x007f_ffff;
+
+    if exp == 0xff {
+        if mantissa == 0 {
+            return sign | 0x7c00;
+        }
+        return sign | 0x7e00;
+    }
+
+    let exp16 = exp - 127 + 15;
+    if exp16 >= 0x1f {
+        return sign | 0x7c00;
+    }
+
+    if exp16 <= 0 {
+        if exp16 < -10 {
+            return sign;
+        }
+        let mantissa_with_hidden = mantissa | 0x0080_0000;
+        let shift = (14 - exp16) as u32;
+        let mut half_mantissa = (mantissa_with_hidden >> shift) as u16;
+        let round_bit = (mantissa_with_hidden >> (shift - 1)) & 1;
+        if round_bit == 1 {
+            half_mantissa = half_mantissa.saturating_add(1);
+        }
+        return sign | half_mantissa;
+    }
+
+    let mut half_exp = (exp16 as u16) << 10;
+    let mut half_mantissa = (mantissa >> 13) as u16;
+    if (mantissa & 0x0000_1000) != 0 {
+        half_mantissa = half_mantissa.saturating_add(1);
+        if (half_mantissa & 0x0400) != 0 {
+            half_mantissa = 0;
+            half_exp = half_exp.saturating_add(0x0400);
+            if half_exp >= 0x7c00 {
+                return sign | 0x7c00;
+            }
+        }
+    }
+    sign | half_exp | (half_mantissa & 0x03ff)
+}
+
+fn runtime_float_to_f32(value: &Value) -> Option<f32> {
+    match value {
+        Value::Inductive(name, idx, args) if name == "Float" && *idx == 0 => {
+            let bits = match args.first() {
+                Some(Value::Nat(n)) => *n as u16,
+                _ => return None,
+            };
+            Some(runtime_f16_bits_to_f32(bits))
+        }
+        _ => None,
+    }
+}
+
+fn runtime_f32_to_float(value: f32) -> Value {
+    Value::Inductive(
+        "Float".to_string(),
+        0,
+        vec![Value::Nat(runtime_f32_to_f16_bits(value) as u64)],
+    )
+}
+
+fn runtime_float_add(lhs: Value, rhs: Value) -> Value {
+    let left = runtime_float_to_f32(&lhs).unwrap_or(0.0);
+    let right = runtime_float_to_f32(&rhs).unwrap_or(0.0);
+    runtime_f32_to_float(left + right)
+}
+
+fn runtime_float_sub(lhs: Value, rhs: Value) -> Value {
+    let left = runtime_float_to_f32(&lhs).unwrap_or(0.0);
+    let right = runtime_float_to_f32(&rhs).unwrap_or(0.0);
+    runtime_f32_to_float(left - right)
+}
+
+fn runtime_float_mul(lhs: Value, rhs: Value) -> Value {
+    let left = runtime_float_to_f32(&lhs).unwrap_or(0.0);
+    let right = runtime_float_to_f32(&rhs).unwrap_or(0.0);
+    runtime_f32_to_float(left * right)
+}
+
+fn runtime_float_div(lhs: Value, rhs: Value) -> Value {
+    let left = runtime_float_to_f32(&lhs).unwrap_or(0.0);
+    let right = runtime_float_to_f32(&rhs).unwrap_or(0.0);
+    runtime_f32_to_float(left / right)
+}
+
+fn runtime_nat_add(lhs: Value, rhs: Value) -> Value {
+    match (lhs, rhs) {
+        (Value::Nat(a), Value::Nat(b)) => Value::Nat(
+            a.checked_add(b)
+                .expect("Nat overflow in runtime_nat_add"),
+        ),
+        _ => panic!("add expects Nat"),
+    }
+}
+
 fn runtime_string_to_list(input: &str) -> Rc<List> {
     let mut list = Rc::new(List::Nil);
     for ch in input.chars().rev() {
@@ -333,6 +487,15 @@ fn runtime_print_bool(value: Value) -> Value {
     value
 }
 
+fn runtime_print_float(value: Value) -> Value {
+    if let Some(number) = runtime_float_to_f32(&value) {
+        println!("{}", number);
+    } else {
+        println!("{:?}", value);
+    }
+    value
+}
+
 fn runtime_print_text(value: Value) -> Value {
     println!("{}", runtime_text_to_string(&value));
     value
@@ -358,8 +521,18 @@ fn runtime_write_file_text(path: Value, contents: Value) -> Value {
 fn runtime_result_to_string(value: &Value) -> String {
     match value {
         Value::Inductive(name, idx, _) if name == "Text" && *idx == 0 => runtime_text_to_string(value),
-        Value::Func(_) => "<func>".to_string(),
-        _ => format!("{:?}", value),
+        _ => {
+            if let Some(float_val) = runtime_float_to_f32(value) {
+                return float_val.to_string();
+            }
+            if let Some(int_text) = runtime_int_to_string(value) {
+                return int_text;
+            }
+            match value {
+                Value::Func(_) => "<func>".to_string(),
+                _ => format!("{:?}", value),
+            }
+        }
     }
 }
 
@@ -830,13 +1003,19 @@ pub fn codegen_constant(lit: &Literal, closure_base: usize) -> String {
         Literal::Nat(n) => format!("Value::Nat({})", n),
         Literal::Bool(b) => format!("Value::Bool({})", b),
         Literal::GlobalDef(name) => match name.as_str() {
+            "add" => "Value::Func(Rc::new(|lhs| { let lhs = lhs.clone(); Value::Func(Rc::new(move |rhs| runtime_nat_add(lhs.clone(), rhs))) }))".to_string(),
             "print_nat" => "Value::Func(Rc::new(|n| runtime_print_nat(n)))".to_string(),
             "print_bool" => "Value::Func(Rc::new(|b| runtime_print_bool(b)))".to_string(),
+            "print_float" => "Value::Func(Rc::new(|f| runtime_print_float(f)))".to_string(),
             "print_text" | "print" => {
                 "Value::Func(Rc::new(|t| runtime_print_text(t)))".to_string()
             }
             "read_file" => "Value::Func(Rc::new(|path| runtime_read_file_text(path)))".to_string(),
             "write_file" => "Value::Func(Rc::new(|path| { let path = path.clone(); Value::Func(Rc::new(move |contents| runtime_write_file_text(path.clone(), contents))) }))".to_string(),
+            "+f" | "_u2B_f" => "Value::Func(Rc::new(|lhs| { let lhs = lhs.clone(); Value::Func(Rc::new(move |rhs| runtime_float_add(lhs.clone(), rhs))) }))".to_string(),
+            "-f" | "_u2D_f" => "Value::Func(Rc::new(|lhs| { let lhs = lhs.clone(); Value::Func(Rc::new(move |rhs| runtime_float_sub(lhs.clone(), rhs))) }))".to_string(),
+            "*f" | "_u2A_f" => "Value::Func(Rc::new(|lhs| { let lhs = lhs.clone(); Value::Func(Rc::new(move |rhs| runtime_float_mul(lhs.clone(), rhs))) }))".to_string(),
+            "/f" | "_u2F_f" => "Value::Func(Rc::new(|lhs| { let lhs = lhs.clone(); Value::Func(Rc::new(move |rhs| runtime_float_div(lhs.clone(), rhs))) }))".to_string(),
             _ => format!("{}()", sanitize_name(name)),
         },
         Literal::Recursor(name) => {

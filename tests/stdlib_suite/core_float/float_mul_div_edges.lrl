@@ -1,0 +1,7 @@
+;; stdlib float mul/div edge variants.
+;; expected: entry ~= 1.5
+
+(def entry Float
+  (/f
+    (*f 3.0 2.0)
+    4.0))

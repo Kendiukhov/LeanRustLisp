@@ -73,6 +73,7 @@ impl Syntax {
             SyntaxKind::Symbol(s) => s.clone(),
             SyntaxKind::String(s) => format!("\"{}\"", escape_string(s)),
             SyntaxKind::Int(n) => n.to_string(),
+            SyntaxKind::Float(bits) => bits.clone(),
             SyntaxKind::Hole => "_".to_string(),
         }
     }
@@ -115,6 +116,7 @@ pub enum SyntaxKind {
     Symbol(String),
     String(String),
     Int(i64),
+    Float(String),
     Hole,
 }
 

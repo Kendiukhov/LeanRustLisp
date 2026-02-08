@@ -1,0 +1,5 @@
+;; prelude print_float identity behavior smoke.
+;; expected: entry ~= 1.5
+
+(def entry Float
+  (print_float 1.5))

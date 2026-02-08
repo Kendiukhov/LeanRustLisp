@@ -110,6 +110,8 @@ pub fn codegen_program(
     items.extend(ctx.emit_adts()?);
     items.extend(ctx.emit_index_runtime_impls()?);
     items.extend(ctx.emit_text_io_runtime_items()?);
+    items.extend(ctx.emit_int_runtime_items()?);
+    items.extend(ctx.emit_float_runtime_items()?);
     items.extend(ctx.emit_ctors()?);
     items.extend(ctx.emit_recursors()?);
     items.extend(ctx.emit_closure_bodies(program)?);
@@ -1078,6 +1080,171 @@ fn runtime_write_file_text(path: {text_ty}, contents: {text_ty}) -> {text_ty} {{
         Ok(vec![Item::Raw(runtime_helpers)])
     }
 
+    fn emit_int_runtime_items(&self) -> Result<Vec<Item>, TypedCodegenError> {
+        let Some(int_adt_id) = self.ids.adt_id("Int") else {
+            return Ok(Vec::new());
+        };
+        if !self.used_adts.contains(&int_adt_id) {
+            return Ok(Vec::new());
+        }
+
+        let int_ty = self.rust_type(&MirType::Adt(int_adt_id.clone(), Vec::new()))?;
+        let int_enum = self.adt_name(&int_adt_id).to_string();
+        let int_pos_ctor = self
+            .ctor_name_map
+            .get(&CtorId::new(int_adt_id.clone(), 0))
+            .cloned()
+            .unwrap_or_else(|| "int_pos".to_string());
+        let int_neg_ctor = self
+            .ctor_name_map
+            .get(&CtorId::new(int_adt_id, 1))
+            .cloned()
+            .unwrap_or_else(|| "int_neg".to_string());
+
+        let runtime_helper = format!(
+            "fn runtime_int_to_string(value: {int_ty}) -> String {{
+    match value {{
+        {int_enum}::{int_pos_ctor}(magnitude) => magnitude.to_string(),
+        {int_enum}::{int_neg_ctor}(magnitude) => {{
+            if magnitude == 0 {{
+                \"0\".to_string()
+            }} else {{
+                format!(\"-{{}}\", magnitude)
+            }}
+        }},
+        _ => String::new(),
+    }}
+}}",
+        );
+
+        Ok(vec![Item::Raw(runtime_helper)])
+    }
+
+    fn emit_float_runtime_items(&self) -> Result<Vec<Item>, TypedCodegenError> {
+        let Some(float_adt_id) = self.ids.adt_id("Float") else {
+            return Ok(Vec::new());
+        };
+
+        let float_ty = self.rust_type(&MirType::Adt(float_adt_id.clone(), Vec::new()))?;
+        let float_enum = self.adt_name(&float_adt_id).to_string();
+        let float_ctor = self
+            .ctor_name_map
+            .get(&CtorId::new(float_adt_id, 0))
+            .cloned()
+            .unwrap_or_else(|| "float16".to_string());
+
+        let runtime_helpers = format!(
+            "fn runtime_f16_bits_to_f32(bits: u16) -> f32 {{
+    let sign = ((bits & 0x8000) as u32) << 16;
+    let exp = ((bits >> 10) & 0x1f) as u32;
+    let mant = (bits & 0x03ff) as u32;
+
+    let f_bits = if exp == 0 {{
+        if mant == 0 {{
+            sign
+        }} else {{
+            let mut mantissa = mant;
+            let mut exponent: i32 = -14;
+            while (mantissa & 0x0400) == 0 {{
+                mantissa <<= 1;
+                exponent -= 1;
+            }}
+            mantissa &= 0x03ff;
+            let exp32 = ((exponent + 127) as u32) << 23;
+            sign | exp32 | (mantissa << 13)
+        }}
+    }} else if exp == 0x1f {{
+        sign | 0x7f80_0000 | (mant << 13)
+    }} else {{
+        let exp32 = ((exp as i32 - 15 + 127) as u32) << 23;
+        sign | exp32 | (mant << 13)
+    }};
+
+    f32::from_bits(f_bits)
+}}
+
+fn runtime_f32_to_f16_bits(value: f32) -> u16 {{
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exp = ((bits >> 23) & 0xff) as i32;
+    let mantissa = bits & 0x007f_ffff;
+
+    if exp == 0xff {{
+        if mantissa == 0 {{
+            return sign | 0x7c00;
+        }}
+        return sign | 0x7e00;
+    }}
+
+    let exp16 = exp - 127 + 15;
+    if exp16 >= 0x1f {{
+        return sign | 0x7c00;
+    }}
+
+    if exp16 <= 0 {{
+        if exp16 < -10 {{
+            return sign;
+        }}
+        let mantissa_with_hidden = mantissa | 0x0080_0000;
+        let shift = (14 - exp16) as u32;
+        let mut half_mantissa = (mantissa_with_hidden >> shift) as u16;
+        let round_bit = (mantissa_with_hidden >> (shift - 1)) & 1;
+        if round_bit == 1 {{
+            half_mantissa = half_mantissa.saturating_add(1);
+        }}
+        return sign | half_mantissa;
+    }}
+
+    let mut half_exp = (exp16 as u16) << 10;
+    let mut half_mantissa = (mantissa >> 13) as u16;
+    if (mantissa & 0x0000_1000) != 0 {{
+        half_mantissa = half_mantissa.saturating_add(1);
+        if (half_mantissa & 0x0400) != 0 {{
+            half_mantissa = 0;
+            half_exp = half_exp.saturating_add(0x0400);
+            if half_exp >= 0x7c00 {{
+                return sign | 0x7c00;
+            }}
+        }}
+    }}
+    sign | half_exp | (half_mantissa & 0x03ff)
+}}
+
+fn runtime_float_to_f32(value: {float_ty}) -> f32 {{
+    match value {{
+        {float_enum}::{float_ctor}(bits) => runtime_f16_bits_to_f32(bits as u16),
+        _ => 0.0,
+    }}
+}}
+
+fn runtime_f32_to_float(value: f32) -> {float_ty} {{
+    {float_enum}::{float_ctor}(runtime_f32_to_f16_bits(value) as u64)
+}}
+
+fn runtime_float_add(lhs: {float_ty}, rhs: {float_ty}) -> {float_ty} {{
+    runtime_f32_to_float(runtime_float_to_f32(lhs) + runtime_float_to_f32(rhs))
+}}
+
+fn runtime_float_sub(lhs: {float_ty}, rhs: {float_ty}) -> {float_ty} {{
+    runtime_f32_to_float(runtime_float_to_f32(lhs) - runtime_float_to_f32(rhs))
+}}
+
+fn runtime_float_mul(lhs: {float_ty}, rhs: {float_ty}) -> {float_ty} {{
+    runtime_f32_to_float(runtime_float_to_f32(lhs) * runtime_float_to_f32(rhs))
+}}
+
+fn runtime_float_div(lhs: {float_ty}, rhs: {float_ty}) -> {float_ty} {{
+    runtime_f32_to_float(runtime_float_to_f32(lhs) / runtime_float_to_f32(rhs))
+}}
+
+fn runtime_float_to_string(value: {float_ty}) -> String {{
+    runtime_float_to_f32(value).to_string()
+}}",
+        );
+
+        Ok(vec![Item::Raw(runtime_helpers)])
+    }
+
     fn collect_closure_usage(&mut self, program: &TypedProgram) -> Result<(), TypedCodegenError> {
         let mut usage: HashMap<usize, ClosureUsage> = HashMap::new();
         for body in program.defs.iter().chain(program.closures.iter()) {
@@ -1303,6 +1470,7 @@ fn runtime_write_file_text(path: {text_ty}, contents: {text_ty}) -> {text_ty} {{
         match body.name.as_str() {
             "print_nat" => self.emit_debug_print_builtin(body, "print_nat", &MirType::Nat),
             "print_bool" => self.emit_debug_print_builtin(body, "print_bool", &MirType::Bool),
+            "print_float" => self.emit_float_print_builtin(body),
             "print_text" | "print" => {
                 let text_ty = self.text_mir_type().ok_or_else(|| {
                     TypedCodegenError::new("Text type is required to emit text print builtins")
@@ -1458,8 +1626,139 @@ fn runtime_write_file_text(path: {text_ty}, contents: {text_ty}) -> {text_ty} {{
                     },
                 }))
             }
+            "+f" | "_u2B_f" => self.emit_float_binary_builtin(body, "runtime_float_add"),
+            "-f" | "_u2D_f" => self.emit_float_binary_builtin(body, "runtime_float_sub"),
+            "*f" | "_u2A_f" => self.emit_float_binary_builtin(body, "runtime_float_mul"),
+            "/f" | "_u2F_f" => self.emit_float_binary_builtin(body, "runtime_float_div"),
             _ => Ok(None),
         }
+    }
+
+    fn emit_float_print_builtin(
+        &self,
+        body: &TypedBody,
+    ) -> Result<Option<Item>, TypedCodegenError> {
+        let float_ty = self.float_mir_type().ok_or_else(|| {
+            TypedCodegenError::new("Float type is required to emit print_float builtin")
+        })?;
+        if !self.unary_identity_builtin_signature_matches(body, &float_ty) {
+            return Err(TypedCodegenError::new(format!(
+                "print_float builtin must have type {} -> {}",
+                self.rust_type(&float_ty)?,
+                self.rust_type(&float_ty)?
+            )));
+        }
+
+        let arg_ty = self.rust_type(&float_ty)?;
+        let ret_ty = self.curried_fn_type(&[arg_ty.clone()], arg_ty.clone());
+        let arg_name = "value".to_string();
+        let rendered = self.expr_call_path(
+            "runtime_float_to_f32",
+            vec![self.expr_clone(self.expr_path(arg_name.clone()))],
+        );
+        let print_stmt = Stmt::Expr(Expr::MacroCall {
+            name: "println".to_string(),
+            args: vec![self.expr_lit_str("{}"), rendered],
+        });
+        let closure = Expr::Closure {
+            params: vec![Param {
+                name: arg_name.clone(),
+                ty: Some(arg_ty),
+            }],
+            body: Block {
+                stmts: vec![print_stmt],
+                tail: Some(Box::new(self.expr_path(arg_name))),
+            },
+            is_move: true,
+        };
+        let callable_expr = self.callable_literal_expr(&float_ty, &float_ty, closure)?;
+        Ok(Some(Item::Fn {
+            name: body.name.clone(),
+            params: Vec::new(),
+            ret: Some(ret_ty),
+            body: Block {
+                stmts: Vec::new(),
+                tail: Some(Box::new(callable_expr)),
+            },
+        }))
+    }
+
+    fn emit_float_binary_builtin(
+        &self,
+        body: &TypedBody,
+        runtime_fn: &str,
+    ) -> Result<Option<Item>, TypedCodegenError> {
+        let float_ty = self.float_mir_type().ok_or_else(|| {
+            TypedCodegenError::new("Float type is required to emit float arithmetic builtins")
+        })?;
+        if !self.binary_curried_identity_builtin_signature_matches(body, &float_ty) {
+            return Err(TypedCodegenError::new(format!(
+                "float builtin '{}' must have type {} -> {} -> {}",
+                body.name,
+                self.rust_type(&float_ty)?,
+                self.rust_type(&float_ty)?,
+                self.rust_type(&float_ty)?
+            )));
+        }
+
+        let float_rust_ty = self.rust_type(&float_ty)?;
+        let ret_ty = self.curried_fn_type(
+            &[float_rust_ty.clone(), float_rust_ty.clone()],
+            float_rust_ty.clone(),
+        );
+        let outer_arg = "lhs".to_string();
+        let inner_arg = "rhs".to_string();
+        let inner_closure = Expr::Closure {
+            params: vec![Param {
+                name: inner_arg.clone(),
+                ty: Some(float_rust_ty.clone()),
+            }],
+            body: Block {
+                stmts: Vec::new(),
+                tail: Some(Box::new(self.expr_call_path(
+                    runtime_fn,
+                    vec![
+                        self.expr_clone(self.expr_path(outer_arg.clone())),
+                        self.expr_path(inner_arg),
+                    ],
+                ))),
+            },
+            is_move: true,
+        };
+        let inner_callable_expr =
+            self.callable_literal_expr(&float_ty, &float_ty, inner_closure)?;
+        let outer_ret_ty = match self.local_type(body, 0) {
+            Some(MirType::Fn(_, _, _, outer_ret))
+            | Some(MirType::FnItem(_, _, _, _, outer_ret))
+            | Some(MirType::Closure(_, _, _, _, outer_ret)) => outer_ret.as_ref(),
+            _ => {
+                return Err(TypedCodegenError::new(
+                    "float builtin has invalid top-level function type",
+                ))
+            }
+        };
+        let outer_closure = Expr::Closure {
+            params: vec![Param {
+                name: outer_arg,
+                ty: Some(float_rust_ty),
+            }],
+            body: Block {
+                stmts: Vec::new(),
+                tail: Some(Box::new(inner_callable_expr)),
+            },
+            is_move: true,
+        };
+        let outer_callable_expr =
+            self.callable_literal_expr(&float_ty, outer_ret_ty, outer_closure)?;
+        Ok(Some(Item::Fn {
+            name: body.name.clone(),
+            params: Vec::new(),
+            ret: Some(ret_ty),
+            body: Block {
+                stmts: Vec::new(),
+                tail: Some(Box::new(outer_callable_expr)),
+            },
+        }))
     }
 
     fn emit_debug_print_builtin(
@@ -1659,6 +1958,37 @@ fn runtime_write_file_text(path: {text_ty}, contents: {text_ty}) -> {text_ty} {{
         }
     }
 
+    fn binary_curried_identity_builtin_signature_matches(
+        &self,
+        body: &TypedBody,
+        expected_arg: &MirType,
+    ) -> bool {
+        let ty = match self.local_type(body, 0) {
+            Some(ty) => ty,
+            None => return false,
+        };
+        match ty {
+            MirType::Fn(_, _, outer_args, outer_ret)
+            | MirType::FnItem(_, _, _, outer_args, outer_ret)
+            | MirType::Closure(_, _, _, outer_args, outer_ret) => {
+                if outer_args.len() != 1 || outer_args[0] != *expected_arg {
+                    return false;
+                }
+                match outer_ret.as_ref() {
+                    MirType::Fn(_, _, inner_args, inner_ret)
+                    | MirType::FnItem(_, _, _, inner_args, inner_ret)
+                    | MirType::Closure(_, _, _, inner_args, inner_ret) => {
+                        inner_args.len() == 1
+                            && inner_args[0] == *expected_arg
+                            && inner_ret.as_ref() == expected_arg
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
     fn write_file_builtin_signature_matches(&self, body: &TypedBody, text_ty: &MirType) -> bool {
         let ty = match self.local_type(body, 0) {
             Some(ty) => ty,
@@ -1689,6 +2019,18 @@ fn runtime_write_file_text(path: {text_ty}, contents: {text_ty}) -> {text_ty} {{
     fn text_mir_type(&self) -> Option<MirType> {
         self.ids
             .adt_id("Text")
+            .map(|adt_id| MirType::Adt(adt_id, Vec::new()))
+    }
+
+    fn int_mir_type(&self) -> Option<MirType> {
+        self.ids
+            .adt_id("Int")
+            .map(|adt_id| MirType::Adt(adt_id, Vec::new()))
+    }
+
+    fn float_mir_type(&self) -> Option<MirType> {
+        self.ids
+            .adt_id("Float")
             .map(|adt_id| MirType::Adt(adt_id, Vec::new()))
     }
 
@@ -1761,6 +2103,38 @@ fn runtime_write_file_text(path: {text_ty}, contents: {text_ty}) -> {text_ty} {{
                                 Expr::Call {
                                     func: Box::new(Expr::Path(
                                         "runtime_text_to_string".to_string(),
+                                    )),
+                                    args: vec![Expr::MethodCall {
+                                        receiver: Box::new(Expr::Path("result".to_string())),
+                                        method: "clone".to_string(),
+                                        args: Vec::new(),
+                                    }],
+                                },
+                            ],
+                        }
+                    } else if self.int_mir_type().as_ref() == Some(ty) {
+                        Expr::MacroCall {
+                            name: "println".to_string(),
+                            args: vec![
+                                Expr::Lit(Lit::Str("Result: {}".to_string())),
+                                Expr::Call {
+                                    func: Box::new(Expr::Path("runtime_int_to_string".to_string())),
+                                    args: vec![Expr::MethodCall {
+                                        receiver: Box::new(Expr::Path("result".to_string())),
+                                        method: "clone".to_string(),
+                                        args: Vec::new(),
+                                    }],
+                                },
+                            ],
+                        }
+                    } else if self.float_mir_type().as_ref() == Some(ty) {
+                        Expr::MacroCall {
+                            name: "println".to_string(),
+                            args: vec![
+                                Expr::Lit(Lit::Str("Result: {}".to_string())),
+                                Expr::Call {
+                                    func: Box::new(Expr::Path(
+                                        "runtime_float_to_string".to_string(),
                                     )),
                                     args: vec![Expr::MethodCall {
                                         receiver: Box::new(Expr::Path("result".to_string())),

@@ -1,0 +1,7 @@
+;; stdlib float composed arithmetic pipeline.
+;; expected: entry ~= 2.0
+
+(def entry Float
+  (/f
+    (*f (+f 1.5 2.5) 2.0)
+    4.0))

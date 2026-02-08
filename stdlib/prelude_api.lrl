@@ -15,6 +15,18 @@
   (ctor succ (pi n Nat Nat))
 )
 
+;; Signed integer runtime value represented as sign + Nat magnitude.
+;; Canonicalization helpers in std/core/int.lrl map negative zero to positive zero.
+(inductive copy Int (sort 1)
+  (ctor int_pos (pi n Nat Int))
+  (ctor int_neg (pi n Nat Int))
+)
+
+;; Half-precision float payload encoded as IEEE-754 binary16 bits in Nat.
+(inductive copy Float (sort 1)
+  (ctor float16 (pi bits Nat Float))
+)
+
 (inductive copy Bool (sort 1)
   (ctor true Bool)
   (ctor false Bool)
@@ -151,6 +163,10 @@
 
 (def print_bool (pi #[fn] b Bool Bool)
   (lam #[fn] b Bool b)
+)
+
+(def print_float (pi #[fn] f Float Float)
+  (lam #[fn] f Float f)
 )
 
 ;; Text/IO helpers: typed backend special-cases these names.

@@ -38,6 +38,8 @@ pub struct CompileOptions {
 pub const PRELUDE_API_PATH: &str = "stdlib/prelude_api.lrl";
 pub const PRELUDE_STD_CORE_NAT_PATH: &str = "stdlib/std/core/nat.lrl";
 pub const PRELUDE_STD_CORE_NAT_LITERALS_PATH: &str = "stdlib/std/core/nat_literals.lrl";
+pub const PRELUDE_STD_CORE_INT_PATH: &str = "stdlib/std/core/int.lrl";
+pub const PRELUDE_STD_CORE_FLOAT_PATH: &str = "stdlib/std/core/float.lrl";
 pub const PRELUDE_STD_CORE_BOOL_PATH: &str = "stdlib/std/core/bool.lrl";
 pub const PRELUDE_STD_DATA_LIST_PATH: &str = "stdlib/std/data/list.lrl";
 pub const PRELUDE_STD_DATA_OPTION_PATH: &str = "stdlib/std/data/option.lrl";
@@ -51,6 +53,8 @@ const PRELUDE_DYNAMIC_STACK: &[&str] = &[
     PRELUDE_API_PATH,
     PRELUDE_STD_CORE_NAT_PATH,
     PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+    PRELUDE_STD_CORE_INT_PATH,
+    PRELUDE_STD_CORE_FLOAT_PATH,
     PRELUDE_STD_CORE_BOOL_PATH,
     PRELUDE_STD_DATA_LIST_PATH,
     PRELUDE_STD_DATA_OPTION_PATH,
@@ -63,6 +67,8 @@ const PRELUDE_TYPED_STACK: &[&str] = &[
     PRELUDE_API_PATH,
     PRELUDE_STD_CORE_NAT_PATH,
     PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+    PRELUDE_STD_CORE_INT_PATH,
+    PRELUDE_STD_CORE_FLOAT_PATH,
     PRELUDE_STD_CORE_BOOL_PATH,
     PRELUDE_STD_DATA_LIST_PATH,
     PRELUDE_STD_DATA_OPTION_PATH,
@@ -1350,6 +1356,8 @@ inductive copy Nat (sort 1)
                 PRELUDE_API_PATH,
                 PRELUDE_STD_CORE_NAT_PATH,
                 PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+                PRELUDE_STD_CORE_INT_PATH,
+                PRELUDE_STD_CORE_FLOAT_PATH,
                 PRELUDE_STD_CORE_BOOL_PATH,
                 PRELUDE_STD_DATA_LIST_PATH,
                 PRELUDE_STD_DATA_OPTION_PATH,
@@ -1364,6 +1372,8 @@ inductive copy Nat (sort 1)
                 PRELUDE_API_PATH,
                 PRELUDE_STD_CORE_NAT_PATH,
                 PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+                PRELUDE_STD_CORE_INT_PATH,
+                PRELUDE_STD_CORE_FLOAT_PATH,
                 PRELUDE_STD_CORE_BOOL_PATH,
                 PRELUDE_STD_DATA_LIST_PATH,
                 PRELUDE_STD_DATA_OPTION_PATH,
@@ -1378,6 +1388,8 @@ inductive copy Nat (sort 1)
                 PRELUDE_API_PATH,
                 PRELUDE_STD_CORE_NAT_PATH,
                 PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+                PRELUDE_STD_CORE_INT_PATH,
+                PRELUDE_STD_CORE_FLOAT_PATH,
                 PRELUDE_STD_CORE_BOOL_PATH,
                 PRELUDE_STD_DATA_LIST_PATH,
                 PRELUDE_STD_DATA_OPTION_PATH,

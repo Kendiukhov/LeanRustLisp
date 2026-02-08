@@ -732,6 +732,10 @@ impl Expander {
                 out.push('N');
                 out.push_str(&value.to_string());
             }
+            SyntaxKind::Float(value) => {
+                out.push('F');
+                Self::append_text_key(out, value);
+            }
             SyntaxKind::Hole => out.push('H'),
         }
         out.push('@');

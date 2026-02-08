@@ -1,0 +1,7 @@
+;; stdlib float add/sub edge variants.
+;; expected: entry ~= 2.5
+
+(def entry Float
+  (+f
+    (+f 0.0 1.5)
+    (-f 2.0 1.0)))

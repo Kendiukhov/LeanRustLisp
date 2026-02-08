@@ -1,0 +1,49 @@
+;; Shared stdlib Float helpers.
+;; Float is represented as IEEE-754 binary16 bits carried in Nat.
+;; Arithmetic operator bodies are placeholders and are replaced by backend builtins.
+
+(def float_from_bits (pi bits Nat Float)
+  (lam bits Nat
+    (float16 bits)
+  )
+)
+
+(def float_to_bits (pi value Float Nat)
+  (lam value Float
+    (match value Nat
+      (case (float16 bits) bits)
+    )
+  )
+)
+
+(def +f (pi a Float (pi b Float Float))
+  (lam a Float
+    (lam b Float
+      a
+    )
+  )
+)
+
+(def -f (pi a Float (pi b Float Float))
+  (lam a Float
+    (lam b Float
+      a
+    )
+  )
+)
+
+(def *f (pi a Float (pi b Float Float))
+  (lam a Float
+    (lam b Float
+      a
+    )
+  )
+)
+
+(def /f (pi a Float (pi b Float Float))
+  (lam a Float
+    (lam b Float
+      a
+    )
+  )
+)

@@ -16,6 +16,8 @@ pub enum ParseError {
     InvalidIntegerLiteral(String, Span),
     #[error("Integer literal out of range for i64: {0}")]
     IntegerOverflow(String, Span),
+    #[error("Invalid float literal: {0}")]
+    InvalidFloatLiteral(String, Span),
 }
 
 impl ParseError {
@@ -25,7 +27,8 @@ impl ParseError {
             | ParseError::UnexpectedChar(_, span)
             | ParseError::UnmatchedParen(span)
             | ParseError::InvalidIntegerLiteral(_, span)
-            | ParseError::IntegerOverflow(_, span) => *span,
+            | ParseError::IntegerOverflow(_, span)
+            | ParseError::InvalidFloatLiteral(_, span) => *span,
         }
     }
 
@@ -36,6 +39,7 @@ impl ParseError {
             ParseError::UnmatchedParen(_) => "F0003",
             ParseError::InvalidIntegerLiteral(_, _) => "F0004",
             ParseError::IntegerOverflow(_, _) => "F0005",
+            ParseError::InvalidFloatLiteral(_, _) => "F0006",
         }
     }
 }
@@ -59,6 +63,12 @@ impl<'a> Lexer<'a> {
 
     fn peek(&mut self) -> Option<char> {
         self.chars.peek().copied()
+    }
+
+    fn peek_second(&self) -> Option<char> {
+        let mut cloned = self.chars.clone();
+        cloned.next()?;
+        cloned.next()
     }
 
     fn next(&mut self) -> Option<char> {
@@ -358,6 +368,27 @@ impl<'a> Parser<'a> {
                         break;
                     }
                 }
+                if self.lexer.peek() == Some('.')
+                    && self
+                        .lexer
+                        .peek_second()
+                        .is_some_and(|next| next.is_ascii_digit())
+                {
+                    s.push(
+                        self.lexer
+                            .next()
+                            .ok_or_else(|| ParseError::UnexpectedEof(self.lexer.current_span()))?,
+                    );
+                    while let Some(c) = self.lexer.peek() {
+                        if c.is_ascii_digit() {
+                            s.push(self.lexer.next().ok_or_else(|| {
+                                ParseError::UnexpectedEof(self.lexer.current_span())
+                            })?);
+                        } else {
+                            break;
+                        }
+                    }
+                }
                 let end_span = self.lexer.current_span();
                 let literal_span = Span {
                     start: start_span.start,
@@ -365,6 +396,15 @@ impl<'a> Parser<'a> {
                     line: start_span.line,
                     col: start_span.col,
                 };
+                if Self::looks_like_float_token(&s) {
+                    s.parse::<f32>()
+                        .map_err(|_| ParseError::InvalidFloatLiteral(s.clone(), literal_span))?;
+                    return Ok(Syntax {
+                        kind: SyntaxKind::Float(s),
+                        span: literal_span,
+                        scopes: Vec::new(),
+                    });
+                }
                 let parsed = s.parse::<i64>().map_err(|err| match err.kind() {
                     IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => {
                         ParseError::IntegerOverflow(s.clone(), literal_span)
@@ -422,6 +462,20 @@ impl<'a> Parser<'a> {
                         span: literal_span,
                         scopes: Vec::new(),
                     })
+                } else if Self::looks_like_float_token(&s) {
+                    let literal_span = Span {
+                        start: start_span.start,
+                        end: end_span.end,
+                        line: start_span.line,
+                        col: start_span.col,
+                    };
+                    s.parse::<f32>()
+                        .map_err(|_| ParseError::InvalidFloatLiteral(s.clone(), literal_span))?;
+                    Ok(Syntax {
+                        kind: SyntaxKind::Float(s),
+                        span: literal_span,
+                        scopes: Vec::new(),
+                    })
                 } else if s == "_" {
                     Ok(Syntax {
                         kind: SyntaxKind::Hole,
@@ -459,5 +513,27 @@ impl<'a> Parser<'a> {
         } else {
             token.chars().all(|c| c.is_ascii_digit())
         }
+    }
+
+    fn looks_like_float_token(token: &str) -> bool {
+        let body = if let Some(rest) = token.strip_prefix('-') {
+            rest
+        } else {
+            token
+        };
+        let mut parts = body.split('.');
+        let Some(integer_part) = parts.next() else {
+            return false;
+        };
+        let Some(fractional_part) = parts.next() else {
+            return false;
+        };
+        if parts.next().is_some() {
+            return false;
+        }
+        !integer_part.is_empty()
+            && !fractional_part.is_empty()
+            && integer_part.chars().all(|c| c.is_ascii_digit())
+            && fractional_part.chars().all(|c| c.is_ascii_digit())
     }
 }

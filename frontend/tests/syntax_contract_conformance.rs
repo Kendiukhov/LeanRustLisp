@@ -106,10 +106,13 @@ fn decode_text_codes(term: &SurfaceTerm) -> Option<Vec<usize>> {
 
 #[test]
 fn parser_enforces_numeric_and_symbol_rules() {
-    let nodes = parse_syntax("-1 42");
-    assert_eq!(nodes.len(), 2);
-    assert!(matches!(nodes[0].kind, SyntaxKind::Int(-1)));
-    assert!(matches!(nodes[1].kind, SyntaxKind::Int(42)));
+    let nodes = parse_syntax("- -1 42 3.25 -0.5");
+    assert_eq!(nodes.len(), 5);
+    assert!(matches!(&nodes[0].kind, SyntaxKind::Symbol(s) if s == "-"));
+    assert!(matches!(nodes[1].kind, SyntaxKind::Int(-1)));
+    assert!(matches!(nodes[2].kind, SyntaxKind::Int(42)));
+    assert!(matches!(&nodes[3].kind, SyntaxKind::Float(s) if s == "3.25"));
+    assert!(matches!(&nodes[4].kind, SyntaxKind::Float(s) if s == "-0.5"));
 }
 
 #[test]

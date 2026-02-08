@@ -82,6 +82,45 @@ fn normalize_nat_result(stdout: &str) -> Option<u64> {
     }
 }
 
+fn normalize_numeric_result(stdout: &str) -> Option<i64> {
+    let value = stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Result: "))
+        .map(str::trim)?;
+
+    if let Some(rest) = value.strip_prefix("Nat(").and_then(|s| s.strip_suffix(')')) {
+        return rest.parse::<u64>().ok().and_then(|n| i64::try_from(n).ok());
+    }
+
+    if let Some(rest) = value
+        .strip_prefix("int_pos(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        return rest.parse::<u64>().ok().and_then(|n| i64::try_from(n).ok());
+    }
+
+    if let Some(rest) = value
+        .strip_prefix("int_neg(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        return rest
+            .parse::<u64>()
+            .ok()
+            .and_then(|n| i64::try_from(n).ok())
+            .map(|n| -n);
+    }
+
+    value.parse::<i64>().ok()
+}
+
+fn normalize_float_result(stdout: &str) -> Option<f32> {
+    let value = stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Result: "))
+        .map(str::trim)?;
+    value.parse::<f32>().ok()
+}
+
 #[test]
 fn backend_smoke_compiles_program_matrix_with_unified_prelude_stack() {
     let temp_dir = unique_temp_dir("backend_smoke_matrix");
@@ -216,9 +255,9 @@ fn backend_smoke_prefix_arithmetic_operators_match_outputs_across_backends() {
         .canonicalize()
         .expect("failed to resolve repository root");
 
-    let cases: [(&str, &str, u64); 4] = [
+    let cases: [(&str, &str, i64); 4] = [
         ("plus", "(def entry Nat (+ 1 2))", 3),
-        ("minus", "(def entry Nat (- 5 2))", 3),
+        ("minus", "(def entry Int (- 1 3))", -2),
         ("multiply", "(def entry Nat (* 3 4))", 12),
         ("divide", "(def entry Nat (/ 9 2))", 4),
     ];
@@ -245,9 +284,9 @@ fn backend_smoke_prefix_arithmetic_operators_match_outputs_across_backends() {
             &format!("typed backend / prefix {}", name),
         );
 
-        let dynamic_result = normalize_nat_result(&dynamic_stdout)
+        let dynamic_result = normalize_numeric_result(&dynamic_stdout)
             .expect("dynamic backend output missing numeric Result line");
-        let typed_result = normalize_nat_result(&typed_stdout)
+        let typed_result = normalize_numeric_result(&typed_stdout)
             .expect("typed backend output missing numeric Result line");
 
         assert_eq!(
@@ -259,6 +298,132 @@ fn backend_smoke_prefix_arithmetic_operators_match_outputs_across_backends() {
             dynamic_result, expected,
             "prefix operator '{}' expected Result: {}",
             name, expected
+        );
+    }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn backend_smoke_int_arithmetic_with_negative_literals_matches_across_backends() {
+    let temp_dir = unique_temp_dir("backend_smoke_int_ops");
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .canonicalize()
+        .expect("failed to resolve repository root");
+
+    let cases: [(&str, &str, u64); 4] = [
+        (
+            "int_add",
+            "(def entry Nat (int_to_nat (+i -2 (int_from_nat 5))))",
+            3,
+        ),
+        (
+            "int_sub",
+            "(def entry Nat (int_to_nat (-i (int_from_nat 3) -1)))",
+            4,
+        ),
+        ("int_mul", "(def entry Nat (int_to_nat (*i -3 -2)))", 6),
+        ("int_div", "(def entry Nat (int_to_nat (/i -9 -2)))", 4),
+    ];
+
+    for (name, source, expected) in cases {
+        let source_path = temp_dir.join(format!("{}_ops.lrl", name));
+        fs::write(&source_path, source).expect("failed to write int operator source file");
+
+        let dynamic_bin = temp_dir.join(format!("{}_dynamic", name));
+        let typed_bin = temp_dir.join(format!("{}_typed", name));
+
+        let dynamic_stdout = compile_and_run(
+            &repo_root,
+            &source_path,
+            &dynamic_bin,
+            "dynamic",
+            &format!("dynamic backend / {}", name),
+        );
+        let typed_stdout = compile_and_run(
+            &repo_root,
+            &source_path,
+            &typed_bin,
+            "typed",
+            &format!("typed backend / {}", name),
+        );
+
+        let dynamic_result = normalize_nat_result(&dynamic_stdout)
+            .expect("dynamic backend int output missing numeric Result line");
+        let typed_result = normalize_nat_result(&typed_stdout)
+            .expect("typed backend int output missing numeric Result line");
+
+        assert_eq!(
+            dynamic_result, typed_result,
+            "int operator '{}' should match across backends",
+            name
+        );
+        assert_eq!(
+            dynamic_result, expected,
+            "int operator '{}' expected Result: {}",
+            name, expected
+        );
+    }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn backend_smoke_float16_arithmetic_matches_across_backends() {
+    let temp_dir = unique_temp_dir("backend_smoke_float16_ops");
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .canonicalize()
+        .expect("failed to resolve repository root");
+
+    let cases: [(&str, &str, f32); 4] = [
+        ("float_add", "(def entry Float (+f 1.5 2.0))", 3.5),
+        ("float_sub", "(def entry Float (-f 1.0 3.0))", -2.0),
+        ("float_mul", "(def entry Float (*f 1.5 2.0))", 3.0),
+        ("float_div", "(def entry Float (/f 7.0 2.0))", 3.5),
+    ];
+
+    for (name, source, expected) in cases {
+        let source_path = temp_dir.join(format!("{}_ops.lrl", name));
+        fs::write(&source_path, source).expect("failed to write float operator source file");
+
+        let dynamic_bin = temp_dir.join(format!("{}_dynamic", name));
+        let typed_bin = temp_dir.join(format!("{}_typed", name));
+
+        let dynamic_stdout = compile_and_run(
+            &repo_root,
+            &source_path,
+            &dynamic_bin,
+            "dynamic",
+            &format!("dynamic backend / {}", name),
+        );
+        let typed_stdout = compile_and_run(
+            &repo_root,
+            &source_path,
+            &typed_bin,
+            "typed",
+            &format!("typed backend / {}", name),
+        );
+
+        let dynamic_result = normalize_float_result(&dynamic_stdout)
+            .expect("dynamic backend float output missing numeric Result line");
+        let typed_result = normalize_float_result(&typed_stdout)
+            .expect("typed backend float output missing numeric Result line");
+
+        assert!(
+            (dynamic_result - typed_result).abs() < 0.0001,
+            "float operator '{}' should match across backends: dynamic={}, typed={}",
+            name,
+            dynamic_result,
+            typed_result
+        );
+        assert!(
+            (dynamic_result - expected).abs() < 0.0001,
+            "float operator '{}' expected approximately {}, got {}",
+            name,
+            expected,
+            dynamic_result
         );
     }
 

@@ -1,8 +1,9 @@
 use cli::compiler::{
     prelude_stack_for_backend, BackendMode, PRELUDE_API_PATH, PRELUDE_IMPL_DYNAMIC_PATH,
     PRELUDE_IMPL_TYPED_PATH, PRELUDE_STD_CONTROL_COMP_PATH, PRELUDE_STD_CORE_BOOL_PATH,
-    PRELUDE_STD_CORE_NAT_LITERALS_PATH, PRELUDE_STD_CORE_NAT_PATH, PRELUDE_STD_DATA_LIST_PATH,
-    PRELUDE_STD_DATA_OPTION_PATH, PRELUDE_STD_DATA_PAIR_PATH, PRELUDE_STD_DATA_RESULT_PATH,
+    PRELUDE_STD_CORE_FLOAT_PATH, PRELUDE_STD_CORE_INT_PATH, PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+    PRELUDE_STD_CORE_NAT_PATH, PRELUDE_STD_DATA_LIST_PATH, PRELUDE_STD_DATA_OPTION_PATH,
+    PRELUDE_STD_DATA_PAIR_PATH, PRELUDE_STD_DATA_RESULT_PATH,
 };
 use cli::driver::{module_id_for_source, process_code, PipelineOptions};
 use frontend::diagnostics::DiagnosticCollector;
@@ -80,8 +81,8 @@ fn load_prelude_stack(paths: &[&str]) -> Env {
 
 fn assert_api_surface(env: &Env) {
     for name in [
-        "Nat", "Bool", "False", "List", "VecDyn", "Slice", "Array", "RefCell", "Mutex", "Atomic",
-        "Comp", "Eq", "Text", "Option", "Result", "Pair",
+        "Nat", "Int", "Float", "Bool", "False", "List", "VecDyn", "Slice", "Array", "RefCell",
+        "Mutex", "Atomic", "Comp", "Eq", "Text", "Option", "Result", "Pair",
     ] {
         assert!(
             env.get_inductive(name).is_some(),
@@ -104,6 +105,7 @@ fn assert_api_surface(env: &Env) {
         "bool_eq",
         "print_nat",
         "print_bool",
+        "print_float",
         "print_text",
         "print",
         "read_file",
@@ -112,6 +114,25 @@ fn assert_api_surface(env: &Env) {
         "option_and_then",
         "option_flat_map",
         "option_unwrap_or",
+        "int_from_nat",
+        "int_abs",
+        "int_normalize",
+        "int_negate",
+        "int_add",
+        "int_sub",
+        "int_mul",
+        "int_div",
+        "int_to_nat",
+        "+i",
+        "-i",
+        "*i",
+        "/i",
+        "float_from_bits",
+        "float_to_bits",
+        "+f",
+        "-f",
+        "*f",
+        "/f",
         "result_map",
         "result_map_err",
         "result_and_then",
@@ -186,6 +207,8 @@ fn prelude_stack_constants_are_expected() {
         PRELUDE_STD_CORE_NAT_LITERALS_PATH,
         "stdlib/std/core/nat_literals.lrl"
     );
+    assert_eq!(PRELUDE_STD_CORE_INT_PATH, "stdlib/std/core/int.lrl");
+    assert_eq!(PRELUDE_STD_CORE_FLOAT_PATH, "stdlib/std/core/float.lrl");
     assert_eq!(PRELUDE_STD_CORE_BOOL_PATH, "stdlib/std/core/bool.lrl");
     assert_eq!(PRELUDE_STD_DATA_LIST_PATH, "stdlib/std/data/list.lrl");
     assert_eq!(PRELUDE_STD_DATA_OPTION_PATH, "stdlib/std/data/option.lrl");
@@ -200,6 +223,8 @@ fn prelude_stack_constants_are_expected() {
             PRELUDE_API_PATH,
             PRELUDE_STD_CORE_NAT_PATH,
             PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+            PRELUDE_STD_CORE_INT_PATH,
+            PRELUDE_STD_CORE_FLOAT_PATH,
             PRELUDE_STD_CORE_BOOL_PATH,
             PRELUDE_STD_DATA_LIST_PATH,
             PRELUDE_STD_DATA_OPTION_PATH,
@@ -214,6 +239,8 @@ fn prelude_stack_constants_are_expected() {
             PRELUDE_API_PATH,
             PRELUDE_STD_CORE_NAT_PATH,
             PRELUDE_STD_CORE_NAT_LITERALS_PATH,
+            PRELUDE_STD_CORE_INT_PATH,
+            PRELUDE_STD_CORE_FLOAT_PATH,
             PRELUDE_STD_CORE_BOOL_PATH,
             PRELUDE_STD_DATA_LIST_PATH,
             PRELUDE_STD_DATA_OPTION_PATH,

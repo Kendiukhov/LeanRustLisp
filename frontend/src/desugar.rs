@@ -1240,6 +1240,7 @@ impl Desugarer {
             }
             SyntaxKind::Hole => Ok(mk_term(SurfaceTermKind::Hole, span)),
             SyntaxKind::Int(n) => Ok(Self::number_literal_term(n, span)),
+            SyntaxKind::Float(bits) => Ok(Self::float_literal_term(&bits, span)),
             SyntaxKind::String(s) => Ok(Self::text_literal_term(&s, span)),
             _ => Err(ExpansionError::UnknownForm(format!("{:?}", syntax.kind))),
         }
@@ -1313,6 +1314,66 @@ impl Desugarer {
             SurfaceTermKind::App(Box::new(neg_ctor), Box::new(magnitude_term), true),
             span,
         )
+    }
+
+    fn float_literal_term(value: &str, span: Span) -> SurfaceTerm {
+        let parsed = value
+            .parse::<f32>()
+            .expect("parser validated float literal before desugaring");
+        let bits = Self::f32_to_f16_bits(parsed) as usize;
+        let bits_term = Self::compact_nat_literal_term(bits, span);
+        let float_ctor = mk_term(SurfaceTermKind::Ctor("Float".to_string(), 0), span);
+        mk_term(
+            SurfaceTermKind::App(Box::new(float_ctor), Box::new(bits_term), true),
+            span,
+        )
+    }
+
+    fn f32_to_f16_bits(value: f32) -> u16 {
+        let bits = value.to_bits();
+        let sign = ((bits >> 16) & 0x8000) as u16;
+        let exp = ((bits >> 23) & 0xff) as i32;
+        let mantissa = bits & 0x007f_ffff;
+
+        if exp == 0xff {
+            if mantissa == 0 {
+                return sign | 0x7c00;
+            }
+            return sign | 0x7e00;
+        }
+
+        let exp16 = exp - 127 + 15;
+        if exp16 >= 0x1f {
+            return sign | 0x7c00;
+        }
+
+        if exp16 <= 0 {
+            if exp16 < -10 {
+                return sign;
+            }
+            let mantissa_with_hidden = mantissa | 0x0080_0000;
+            let shift = (14 - exp16) as u32;
+            let mut half_mantissa = (mantissa_with_hidden >> shift) as u16;
+            let round_bit = (mantissa_with_hidden >> (shift - 1)) & 1;
+            if round_bit == 1 {
+                half_mantissa = half_mantissa.saturating_add(1);
+            }
+            return sign | half_mantissa;
+        }
+
+        let mut half_exp = (exp16 as u16) << 10;
+        let mut half_mantissa = (mantissa >> 13) as u16;
+        if (mantissa & 0x0000_1000) != 0 {
+            half_mantissa = half_mantissa.saturating_add(1);
+            if (half_mantissa & 0x0400) != 0 {
+                half_mantissa = 0;
+                half_exp = half_exp.saturating_add(0x0400);
+                if half_exp >= 0x7c00 {
+                    return sign | 0x7c00;
+                }
+            }
+        }
+        sign | half_exp | (half_mantissa & 0x03ff)
     }
 
     fn text_literal_term(value: &str, span: Span) -> SurfaceTerm {
@@ -1453,6 +1514,7 @@ impl Desugarer {
                 build_list(items)
             }
             SyntaxKind::Int(n) => Self::number_literal_term(*n, span),
+            SyntaxKind::Float(bits) => Self::float_literal_term(bits, span),
             SyntaxKind::String(s) => {
                 let items = s
                     .chars()

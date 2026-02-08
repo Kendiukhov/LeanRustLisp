@@ -121,10 +121,6 @@
   add
 )
 
-(def - (pi a Nat (pi b Nat Nat))
-  nat_sub
-)
-
 (def * (pi a Nat (pi b Nat Nat))
   nat_mul
 )
