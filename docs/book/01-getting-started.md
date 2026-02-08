@@ -66,7 +66,7 @@ Create a new file called `hello.lrl`:
 ```lisp
 ;; hello.lrl - Your first LRL program
 
-(def main Text
+(def entry Text
   (print "Hello, World!"))
 ```
 
@@ -107,12 +107,12 @@ Text enclosed in double quotes `"..."` is a **string literal**. LRL automaticall
 #### The Program Structure
 
 ```lisp
-(def main Text
+(def entry Text
   (print "Hello, World!"))
 ```
 
 - **`def`** — Introduces a new definition
-- **`main`** — The entry point of the program (by convention)
+- **`entry`** — The name of the definition (the last expression is evaluated)
 - **`Text`** — The return type (print returns the text it prints)
 - **`(print ...)`** — The body of the definition
 - **`print`** — A built-in function that outputs `Text` to the console
@@ -126,7 +126,7 @@ Let's create a program with multiple definitions:
 
 (def name Text "LRL User")
 
-(def main Text
+(def entry Text
   (print name))
 ```
 
