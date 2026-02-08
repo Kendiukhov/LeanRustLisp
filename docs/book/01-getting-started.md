@@ -66,13 +66,10 @@ Create a new file called `hello.lrl`:
 ```lisp
 ;; hello.lrl - Your first LRL program
 
-(def greeting Text
-  (text (cons 72 (cons 101 (cons 108 (cons 108 (cons 111 (cons 32 
-    (cons 87 (cons 111 (cons 114 (cons 108 (cons 100 (cons 33 
-    nil))))))))))))))
-
-(print greeting)
+(print "Hello, World!")
 ```
+
+Yes, that's it! Just one line of actual code.
 
 ### Step 2: Run It
 
@@ -83,7 +80,7 @@ cargo run -p cli -- compile hello.lrl
 
 You should see:
 ```
-Hello World!
+Hello, World!
 ```
 
 ### Step 3: Understanding the Code
@@ -98,77 +95,90 @@ Let's break down each element:
 
 Lines starting with `;;` are comments. They're ignored by the compiler.
 
-#### Defining a Value
+#### String Literals
 
 ```lisp
-(def greeting Text ...)
+"Hello, World!"
 ```
 
-- **`def`** — Introduces a new definition
-- **`greeting`** — The name we're binding
-- **`Text`** — The type of the value (a text string)
-- **`...`** — The value itself
+Text enclosed in double quotes `"..."` is a **string literal**. LRL automatically converts this into a `Text` value (internally represented as a list of Unicode code points).
 
-In LRL, every definition has an explicit type. This enables the compiler to verify your program is well-formed.
-
-#### Constructing Text
+#### The Print Function
 
 ```lisp
-(text (cons 72 (cons 101 ...)))
-```
-
-- **`Text`** is LRL's string type, defined as a wrapper around a list of Unicode code points
-- **`text`** is the constructor that creates a `Text` value from a `List Nat`
-- Each number is a Unicode code point:
-  - `72` = 'H', `101` = 'e', `108` = 'l', `111` = 'o', `32` = ' ', etc.
-
-#### Building Lists
-
-```lisp
-(cons 72 (cons 101 ... nil))
-```
-
-- **`nil`** — The empty list
-- **`cons h t`** — Prepends element `h` to list `t`
-
-So `(cons 72 (cons 101 nil))` creates the list `[72, 101]`.
-
-#### Printing Output
-
-```lisp
-(print greeting)
+(print "Hello, World!")
 ```
 
 - **`print`** — A built-in function that outputs `Text` to the console
-- When compiled, this generates actual I/O code; in the interpreter, it's a pure identity function
+- The parentheses `(...)` are **function application** — we're calling `print` with our string as the argument
+- When compiled, this generates actual I/O code; in the interpreter, it returns the string unchanged
 
-### A Simpler Version (Using Nat)
+### A More Interesting Example
 
-If you just want to see output without dealing with strings:
+Let's create a program with variables and computation:
 
 ```lisp
-;; simple.lrl - Print a number
+;; greet.lrl - A greeting program
 
-(def answer Nat (succ (succ (succ zero))))  ;; 3
-(print_nat answer)
+(def name Text "LRL User")
+(def greeting Text "Welcome to LeanRustLisp, ")
+
+(print greeting)
+(print name)
+(print "!")
 ```
 
 Run it:
 ```bash
-cargo run -p cli -- compile simple.lrl && ./build/output
+cargo run -p cli -- compile greet.lrl && ./build/output
 ```
 
 Output:
 ```
-3
+Welcome to LeanRustLisp, 
+LRL User
+!
+```
+
+#### Defining Variables
+
+```lisp
+(def name Text "LRL User")
+```
+
+- **`def`** — Introduces a new definition
+- **`name`** — The name we're binding
+- **`Text`** — The type (required for all definitions)
+- **`"LRL User"`** — The value
+
+### Printing Numbers
+
+You can also print numbers directly:
+
+```lisp
+;; numbers.lrl - Print some numbers
+
+(def answer Nat (+ 2 3))
+(print_nat answer)
+```
+
+Output:
+```
+5
 ```
 
 #### Understanding Nat
 
 - **`Nat`** — Natural numbers (0, 1, 2, ...)
-- **`zero`** — The number 0
-- **`succ n`** — The successor of `n` (i.e., `n + 1`)
-- So `(succ (succ (succ zero)))` = `succ(succ(1))` = `succ(2)` = `3`
+- **`+`** — Addition operator (prefix notation)
+- **`print_nat`** — Prints a natural number
+
+LRL also supports signed integers (`Int`) and floating-point numbers (`Float`):
+
+```lisp
+(def x Int (- 3 5))       ;; -2 (signed subtraction)
+(def y Float (+f 1.5 2.5)) ;; 4.0 (float addition)
+```
 
 ### Why S-Expressions?
 
@@ -178,7 +188,7 @@ You might wonder why LRL uses parentheses everywhere. This is called **S-express
 2. **Unambiguous parsing** — No precedence rules to remember
 3. **Easy to extend** — Adding new syntax forms is trivial
 
-Once you get used to it, `(add 1 2)` reads just as naturally as `1 + 2`.
+Once you get used to it, `(+ 1 2)` reads just as naturally as `1 + 2`.
 
 ---
 
