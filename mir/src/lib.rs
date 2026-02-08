@@ -233,7 +233,8 @@ pub enum Literal {
     OpaqueConst(String),
     Closure(usize, Vec<Operand>), // Index into bodies, captured environment
     Fix(usize, Vec<Operand>),     // Recursive closure with self in env[0]
-    InductiveCtor(CtorId, usize), // CtorId, Arity
+    // CtorId, full call arity, runtime payload arity (after erasing type-only args)
+    InductiveCtor(CtorId, usize, usize),
 }
 
 impl Literal {

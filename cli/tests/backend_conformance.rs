@@ -502,7 +502,14 @@ fn build_dynamic_code(
                 let ctor_id = ids
                     .ctor_id(&name, i)
                     .unwrap_or_else(|| CtorId::new(AdtId::new(&name), i));
-                let ctor_val_code = codegen_constant(&Literal::InductiveCtor(ctor_id, arity), 0);
+                let runtime_arity = ids
+                    .adt_layouts()
+                    .get(&ctor_id.adt)
+                    .and_then(|layout| layout.variants.get(i))
+                    .map(|variant| variant.fields.len())
+                    .unwrap_or(arity);
+                let ctor_val_code =
+                    codegen_constant(&Literal::InductiveCtor(ctor_id, arity, runtime_arity), 0);
                 code.push_str(&format!(
                     "fn {}() -> Value {{ {} }}\n",
                     safe_ctor_name, ctor_val_code

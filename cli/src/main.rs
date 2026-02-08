@@ -85,6 +85,9 @@ enum Commands {
     Run {
         /// Package name/label or file path
         target: Option<String>,
+        /// Select execution backend for single-file runs
+        #[arg(long, value_enum, default_value_t = compiler::BackendMode::Dynamic)]
+        backend: compiler::BackendMode,
     },
     /// Run Rust test suite from current workspace directory
     Test,
@@ -178,13 +181,37 @@ fn main() {
                 }
             }
         }
-        Some(Commands::Run { target }) => {
+        Some(Commands::Run { target, backend }) => {
             let cwd = std::env::current_dir().expect("failed to get current directory");
+            let run_compile_options = compiler::CompileOptions {
+                trace_macros: cli.trace_macros,
+                panic_free: cli.panic_free,
+                require_axiom_tags: cli.require_axiom_tags,
+                macro_boundary_warn: cli.macro_boundary_warn,
+                allow_redefine: cli.allow_redefine,
+                allow_axioms: cli.allow_axioms,
+                backend: *backend,
+            };
             let result = match target {
                 Some(value) if value.ends_with(".lrl") || Path::new(value).exists() => {
-                    package_manager::run_workspace_file(Path::new(value))
+                    if *backend == compiler::BackendMode::Dynamic {
+                        package_manager::run_workspace_file(Path::new(value))
+                    } else {
+                        package_manager::run_workspace_file_codegen(
+                            Path::new(value),
+                            run_compile_options,
+                        )
+                    }
                 }
+                Some(_) if *backend != compiler::BackendMode::Dynamic => Err(anyhow::anyhow!(
+                    "run --backend {} is currently only supported for direct .lrl file targets",
+                    format!("{:?}", backend).to_lowercase()
+                )),
                 Some(value) => package_manager::run_workspace_package(&cwd, Some(value.as_str())),
+                None if *backend != compiler::BackendMode::Dynamic => Err(anyhow::anyhow!(
+                    "run --backend {} is currently only supported for direct .lrl file targets",
+                    format!("{:?}", backend).to_lowercase()
+                )),
                 None => package_manager::run_workspace_package(&cwd, None),
             };
             if let Err(err) = result {
@@ -406,6 +433,28 @@ mod tests {
         match cli.command {
             Some(Commands::CompileMir { backend, .. }) => {
                 assert_eq!(backend, compiler::BackendMode::Auto);
+            }
+            other => panic!("unexpected parsed command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn run_command_defaults_to_dynamic_backend() {
+        let cli = Cli::parse_from(["cli", "run", "program.lrl"]);
+        match cli.command {
+            Some(Commands::Run { backend, .. }) => {
+                assert_eq!(backend, compiler::BackendMode::Dynamic);
+            }
+            other => panic!("unexpected parsed command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn run_command_accepts_typed_backend() {
+        let cli = Cli::parse_from(["cli", "run", "program.lrl", "--backend", "typed"]);
+        match cli.command {
+            Some(Commands::Run { backend, .. }) => {
+                assert_eq!(backend, compiler::BackendMode::Typed);
             }
             other => panic!("unexpected parsed command: {:?}", other),
         }

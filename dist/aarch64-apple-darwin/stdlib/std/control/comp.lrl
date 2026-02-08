@@ -1,0 +1,18 @@
+;; Shared stdlib Comp helpers built on prelude's ret/bind constructors.
+
+(def comp_pure
+  (pi A (sort 1)
+    (pi x A (Comp A)))
+  (lam A (sort 1)
+    (lam x A
+      ;; Stage-1 Comp is currently value-erased; keep the surface type stable.
+      (ret A)))
+)
+
+(def comp_bind
+  (pi A (sort 1)
+    (pi B (sort 1)
+      (pi m (Comp A)
+        (pi n (Comp B) (Comp B)))))
+  bind
+)

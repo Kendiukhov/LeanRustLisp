@@ -1,8 +1,6 @@
 ;; prelude Comp.bind constructor smoke.
 
-(def step (pi x Nat (Comp Nat))
-  (lam x Nat
-    (ret Nat (succ x))))
-
 (def entry (Comp Nat)
-  (bind Nat Nat (ret Nat zero) step))
+  (bind Nat Nat
+    (ret Nat)
+    (ret Nat)))

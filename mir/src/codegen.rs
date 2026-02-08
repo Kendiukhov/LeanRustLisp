@@ -1096,7 +1096,7 @@ pub fn codegen_constant(lit: &Literal, closure_base: usize) -> String {
                 )
             }
         }
-        Literal::InductiveCtor(ctor, arity) => {
+        Literal::InductiveCtor(ctor, arity, runtime_arity) => {
             let adt = &ctor.adt;
             if adt.is_builtin(Builtin::Nat) {
                 if ctor.index == 0 {
@@ -1124,6 +1124,8 @@ pub fn codegen_constant(lit: &Literal, closure_base: usize) -> String {
                         name, ctor.index
                     )
                 } else {
+                    let kept = (*runtime_arity).min(*arity);
+                    let dropped = arity.saturating_sub(kept);
                     let mut s = String::new();
                     for i in 0..*arity {
                         s.push_str(&format!("Value::Func(Rc::new(move |a{}| {{\n", i));
@@ -1136,8 +1138,8 @@ pub fn codegen_constant(lit: &Literal, closure_base: usize) -> String {
                         "Value::Inductive(\"{}\".to_string(), {}, vec![",
                         name, ctor.index
                     ));
-                    for i in 0..*arity {
-                        if i > 0 {
+                    for (pos, i) in (dropped..*arity).enumerate() {
+                        if pos > 0 {
                             s.push_str(", ");
                         }
                         s.push_str(&format!("a{}", i));
@@ -1179,6 +1181,12 @@ pub fn sanitize_name(name: &str) -> String {
         sanitized.push('_');
     }
 
+    // Reserve Rust entrypoint name so user-level `def main ...` does not
+    // collide with the generated executable entrypoint.
+    if sanitized == "main" {
+        return "__lrl_main".to_string();
+    }
+
     match sanitized.as_str() {
         "true" | "false" | "if" | "else" | "match" | "let" | "fn" | "struct" | "enum" | "type"
         | "return" | "loop" | "while" | "for" | "in" | "use" | "mod" | "crate" | "pub" | "impl"
@@ -1206,5 +1214,10 @@ mod tests {
     fn sanitize_name_preserves_plain_identifiers() {
         assert_eq!(sanitize_name("entry"), "entry");
         assert_eq!(sanitize_name("foo.bar"), "foou2E_bar");
+    }
+
+    #[test]
+    fn sanitize_name_reserves_main_entrypoint() {
+        assert_eq!(sanitize_name("main"), "__lrl_main");
     }
 }

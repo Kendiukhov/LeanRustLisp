@@ -963,7 +963,7 @@ mod tests {
                 Statement::Assign(
                     Place::from(l_ref),
                     Rvalue::Use(Operand::Constant(Box::new(Constant {
-                        literal: Literal::InductiveCtor(CtorId::new(ref_adt.clone(), 0), 1),
+                        literal: Literal::InductiveCtor(CtorId::new(ref_adt.clone(), 0), 1, 1),
                         ty: user_ref_type.clone(),
                     }))),
                 ),
@@ -1004,7 +1004,7 @@ mod tests {
                 Statement::Assign(
                     Place::from(l_mut),
                     Rvalue::Use(Operand::Constant(Box::new(Constant {
-                        literal: Literal::InductiveCtor(CtorId::new(mut_adt.clone(), 0), 0),
+                        literal: Literal::InductiveCtor(CtorId::new(mut_adt.clone(), 0), 0, 0),
                         ty: user_mut_type.clone(),
                     }))),
                 ),
@@ -1042,7 +1042,7 @@ mod tests {
                 Statement::Assign(
                     Place::from(l_shared),
                     Rvalue::Use(Operand::Constant(Box::new(Constant {
-                        literal: Literal::InductiveCtor(CtorId::new(shared_adt.clone(), 0), 0),
+                        literal: Literal::InductiveCtor(CtorId::new(shared_adt.clone(), 0), 0, 0),
                         ty: user_shared_type.clone(),
                     }))),
                 ),
@@ -1131,7 +1131,7 @@ mod tests {
             statements.push(Statement::Assign(
                 Place::from(locals[i]),
                 Rvalue::Use(Operand::Constant(Box::new(Constant {
-                    literal: Literal::InductiveCtor(CtorId::new(AdtId::new(name), 0), 0),
+                    literal: Literal::InductiveCtor(CtorId::new(AdtId::new(name), 0), 0, 0),
                     ty: ty.clone(),
                 }))),
             ));
@@ -1187,7 +1187,11 @@ mod tests {
                 Statement::Assign(
                     Place::from(l_fake),
                     Rvalue::Use(Operand::Constant(Box::new(Constant {
-                        literal: Literal::InductiveCtor(CtorId::new(actual_ref_adt.clone(), 0), 0),
+                        literal: Literal::InductiveCtor(
+                            CtorId::new(actual_ref_adt.clone(), 0),
+                            0,
+                            0,
+                        ),
                         ty: fake_ref.clone(),
                     }))),
                 ),

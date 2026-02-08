@@ -1,0 +1,130 @@
+;; Shared stdlib Option APIs.
+
+(inductive copy Option (pi T (sort 1) (sort 1))
+  (ctor none (pi {T (sort 1)} (Option T)))
+  (ctor some (pi {T (sort 1)} (pi x T (Option T))))
+)
+
+;; Map over the successful branch.
+(def option_map
+  (pi A (sort 1)
+    (pi B (sort 1)
+      (pi #[fn] f (pi #[fn] x A B)
+        (pi #[once] opt (Option A) (Option B)))))
+  (lam A (sort 1)
+    (lam B (sort 1)
+      (lam #[fn] f (pi #[fn] x A B)
+        (lam #[once] opt (Option A)
+          (match opt (Option B)
+            (case (none) none)
+            (case (some x) (some (f x)))
+          )
+        )
+      )
+    )
+  )
+)
+
+;; Sequence computations that may fail.
+(def option_and_then
+  (pi A (sort 1)
+    (pi B (sort 1)
+      (pi #[once] opt (Option A)
+        (pi #[once] f (pi #[once] x A (Option B))
+          (Option B)))))
+  (lam A (sort 1)
+    (lam B (sort 1)
+      (lam #[once] opt (Option A)
+        (lam #[once] f (pi #[once] x A (Option B))
+          (match opt (Option B)
+            (case (none) none)
+            (case (some x) (f x))
+          )
+        )
+      )
+    )
+  )
+)
+
+;; Alias used in some tutorials.
+(def option_flat_map
+  (pi A (sort 1)
+    (pi B (sort 1)
+      (pi #[once] opt (Option A)
+        (pi #[once] f (pi #[once] x A (Option B))
+          (Option B)))))
+  (lam A (sort 1)
+    (lam B (sort 1)
+      (lam #[once] opt (Option A)
+        (lam #[once] f (pi #[once] x A (Option B))
+          (option_and_then A B opt f)
+        )
+      )
+    )
+  )
+)
+
+;; Fallback value for empty options.
+(def option_unwrap_or
+  (pi A (sort 1)
+    (pi #[fn] fallback A
+      (pi #[once] opt (Option A) A)))
+  (lam A (sort 1)
+    (lam #[fn] fallback A
+      (lam #[once] opt (Option A)
+        (match opt A
+          (case (none) fallback)
+          (case (some x) x)
+        )
+      )
+    )
+  )
+)
+
+;; Left-biased fallback.
+(def option_or
+  (pi A (sort 1)
+    (pi #[once] lhs (Option A)
+      (pi #[once] rhs (Option A) (Option A))))
+  (lam A (sort 1)
+    (lam #[once] lhs (Option A)
+      (lam #[once] rhs (Option A)
+        ((match lhs (pi #[once] rhs_acc (Option A) (Option A))
+          (case (none)
+            (lam #[once] rhs_acc (Option A)
+              rhs_acc
+            )
+          )
+          (case (some x)
+            (lam #[once] rhs_acc (Option A)
+              (some x)
+            )
+          )
+        ) rhs)
+      )
+    )
+  )
+)
+
+(def option_is_some
+  (pi A (sort 1)
+    (pi #[once] opt (Option A) Bool))
+  (lam A (sort 1)
+    (lam #[once] opt (Option A)
+      (match opt Bool
+        (case (none) false)
+        (case (some x) true)
+      )
+    )
+  )
+)
+
+(def option_is_none
+  (pi A (sort 1)
+    (pi #[once] opt (Option A) Bool))
+  (lam A (sort 1)
+    (lam #[once] opt (Option A)
+      (not (option_is_some A opt))
+    )
+  )
+)

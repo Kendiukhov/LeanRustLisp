@@ -341,8 +341,14 @@ fn pretty_constant(c: &Constant) -> String {
             let caps: Vec<_> = captures.iter().map(pretty_operand).collect();
             format!("fix#{}[{}]", idx, caps.join(", "))
         }
-        Literal::InductiveCtor(ctor, arity) => {
-            format!("{}#{}(arity={})", pretty_adt(&ctor.adt), ctor.index, arity)
+        Literal::InductiveCtor(ctor, arity, runtime_arity) => {
+            format!(
+                "{}#{}(arity={}, runtime={})",
+                pretty_adt(&ctor.adt),
+                ctor.index,
+                arity,
+                runtime_arity
+            )
         }
     }
 }

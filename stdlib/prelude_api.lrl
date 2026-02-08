@@ -147,8 +147,10 @@
 )
 
 (inductive Comp (pi A (sort 1) (sort 1))
-  (ctor ret (pi A (sort 1) (pi x A (Comp A))))
-  (ctor bind (pi A (sort 1) (pi B (sort 1) (pi m (Comp A) (pi f (pi x A (Comp B)) (Comp B))))))
+  ;; Stage-1 control wrapper constructors (type-directed, first-order).
+  (ctor ret (pi A (sort 1) (Comp A)))
+  ;; Sequencing constructor for stage-1 control flow in both backends.
+  (ctor bind (pi A (sort 1) (pi B (sort 1) (pi m (Comp A) (pi n (Comp B) (Comp B))))))
 )
 
 (inductive Eq (pi A (sort 1) (pi a A (pi b A (sort 0))))

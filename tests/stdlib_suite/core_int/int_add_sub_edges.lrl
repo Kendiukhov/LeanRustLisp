@@ -1,0 +1,8 @@
+;; stdlib int_add/int_sub mixed sign edge variants.
+;; expected: entry = 7
+
+(def entry Nat
+  (int_to_nat
+    (+i
+      (-i (int_from_nat 10) (int_from_nat 3))
+      (+i -2 (int_from_nat 2)))))

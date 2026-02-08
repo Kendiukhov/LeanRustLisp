@@ -275,6 +275,90 @@ fn pipeline_negative_macro_boundary_deny_blocks_smuggled_axiom() {
 }
 
 #[test]
+fn pipeline_negative_macro_boundary_deny_blocks_direct_quasiquote_axiom() {
+    let source = r#"
+        (quasiquote (axiom classical bad (sort 0)))
+    "#;
+
+    let mut env = Env::new();
+    let mut expander = Expander::new();
+    expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
+    let mut diagnostics = DiagnosticCollector::new();
+    let options = PipelineOptions::default();
+
+    let result = process_code(
+        source,
+        "pipeline_negative",
+        &mut env,
+        &mut expander,
+        &options,
+        &mut diagnostics,
+    );
+
+    assert!(
+        result.is_err(),
+        "Expected direct quasiquote smuggling to abort processing"
+    );
+    assert!(
+        diagnostics.has_errors(),
+        "Expected diagnostics for direct quasiquote smuggling"
+    );
+    assert!(
+        env.get_definition("bad").is_none(),
+        "Direct quasiquote smuggled axiom should not be present in env"
+    );
+    assert!(
+        diagnostics
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("axiom classical")),
+        "Expected direct quasiquote diagnostic to mention axiom classical"
+    );
+}
+
+#[test]
+fn pipeline_negative_macro_boundary_deny_blocks_direct_quasiquote_import_classical() {
+    let source = r#"
+        (quasiquote (import classical))
+    "#;
+
+    let mut env = Env::new();
+    let mut expander = Expander::new();
+    expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
+    let mut diagnostics = DiagnosticCollector::new();
+    let options = PipelineOptions::default();
+
+    let result = process_code(
+        source,
+        "pipeline_negative",
+        &mut env,
+        &mut expander,
+        &options,
+        &mut diagnostics,
+    );
+
+    assert!(
+        result.is_err(),
+        "Expected direct quasiquote import smuggling to abort processing"
+    );
+    assert!(
+        diagnostics.has_errors(),
+        "Expected diagnostics for direct quasiquote import smuggling"
+    );
+    assert!(
+        env.get_definition("classical_choice").is_none(),
+        "Direct quasiquote import classical should not mutate env"
+    );
+    assert!(
+        diagnostics
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("import classical")),
+        "Expected direct quasiquote diagnostic to mention import classical"
+    );
+}
+
+#[test]
 fn pipeline_negative_match_missing_case() {
     let source = r#"
         (inductive copy Bool Type

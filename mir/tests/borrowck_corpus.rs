@@ -1031,7 +1031,7 @@ fn nll_accept_reborrow_disjoint_field_write() {
             Statement::Assign(
                 Place::from(Local(1)),
                 Rvalue::Use(Operand::Constant(Box::new(Constant {
-                    literal: Literal::InductiveCtor(pair_ctor.clone(), 0),
+                    literal: Literal::InductiveCtor(pair_ctor.clone(), 0, 0),
                     ty: pair_ty.clone(),
                 }))),
             ),
@@ -1061,7 +1061,7 @@ fn nll_accept_reborrow_disjoint_field_write() {
                     projection: vec![PlaceElem::Field(1)],
                 },
                 Rvalue::Use(Operand::Constant(Box::new(Constant {
-                    literal: Literal::InductiveCtor(pair_ctor.clone(), 0),
+                    literal: Literal::InductiveCtor(pair_ctor.clone(), 0, 0),
                     ty: pair_ty.clone(),
                 }))),
             ),
@@ -1071,7 +1071,7 @@ fn nll_accept_reborrow_disjoint_field_write() {
                     projection: vec![PlaceElem::Deref],
                 },
                 Rvalue::Use(Operand::Constant(Box::new(Constant {
-                    literal: Literal::InductiveCtor(pair_ctor.clone(), 0),
+                    literal: Literal::InductiveCtor(pair_ctor.clone(), 0, 0),
                     ty: pair_ty.clone(),
                 }))),
             ),
@@ -1300,7 +1300,7 @@ fn nll_accept_disjoint_field_borrow() {
             Statement::Assign(
                 Place::from(Local(1)),
                 Rvalue::Use(Operand::Constant(Box::new(Constant {
-                    literal: Literal::InductiveCtor(pair_ctor.clone(), 0),
+                    literal: Literal::InductiveCtor(pair_ctor.clone(), 0, 0),
                     ty: pair_ty.clone(),
                 }))),
             ),
@@ -1320,7 +1320,7 @@ fn nll_accept_disjoint_field_borrow() {
                     projection: vec![PlaceElem::Field(1)],
                 },
                 Rvalue::Use(Operand::Constant(Box::new(Constant {
-                    literal: Literal::InductiveCtor(pair_ctor.clone(), 0),
+                    literal: Literal::InductiveCtor(pair_ctor.clone(), 0, 0),
                     ty: pair_ty.clone(),
                 }))),
             ),
@@ -1371,7 +1371,7 @@ fn nll_accept_disjoint_index_borrow() {
             Statement::Assign(
                 Place::from(Local(1)),
                 Rvalue::Use(Operand::Constant(Box::new(Constant {
-                    literal: Literal::InductiveCtor(vec_ctor.clone(), 0),
+                    literal: Literal::InductiveCtor(vec_ctor.clone(), 0, 0),
                     ty: vec_ty.clone(),
                 }))),
             ),

@@ -51,7 +51,30 @@ Alpha constraints you should expect:
 
 ### Prerequisites
 
-- Rust toolchain (`cargo`, `rustc`)
+- For prebuilt CLI binaries: no repo build step is required.
+- For `compile` / `compile-mir`: Rust (`rustc`) is still required.
+- For building from source: Rust toolchain (`cargo`, `rustc`).
+
+### Use prebuilt binary package (no `cargo build`)
+
+This repository now includes a host-target package under:
+
+- `dist/aarch64-apple-darwin/`
+
+The package layout is:
+
+- `cli` (prebuilt executable)
+- `stdlib/` (runtime prelude + stdlib files)
+
+Run from inside the package directory so relative `stdlib/...` paths resolve:
+
+```bash
+cd dist/aarch64-apple-darwin
+./cli --help
+./cli run /absolute/path/to/program.lrl --backend typed
+```
+
+If you use `compile` or `compile-mir` from that binary, `rustc` must be installed because those commands invoke Rust compilation.
 
 ### Build
 
@@ -59,7 +82,32 @@ Alpha constraints you should expect:
 cargo build
 ```
 
-### Run a program (interpreter)
+### Run a program (`run` command)
+
+```bash
+cargo run -p cli -- run tests/simple_test.lrl
+```
+
+For visible `print` side effects, use typed backend:
+
+```bash
+cargo run -p cli -- run tests/hello.lrl --backend typed
+```
+
+Notes:
+
+- `run` defaults to `--backend dynamic`.
+- `--backend typed` for `run` is currently supported for direct `.lrl` file targets.
+- Program entry is a top-level definition (the last deployed `def`), for example:
+
+```lisp
+(def main Text
+  (print "Hello, world!"))
+```
+
+A bare top-level expression like `(print "Hello, world!")` is not used as executable entry.
+
+### Run a program (interpreter shortcut)
 
 ```bash
 cargo run -p cli -- tests/simple_test.lrl

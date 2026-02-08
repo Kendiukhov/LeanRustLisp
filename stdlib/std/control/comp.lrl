@@ -5,13 +5,14 @@
     (pi x A (Comp A)))
   (lam A (sort 1)
     (lam x A
-      (ret A x)))
+      ;; Stage-1 Comp is currently value-erased; keep the surface type stable.
+      (ret A)))
 )
 
 (def comp_bind
   (pi A (sort 1)
     (pi B (sort 1)
       (pi m (Comp A)
-        (pi f (pi x A (Comp B)) (Comp B)))))
+        (pi n (Comp B) (Comp B)))))
   bind
 )

@@ -1,0 +1,5 @@
+;; stdlib user-facing Nat subtraction operator `-` returns Int.
+;; expected: entry = -2
+
+(def entry Int
+  (- 1 3))

@@ -1,0 +1,8 @@
+;; stdlib int_mul/int_div sign handling.
+;; expected: entry = 9
+
+(def entry Nat
+  (int_to_nat
+    (+i
+      (*i -6 -2)
+      (/i -9 (int_from_nat 3)))))

@@ -1,0 +1,2 @@
+;; Shared stdlib control-flow helpers will live here.
+;; Stream A scaffolding file; implementations land in follow-up streams.

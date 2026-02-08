@@ -1,0 +1,130 @@
+;; Shared stdlib Nat algorithms.
+;; Base API definitions such as `add` remain in prelude_api.
+
+;; Saturating predecessor.
+(def nat_pred (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) zero)
+      (case (succ n_prev ih) n_prev)
+    )
+  )
+)
+
+;; Bounded subtraction: underflow clamps to zero.
+(def nat_sub (pi a Nat (pi b Nat Nat))
+  (lam a Nat
+    (lam b Nat
+      (match b Nat
+        (case (zero) a)
+        (case (succ b_prev ih) (nat_pred ih))
+      )
+    )
+  )
+)
+
+;; Multiplication via repeated addition.
+(def nat_mul (pi a Nat (pi b Nat Nat))
+  (lam a Nat
+    (lam b Nat
+      (match a Nat
+        (case (zero) zero)
+        (case (succ a_prev ih) (add b ih))
+      )
+    )
+  )
+)
+
+;; Internal helper used by comparison predicates.
+(def nat_is_zero (pi n Nat Bool)
+  (lam n Nat
+    (match n Bool
+      (case (zero) true)
+      (case (succ n_prev ih) false)
+    )
+  )
+)
+
+;; Ordering/comparison helpers built from bounded subtraction.
+(def nat_le (pi a Nat (pi b Nat Bool))
+  (lam a Nat
+    (lam b Nat
+      (nat_is_zero (nat_sub a b))
+    )
+  )
+)
+
+(def nat_lt (pi a Nat (pi b Nat Bool))
+  (lam a Nat
+    (lam b Nat
+      (nat_is_zero (nat_sub (succ a) b))
+    )
+  )
+)
+
+(def nat_eq (pi a Nat (pi b Nat Bool))
+  (lam a Nat
+    (lam b Nat
+      (match (nat_le a b) Bool
+        (case (true) (nat_le b a))
+        (case (false) false)
+      )
+    )
+  )
+)
+
+(def nat_ge (pi a Nat (pi b Nat Bool))
+  (lam a Nat
+    (lam b Nat
+      (nat_le b a)
+    )
+  )
+)
+
+(def nat_gt (pi a Nat (pi b Nat Bool))
+  (lam a Nat
+    (lam b Nat
+      (nat_lt b a)
+    )
+  )
+)
+
+;; Floor division via repeated subtraction.
+;; Division by zero returns zero.
+(def nat_div (pi a Nat (pi b Nat Nat))
+  (lam a Nat
+    (lam b Nat
+      (match b Nat
+        (case (zero) zero)
+        (case (succ b_prev ih_b)
+          (((match a (pi rem Nat (pi q Nat Nat))
+              (case (zero) (lam rem Nat (lam q Nat q)))
+              (case (succ fuel_prev ih)
+                (lam rem Nat
+                  (lam q Nat
+                    (match (nat_lt rem b) Nat
+                      (case (true) q)
+                      (case (false) ((ih (nat_sub rem b)) (succ q)))
+                    )
+                  )
+                )
+              )
+            ) a) zero)
+        )
+      )
+    )
+  )
+)
+
+;; Symbol aliases for prefix arithmetic syntax.
+(def + (pi a Nat (pi b Nat Nat))
+  add
+)
+
+(def * (pi a Nat (pi b Nat Nat))
+  nat_mul
+)
+
+(def / (pi a Nat (pi b Nat Nat))
+  nat_div
+)

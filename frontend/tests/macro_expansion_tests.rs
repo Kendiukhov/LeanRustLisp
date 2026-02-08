@@ -436,3 +436,62 @@ fn test_macro_expansion_quasiquote_smuggling_denied() {
         .iter()
         .any(|d| d.level == Level::Error && d.message.contains("import classical")));
 }
+
+#[test]
+fn test_direct_quasiquote_smuggling_denied() {
+    let input = "
+    (quasiquote (axiom classical bad (sort 0)))
+    (quasiquote (unsafe foo Nat zero))
+    (quasiquote (import classical))
+    (quasiquote (eval zero))
+    ";
+
+    let mut parser = Parser::new(input);
+    let syntax_list = parser.parse().expect("Failed to parse");
+    let mut expander = Expander::new();
+    expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
+    let mut diagnostics = Vec::new();
+    let mut denied_hits: Vec<Vec<String>> = Vec::new();
+
+    for syntax in syntax_list {
+        match expander.expand(syntax) {
+            Err(ExpansionError::MacroBoundaryDenied { hits, .. }) => {
+                denied_hits.push(hits);
+            }
+            Ok(_) => {}
+            Err(err) => panic!("Unexpected expansion error: {:?}", err),
+        }
+        diagnostics.extend(expander.take_pending_diagnostics());
+    }
+
+    assert_eq!(denied_hits.len(), 4);
+    assert!(denied_hits
+        .iter()
+        .any(|hits| hits.iter().any(|hit| hit == "axiom classical")));
+    assert!(denied_hits
+        .iter()
+        .any(|hits| hits.iter().any(|hit| hit == "unsafe")));
+    assert!(denied_hits
+        .iter()
+        .any(|hits| hits.iter().any(|hit| hit == "import classical")));
+    assert!(denied_hits
+        .iter()
+        .any(|hits| hits.iter().any(|hit| hit == "eval")));
+
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.level == Level::Error
+            && d.message.contains("macro boundary violations are errors")));
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.level == Level::Error && d.message.contains("axiom classical")));
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.level == Level::Error && d.message.contains("unsafe")));
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.level == Level::Error && d.message.contains("import classical")));
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.level == Level::Error && d.message.contains("eval")));
+}

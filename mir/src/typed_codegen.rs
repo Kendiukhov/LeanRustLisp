@@ -440,7 +440,7 @@ impl<'a> CodegenContext<'a> {
                 Ok(())
             }
             Literal::OpaqueConst(_) => Ok(()),
-            Literal::InductiveCtor(ctor, _) => {
+            Literal::InductiveCtor(ctor, _, _) => {
                 used_adts.insert(ctor.adt.clone());
                 Ok(())
             }
@@ -3396,7 +3396,7 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
             Literal::OpaqueConst(reason) => {
                 Ok(self.expr_call_path("LrlOpaque::new", vec![self.expr_lit_str(reason)]))
             }
-            Literal::InductiveCtor(ctor, arity) => {
+            Literal::InductiveCtor(ctor, arity, _) => {
                 let ctor_name = self
                     .ctor_name_map
                     .get(ctor)

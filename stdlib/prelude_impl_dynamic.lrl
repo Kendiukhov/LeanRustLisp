@@ -4,4 +4,10 @@
 ;; Dynamic evaluation boundary (placeholder; no runtime semantics yet).
 (axiom Dyn (sort 1))
 (axiom EvalCap (sort 1))
-(axiom unsafe eval (pi code Dyn (pi cap EvalCap Dyn)))
+
+;; Dynamic backend treats eval as an unsafe opaque runtime boundary.
+(unsafe eval (pi #[once] code Dyn (pi #[once] cap EvalCap Dyn))
+  (lam #[once] code Dyn
+    (lam #[once] cap EvalCap
+      code))
+)

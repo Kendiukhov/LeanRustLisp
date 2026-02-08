@@ -1,0 +1,6 @@
+;; stdlib int_negate/int_abs roundtrip.
+;; expected: entry = 5
+
+(def entry Nat
+  (int_abs
+    (int_negate -5)))

@@ -1,0 +1,77 @@
+;; Shared stdlib Pair APIs.
+
+(inductive copy Pair (pi A (sort 1) (pi B (sort 1) (sort 1)))
+  (ctor mk_pair (pi {A (sort 1)} (pi {B (sort 1)} (pi fst A (pi snd B (Pair A B))))))
+)
+
+(def pair_fst
+  (pi #[once] A (sort 1)
+    (pi #[once] B (sort 1)
+      (pi #[once] p (Pair A B) A)))
+  (lam #[once] A (sort 1)
+    (lam #[once] B (sort 1)
+      (lam #[once] p (Pair A B)
+        (match p A
+          (case (mk_pair fst snd) fst)
+        )
+      )
+    )
+  )
+)
+
+(def pair_snd
+  (pi #[once] A (sort 1)
+    (pi #[once] B (sort 1)
+      (pi #[once] p (Pair A B) B)))
+  (lam #[once] A (sort 1)
+    (lam #[once] B (sort 1)
+      (lam #[once] p (Pair A B)
+        (match p B
+          (case (mk_pair fst snd) snd)
+        )
+      )
+    )
+  )
+)
+
+;; Stage-1: Nat-specialized pair mapping helpers.
+(def pair_map
+  (pi #[once] map_fst (pi #[once] x Nat Nat)
+    (pi #[once] map_snd (pi #[once] y Nat Nat)
+      (pi #[once] p (Pair Nat Nat) (Pair Nat Nat))))
+  (lam #[once] map_fst (pi #[once] x Nat Nat)
+    (lam #[once] map_snd (pi #[once] y Nat Nat)
+      (lam #[once] p (Pair Nat Nat)
+        (match p (Pair Nat Nat)
+          (case (mk_pair fst snd)
+            (mk_pair {Nat} {Nat} (map_fst fst) (map_snd snd))
+          )
+        )
+      )
+    )
+  )
+)
+
+(def pair_map_fst
+  (pi #[once] map_fst (pi #[once] x Nat Nat)
+    (pi #[once] p (Pair Nat Nat) (Pair Nat Nat)))
+  (lam #[once] map_fst (pi #[once] x Nat Nat)
+    (lam #[once] p (Pair Nat Nat)
+      (pair_map map_fst
+        (lam #[once] y Nat y)
+        p)
+    )
+  )
+)
+
+(def pair_map_snd
+  (pi #[once] map_snd (pi #[once] y Nat Nat)
+    (pi #[once] p (Pair Nat Nat) (Pair Nat Nat)))
+  (lam #[once] map_snd (pi #[once] y Nat Nat)
+    (lam #[once] p (Pair Nat Nat)
+      (pair_map (lam #[once] x Nat x)
+        map_snd
+        p)
+    )
+  )
+)

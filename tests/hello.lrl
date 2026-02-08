@@ -1,0 +1,3 @@
+(def entry Text
+  (print "Hello, world!"))
+

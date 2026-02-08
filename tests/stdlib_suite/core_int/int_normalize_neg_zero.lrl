@@ -1,0 +1,6 @@
+;; stdlib int_normalize maps negative zero to positive zero.
+;; expected: entry = 0
+
+(def entry Nat
+  (int_to_nat
+    (int_normalize (int_neg zero))))

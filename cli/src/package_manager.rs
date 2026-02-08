@@ -286,6 +286,57 @@ pub fn run_workspace_file(file: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn run_workspace_file_codegen(
+    file: &Path,
+    compile_options: compiler::CompileOptions,
+) -> Result<()> {
+    let path = file
+        .to_str()
+        .ok_or_else(|| anyhow!("file path '{}' is not valid UTF-8", file.display()))?;
+
+    let build_dir = PathBuf::from("build");
+    fs::create_dir_all(&build_dir)
+        .with_context(|| format!("failed to create build directory '{}'", build_dir.display()))?;
+
+    let unique_tag = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let binary_name = format!(
+        "run_{}_{}{}",
+        std::process::id(),
+        unique_tag,
+        std::env::consts::EXE_SUFFIX
+    );
+    let binary_path = build_dir.join(binary_name);
+    let binary_path_str = binary_path.to_string_lossy().to_string();
+
+    compiler::compile_file(path, Some(binary_path_str.clone()), compile_options);
+    if !binary_path.exists() {
+        bail!(
+            "failed to compile '{}' for native execution",
+            file.display()
+        );
+    }
+
+    let status = Command::new(&binary_path).status().with_context(|| {
+        format!(
+            "failed to execute compiled binary '{}'",
+            binary_path.display()
+        )
+    })?;
+    if !status.success() {
+        bail!(
+            "compiled program '{}' exited with status {}",
+            file.display(),
+            status
+        );
+    }
+
+    let _ = fs::remove_file(&binary_path);
+    Ok(())
+}
+
 pub fn run_workspace_tests(cwd: &Path) -> Result<()> {
     let status = Command::new("cargo")
         .arg("test")

@@ -1,0 +1,8 @@
+;; stdlib int_div truncates toward zero.
+;; expected: entry = 1
+
+(def entry Nat
+  (int_to_nat
+    (+i
+      (/i -7 (int_from_nat 3))
+      (int_from_nat 3))))

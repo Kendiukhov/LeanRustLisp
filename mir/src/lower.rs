@@ -2521,8 +2521,15 @@ impl<'a> LoweringContext<'a> {
                     .ctor_arity(&ctor_id)
                     .or_else(|| self.get_ctor_arity(name, *idx))
                     .unwrap_or(0);
+                let runtime_arity = self
+                    .ids
+                    .adt_layouts()
+                    .get(&ctor_id.adt)
+                    .and_then(|layout| layout.variants.get(*idx))
+                    .map(|variant| variant.fields.len())
+                    .unwrap_or(arity);
                 let constant = Constant {
-                    literal: Literal::InductiveCtor(ctor_id, arity),
+                    literal: Literal::InductiveCtor(ctor_id, arity, runtime_arity),
                     ty: MirType::Unit,
                 };
                 self.push_statement(Statement::Assign(

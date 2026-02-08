@@ -790,6 +790,15 @@ impl Expander {
             return Ok(());
         }
 
+        self.report_macro_boundary_violation(macro_name, call_site, &hits)
+    }
+
+    fn report_macro_boundary_violation(
+        &mut self,
+        macro_name: &str,
+        call_site: Span,
+        hits: &BTreeSet<MacroBoundaryKind>,
+    ) -> Result<(), ExpansionError> {
         let labels: Vec<&'static str> = hits.iter().map(|hit| hit.label()).collect();
 
         let mut message = format!(
@@ -1313,7 +1322,20 @@ impl Expander {
                         if limit == ExpansionLimit::SingleStep {
                             return Ok(Some(syntax.clone()));
                         }
-                        return self.expand_quasiquote_internal(&list[1], limit, state, depth);
+                        let expanded =
+                            self.expand_quasiquote_internal(&list[1], limit, state, depth)?;
+                        if let Some(expanded_syntax) = expanded.as_ref() {
+                            let mut hits = BTreeSet::new();
+                            Self::collect_macro_boundary_hits(expanded_syntax, &mut hits);
+                            if !hits.is_empty() {
+                                self.report_macro_boundary_violation(
+                                    "quasiquote",
+                                    syntax.span,
+                                    &hits,
+                                )?;
+                            }
+                        }
+                        return Ok(expanded);
                     }
 
                     if s == "defmacro" {

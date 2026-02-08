@@ -2028,37 +2028,29 @@ impl<'a> NllChecker<'a> {
 
     fn statement_uses_local(&self, stmt: &Statement, local: Local) -> bool {
         match stmt {
-            Statement::Assign(dest, rvalue) => {
-                if dest.local == local {
-                    return true;
-                }
-                match rvalue {
-                    Rvalue::Use(op) => Self::operand_uses_local(op, local),
-                    Rvalue::Ref(_, place) => place.local == local,
-                    Rvalue::Discriminant(place) => place.local == local,
-                }
-            }
+            // Runtime checks must guard reads, not write destinations. Treating a
+            // destination local as a "use" injects checks before initialization.
+            Statement::Assign(_, rvalue) => match rvalue {
+                Rvalue::Use(op) => Self::operand_uses_local(op, local),
+                Rvalue::Ref(_, place) => place.local == local,
+                Rvalue::Discriminant(place) => place.local == local,
+            },
             Statement::RuntimeCheck(_) => false,
-            Statement::StorageLive(l) | Statement::StorageDead(l) => *l == local,
+            Statement::StorageLive(_) | Statement::StorageDead(_) => false,
             Statement::Nop => false,
         }
     }
 
     fn terminator_uses_local(&self, term: &Terminator, local: Local) -> bool {
         match term {
-            Terminator::Call {
-                func,
-                args,
-                destination,
-                ..
-            } => {
+            Terminator::Call { func, args, .. } => {
                 if self.call_operand_uses_local(func, local) {
                     return true;
                 }
                 if args.iter().any(|arg| Self::operand_uses_local(arg, local)) {
                     return true;
                 }
-                destination.local == local
+                false
             }
             Terminator::SwitchInt { discr, .. } => Self::operand_uses_local(discr, local),
             _ => false,
@@ -2309,13 +2301,20 @@ mod tests {
         ));
 
         body.basic_blocks.push(BasicBlockData {
-            statements: vec![Statement::Assign(
-                Place::from(Local(1)),
-                Rvalue::Use(Operand::Constant(Box::new(Constant {
-                    literal: Literal::Nat(0),
-                    ty: MirType::InteriorMutable(Box::new(MirType::Nat), IMKind::RefCell),
-                }))),
-            )],
+            statements: vec![
+                Statement::Assign(
+                    Place::from(Local(1)),
+                    Rvalue::Use(Operand::Constant(Box::new(Constant {
+                        literal: Literal::Nat(0),
+                        ty: MirType::InteriorMutable(Box::new(MirType::Nat), IMKind::RefCell),
+                    }))),
+                ),
+                // Explicit read use; runtime checks are only injected for reads.
+                Statement::Assign(
+                    Place::from(Local(0)),
+                    Rvalue::Use(Operand::Copy(Place::from(Local(1)))),
+                ),
+            ],
             terminator: Some(Terminator::Return),
         });
 
@@ -2345,13 +2344,20 @@ mod tests {
         ));
 
         body.basic_blocks.push(BasicBlockData {
-            statements: vec![Statement::Assign(
-                Place::from(Local(1)),
-                Rvalue::Use(Operand::Constant(Box::new(Constant {
-                    literal: Literal::Nat(0),
-                    ty: MirType::InteriorMutable(Box::new(MirType::Nat), IMKind::RefCell),
-                }))),
-            )],
+            statements: vec![
+                Statement::Assign(
+                    Place::from(Local(1)),
+                    Rvalue::Use(Operand::Constant(Box::new(Constant {
+                        literal: Literal::Nat(0),
+                        ty: MirType::InteriorMutable(Box::new(MirType::Nat), IMKind::RefCell),
+                    }))),
+                ),
+                // Explicit read use; runtime checks are only injected for reads.
+                Statement::Assign(
+                    Place::from(Local(0)),
+                    Rvalue::Use(Operand::Copy(Place::from(Local(1)))),
+                ),
+            ],
             terminator: Some(Terminator::Return),
         });
 
@@ -2363,7 +2369,7 @@ mod tests {
 
         assert!(
             matches!(
-                body_with_checks.basic_blocks[0].statements[0],
+                body_with_checks.basic_blocks[0].statements[1],
                 Statement::RuntimeCheck(RuntimeCheckKind::RefCellBorrow { .. })
             ),
             "Expected runtime check to be injected before the use site"

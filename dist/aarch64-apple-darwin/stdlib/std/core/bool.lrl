@@ -1,0 +1,53 @@
+;; Shared stdlib Bool algorithms.
+;; Base API definitions such as `not`, `if_nat`, `and`, and `or`
+;; remain in prelude_api.
+
+;; Bool-specialized branch helper.
+(def if_bool (pi c Bool (pi t Bool (pi f Bool Bool)))
+  (lam c Bool
+    (lam t Bool
+      (lam f Bool
+        (match c Bool
+          (case (true) t)
+          (case (false) f)
+        )
+      )
+    )
+  )
+)
+
+;; Exclusive-or.
+(def xor (pi a Bool (pi b Bool Bool))
+  (lam a Bool
+    (lam b Bool
+      (match a Bool
+        (case (true) (not b))
+        (case (false) b)
+      )
+    )
+  )
+)
+
+;; Logical implication: a -> b.
+(def implies (pi a Bool (pi b Bool Bool))
+  (lam a Bool
+    (lam b Bool
+      (match a Bool
+        (case (true) b)
+        (case (false) true)
+      )
+    )
+  )
+)
+
+;; Equality over Bool values.
+(def bool_eq (pi a Bool (pi b Bool Bool))
+  (lam a Bool
+    (lam b Bool
+      (match a Bool
+        (case (true) b)
+        (case (false) (not b))
+      )
+    )
+  )
+)
