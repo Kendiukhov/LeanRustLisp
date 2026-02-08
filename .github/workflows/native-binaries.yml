@@ -23,7 +23,24 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
+      - name: Checkout (Windows sparse)
+        if: runner.os == 'Windows'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            Cargo.toml
+            Cargo.lock
+            .cargo
+            cli
+            frontend
+            kernel
+            mir
+            codegen
+            stdlib
+          sparse-checkout-cone-mode: false
+
       - name: Checkout
+        if: runner.os != 'Windows'
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
