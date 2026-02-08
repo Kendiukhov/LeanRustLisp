@@ -1,0 +1,96 @@
+name: Native Binary Packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-native:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Build release CLI
+        run: cargo build -p cli --release
+
+      - name: Package binary + stdlib
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_TRIPLE="$(rustc -vV | awk '/^host: /{print $2}')"
+          BIN_NAME="cli"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            BIN_NAME="cli.exe"
+          fi
+
+          PACKAGE_ROOT="dist/${TARGET_TRIPLE}"
+          mkdir -p "${PACKAGE_ROOT}"
+          cp "${CARGO_TARGET_DIR}/release/${BIN_NAME}" "${PACKAGE_ROOT}/${BIN_NAME}"
+          cp -R stdlib "${PACKAGE_ROOT}/stdlib"
+          printf '%s\n' "${TARGET_TRIPLE}" > "${PACKAGE_ROOT}/TARGET"
+
+          echo "target_triple=${TARGET_TRIPLE}" >> "${GITHUB_OUTPUT}"
+          echo "package_root=${PACKAGE_ROOT}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: leanrustlisp-${{ steps.package.outputs.target_triple }}
+          path: ${{ steps.package.outputs.package_root }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release-assets:
+    name: Publish Release Assets
+    runs-on: ubuntu-latest
+    needs: build-native
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download matrix artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Archive per-target bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-bundles
+          for artifact_dir in release-assets/*; do
+            artifact_name="$(basename "${artifact_dir}")"
+            tar -C "${artifact_dir}" -czf "release-bundles/${artifact_name}.tar.gz" .
+          done
+          ls -la release-bundles
+
+      - name: Upload bundles to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-bundles/*.tar.gz

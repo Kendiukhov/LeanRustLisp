@@ -76,6 +76,35 @@ cd dist/aarch64-apple-darwin
 
 If you use `compile` or `compile-mir` from that binary, `rustc` must be installed because those commands invoke Rust compilation.
 
+### CI native binary packages (Linux/Windows/macOS)
+
+GitHub Actions now builds native release binaries with a matrix on:
+
+- `ubuntu-latest`
+- `windows-latest`
+- `macos-latest`
+
+Workflow file:
+
+- `.github/workflows/native-binaries.yml`
+
+How to trigger:
+
+- Manual run: GitHub -> Actions -> `Native Binary Packages` -> `Run workflow`
+- Release-tag run:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Where binaries are published:
+
+- Manual runs: workflow artifacts named `leanrustlisp-<target-triple>`
+- Tag runs: GitHub Release assets (`*.tar.gz` bundles per target)
+
+Windows package note: executable name is `cli.exe`; Linux/macOS use `cli`.
+
 ### Build
 
 ```bash
