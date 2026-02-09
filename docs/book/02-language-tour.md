@@ -7,13 +7,13 @@ This chapter takes you through a whirlwind tour of LRL's core features.
 LRL uses inductive types to define data structures. Here is the classic definition of natural numbers.
 
 ```lisp
-(inductive Nat (Type 0)
-  (zero Nat)
-  (succ (-> Nat Nat)))
+(inductive Nat (sort 1)
+  (ctor zero Nat)
+  (ctor succ (pi n Nat Nat)))
 ```
 
 - `Nat` is the type name.
-- `(Type 0)` is its universe (like `Set` in Coq or `Type` in Lean).
+- `(sort 1)` is its universe.
 - `zero` is a constructor that is a `Nat`.
 - `succ` is a constructor that takes a `Nat` and returns a `Nat`.
 
@@ -24,8 +24,9 @@ We can define functions using `def` and `lam` (lambda).
 ```lisp
 (def one Nat (succ zero))
 
-(def inc (-> Nat Nat)
-  (lam n Nat (succ n)))
+(def inc (pi n Nat Nat)
+  (lam n Nat
+    (succ n)))
 ```
 
 ## 3. Pattern Matching
@@ -33,11 +34,11 @@ We can define functions using `def` and `lam` (lambda).
 We use `match` to deconstruct inductive types.
 
 ```lisp
-(def is-zero (-> Nat Bool)
+(def is-zero (pi n Nat Bool)
   (lam n Nat
-    (match n
-      (zero true)
-      (succ _ false))))
+    (match n Bool
+      (case (zero) true)
+      (case (succ m ih) false))))
 ```
 
 *Note: `Bool`, `true`, and `false` are defined in the standard prelude.*
@@ -56,28 +57,54 @@ You can evaluate expressions in the REPL or at the top level of a file (which pr
 
 ## 5. Macro Expansion
 
-Macros allow you to extend the syntax. Let's define a simple macro that doubles a number.
+Macros allow you to extend syntax at compile time. A simple example:
 
 ```lisp
-(defmacro double (x)
-  (list 'add x x))
+(defmacro plus_two (x)
+  (quasiquote (add (unquote x) (succ (succ zero)))))
 
-(double 5)
-;; Expands to: (add 5 5)
-;; Evaluates to: 10
+(def x Nat (succ zero))
+(def y Nat (plus_two x))
+;; Expands to: (add x (succ (succ zero)))
 ```
 
 Macros operate on syntax objects (`x` is syntax) and return new syntax.
 
 ## 6. Dependent Types
 
-LRL is dependently typed, meaning types can depend on values.
+LRL is dependently typed: types can mention values. `Eq` in the prelude is a simple indexed family.
 
 ```lisp
-;; A vector of length n
-(inductive Vec (-> (Type 0) Nat (Type 0))
-  (nil (Vec A zero))
-  (cons (-> A (Vec A n) (Vec A (succ n)))))
+(def zero-is-zero (Eq Nat zero zero)
+  (refl Nat zero))
 ```
 
-The type of `cons` ensures that if you add an element to a vector of length `n`, you get a vector of length `n+1`. The compiler enforces this at compile time.
+## 7. Positive Properties at a Glance
+
+This small group of definitions shows three useful guarantees.
+
+```lisp
+;; 1) Total structural recursion.
+(def nat-pred (pi n Nat Nat)
+  (lam n Nat
+    (match n Nat
+      (case (zero) zero)
+      (case (succ n-prev ih) n-prev))))
+
+;; 2) Hygienic macro expansion (no accidental capture).
+(defmacro m1 (body) (lam x Nat body))
+(def y0 Nat 10)
+(def still-y0 Nat (app (m1 y0) 99)) ;; evaluates to 10
+
+;; 3) Proof-carrying API: proof is checked statically.
+(def with-self-eq
+  (pi n Nat (pi p (Eq Nat n n) Nat))
+  (lam n Nat
+    (lam p (Eq Nat n n)
+      n)))
+
+(def checked-one Nat
+  (with-self-eq (succ zero) (refl Nat (succ zero))))
+```
+
+The compiler checks each property (termination shape, hygiene, and proof typing) before runtime.

@@ -7,28 +7,40 @@ LRL follows the Curry-Howard correspondence: **Propositions are Types** and **Pr
 To prove a statement `P`, you define a type `P` and construct a term `t : P`.
 
 ```lisp
-;; A proposition that 0 = 0
+;; Proposition: 0 = 0
 (def zero-is-zero (Eq Nat zero zero)
   (refl Nat zero))
 ```
 
-## Proof Erasure
+## Checked Proof Arguments
 
-All types in `Prop` are erased at runtime. This means your extensive proofs about vector bounds checks cost **zero runtime overhead**.
-
-## A Simple Proof
-
-(Example assumes `Vec` and `append` are defined)
+You can require proofs in APIs:
 
 ```lisp
-;; Lemma: appending nil to a vector yields the same vector
-(def append-nil-lemma
-  (pi (n Nat) (v (Vec Nat n))
-      (Eq (Vec Nat n) (append v nil) v))
+(def with-self-eq
+  (pi n Nat (pi p (Eq Nat n n) Nat))
   (lam n Nat
-    (lam v (Vec Nat n)
-       ;; Proof body would go here
-       (refl (Vec Nat n) v))))
+    (lam p (Eq Nat n n)
+      n)))
+
+(def one Nat (succ zero))
+(def one-is-one (Eq Nat one one)
+  (refl Nat one))
+
+(def checked-one Nat
+  (with-self-eq one one-is-one))
 ```
 
-*Note: Tactics are planned but not yet implemented. Currently, proofs are written as explicit terms.*
+`checked-one` only exists if the proof term type-checks.
+
+## Proof Erasure
+
+Terms in `Prop` are erased at runtime. In practice, this means proof-heavy APIs can compile down to the same runtime behavior as proof-free equivalents.
+
+## Why This Is Useful
+
+- You can enforce invariants statically.
+- You avoid runtime checks for those invariants when they are proven.
+- You keep runtime code lean while still carrying strong compile-time guarantees.
+
+*Note: tactics are planned but not yet implemented. Today, proofs are written as explicit terms.*

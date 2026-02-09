@@ -17,6 +17,28 @@ With a core calculus based on the Calculus of Inductive Constructions (CIC), LRL
 ### Extensibility
 The "Lisp" in the name isn't just about parentheses. It's about the philosophy that the language should be programmable. Macros allow you to define new syntactic forms that desugar into core concepts, making the language adaptable to your domain.
 
+## Three Small Examples
+
+```lisp
+;; 1) Correctness: proof checked by type checker.
+(def zero-is-zero (Eq Nat zero zero)
+  (refl Nat zero))
+
+;; 2) Resource discipline: borrowing is explicit.
+(noncomputable shared-borrow (pi x Nat Nat)
+  (lam x Nat
+    (let r (Ref #[r] Shared Nat) (& x)
+      x)))
+
+;; 3) Extensibility: syntax transformation via macro.
+(defmacro mk-inc (v)
+  (quasiquote (add (unquote v) (succ zero))))
+
+(def demo Nat (mk-inc (succ zero)))
+```
+
+These examples illustrate a recurring theme in LRL: strong static guarantees with straightforward runtime behavior.
+
 ## What LRL is NOT
 
 - **A Dynamic Scripting Language**: While it looks like Lisp, it is statically typed and compiled.
