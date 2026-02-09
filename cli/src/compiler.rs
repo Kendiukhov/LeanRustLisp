@@ -495,12 +495,6 @@ fn compile_with_mir(
 
     for name in names {
         if let Some(def) = env.definitions().get(&name) {
-            // Skip canonical constructor declarations, but keep ordinary definitions
-            // whose normalized value happens to be a constructor.
-            if !env.constructor_candidates(&name).is_empty() {
-                continue;
-            }
-
             if def.value.is_none() {
                 if def.totality == kernel::ast::Totality::Axiom {
                     if is_builtin_nonexecutable_axiom(&name) {
@@ -1191,9 +1185,6 @@ pub fn compile_string_with_prelude(source: &str, prelude: Option<&str>) -> Vec<D
             let mut borrow_errors = Vec::new();
 
             if let Some(def) = env.definitions().get(&name) {
-                if !env.constructor_candidates(&name).is_empty() {
-                    continue;
-                }
                 if let Some(val) = &def.value {
                     // Lower and Check
                     let mut ctx = match mir::lower::LoweringContext::new_with_metadata(

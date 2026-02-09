@@ -84,8 +84,10 @@ attaching it to `Rec` together with the inductive's universe parameters.
 
 **Invariants:**
 - Borrow and ownership checks are applied before codegen.
-- The production pipeline must run MIR typing + NLL for **all** definitions and
-  derived closure bodies (this is a release-bar invariant).
+- The production pipeline must run MIR typing + NLL for top-level user-defined
+  bodies and derived closure bodies (this is a release-bar invariant).
+- Canonical constructor aliases are excluded: constructors are resolved from
+  inductive metadata as constructor values, not admitted as ordinary definitions.
 - `Prop` terms are erased before codegen (no runtime dependence on proofs).
 
 ## 6. Failure Policy

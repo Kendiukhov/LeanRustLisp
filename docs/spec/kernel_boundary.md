@@ -76,8 +76,10 @@ These components verify properties or transform code, but their correctness is n
     but enforces the safety contract for `borrow_shared`/`borrow_mut` in compiled code. It also
     enforces function-call borrow semantics: `Fn` calls take a shared borrow of the closure
     environment, `FnMut` calls take a mutable borrow, and `FnOnce` calls consume the closure.
-    **Release-bar invariant:** the production pipeline must run MIR typing + NLL for *all* top-level
-    definitions and derived closure bodies.
+    **Release-bar invariant:** the production pipeline must run MIR typing + NLL for top-level
+    user-defined bodies and derived closure bodies. Canonical constructor aliases are excluded:
+    constructors are resolved as constructor values from inductive metadata and are not admitted
+    as ordinary kernel definitions.
 
 ## 3. Interaction
 

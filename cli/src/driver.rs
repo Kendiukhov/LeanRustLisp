@@ -1771,9 +1771,7 @@ pub fn process_code(
 
                 // Constructors
                 let mut kernel_ctors = Vec::new();
-                let mut ctor_spans = Vec::new();
                 for (cname, cty) in ctors {
-                    let ctor_span = cty.span;
                     let mut elab_c = new_elaborator_with_resolution(env, &resolution);
                     let (cty_core, _) = match elab_c.infer_type(cty) {
                         Ok((t, _)) => (elab_c.instantiate_metas(&t), ()),
@@ -1793,7 +1791,6 @@ pub fn process_code(
                         name: cname,
                         ty: cty_core,
                     });
-                    ctor_spans.push(ctor_span);
                 }
 
                 // Final Register
@@ -1829,40 +1826,9 @@ pub fn process_code(
                     report_inductive_axiom_dependencies(env, decl, expander, diagnostics);
                 }
 
-                // Register constructors as definitions (for backend visibility).
-                // If multiple inductives share a constructor name, skip duplicate alias
-                // registration so elaboration can surface deterministic ambiguity diagnostics.
-                let constructor_is_axiom_dependent = env
-                    .get_inductive(&name)
-                    .map(|decl| !decl.axioms.is_empty())
-                    .unwrap_or(false);
-                for (i, ctor) in kernel_ctors.iter().enumerate() {
-                    let val = Rc::new(Term::Ctor(name.clone(), i, vec![]));
-                    let ctor_alias =
-                        qualify_decl_name(resolution.current_module.as_deref(), &ctor.name);
-                    let mut def =
-                        Definition::total(ctor_alias.clone(), ctor.ty.clone(), val.clone());
-                    if constructor_is_axiom_dependent {
-                        def.noncomputable = true;
-                    }
-                    if let Err(e) = env.add_definition(def) {
-                        if matches!(&e, kernel::checker::TypeError::DefinitionAlreadyExists(existing) if existing == &ctor_alias)
-                            && env.constructor_candidates(&ctor.name).len() > 1
-                        {
-                            continue;
-                        }
-                        let span = ctor_spans.get(i).copied();
-                        handle_diagnostic(
-                            diagnostics,
-                            expander,
-                            diagnostic_from_kernel_error(
-                                &format!("Error registering constructor '{}'", ctor_alias),
-                                &e,
-                                span,
-                            ),
-                        );
-                    }
-                }
+                // Constructor aliases are resolved via constructor metadata, not
+                // admitted as ordinary definitions. This keeps MIR/NLL release-bar
+                // checks focused on user-authored definition bodies.
 
                 if options.verbose || options.show_types {
                     println!("Defined inductive {}", name);
