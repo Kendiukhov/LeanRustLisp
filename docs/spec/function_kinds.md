@@ -88,6 +88,14 @@ Example (return tied to the first argument):
 Elision rule (Rust‑style): if a signature contains exactly one distinct
 reference lifetime among its inputs, unlabeled return references are assigned
 that lifetime. Otherwise, return references must be explicitly labeled.
+A *signature* is a complete chain of `pi`s (all the arguments of a curried
+function type, up to its final result); the rule is checked once per chain, not
+for each curried suffix. Each unlabeled input reference counts as a lifetime of
+its own. So `(pi a (Ref Shared Nat) (pi n Nat (Ref Shared Nat)))` (one input
+lifetime, the reference first) is accepted like `(pi n Nat (pi a (Ref Shared Nat)
+(Ref Shared Nat)))`, while two unlabeled input references, or none, with an
+unlabeled result are rejected (`F0208` in the elaborator, `K0045` in the kernel).
+A `pi` appearing as an argument type or inside the result is a signature of its own.
 
 **Elision as sugar:** An elided label is treated as a fresh implicit label
 variable during elaboration. If an expected type provides an explicit label,
@@ -111,13 +119,32 @@ to `Pi^FnOnce`; coercions must be explicit or inserted by elaboration.
 
 ## 4. Capture Inference
 
-The elaborator infers the **minimal** required kind from free-variable usage
-inside a lambda. Each captured variable is classified by capture mode:
+The kind describes how a closure uses its **captured environment** (the
+variables bound outside the lambda), not how it uses its own argument: a
+lambda that consumes its own parameter can still be `Fn`.
 
-- **By shared borrow**: only read; no mutation or move.
-- **By mutable borrow**: mutated or requires `&mut` access.
-- **By move**: consumed, moved out, or stored in a non-Copy position.
-- **By copy**: moved in a position where the value is Copy (treated as read).
+The required kind of `λx. body` is computed from the *uses* of the variables
+free in `body` (`kernel::checker::term_variable_uses`, rules in
+`docs/spec/ownership_model.md` §6.2). Each use is a read, a mutable use or a
+move:
+
+- occurrences in **erased positions** — types, proofs, motives, recursor
+  parameters and indices, type arguments, proof arguments — are reads (they
+  never raise the kind);
+- calling an `Fn` / `FnMut` / `FnOnce` function variable is a read / mutable
+  use / move of it;
+- `borrow_shared x` (`& x`) reads `x`; `borrow_mut x` (`&mut x`) uses `x`
+  mutably;
+- any other runtime occurrence (argument, constructor field, result) is a move;
+- inside a nested lambda of kind `k`, a use counts as at most `k`'s capture
+  mode (`Fn`: read, `FnMut`: mutable use, `FnOnce`: move).
+
+Each captured variable is then classified by capture mode:
+
+- **By copy / shared borrow** (read): its type is Copy, or it is only read.
+- **By mutable borrow**: it is not Copy and is used mutably (or it is a
+  `Ref Mut` value that is passed on, i.e. reborrowed).
+- **By move**: it is not Copy and is moved.
 
 Kind inference rule (take the maximum over captures):
 
@@ -127,10 +154,13 @@ Kind inference rule (take the maximum over captures):
 
 An explicit annotation must be **at least** the inferred kind
 (annotating with a more permissive kind is allowed; annotating with a smaller
-kind is an error).
+kind is an error: `F0207` for a lambda's own annotation, `F0206` when the
+lambda is checked against a `pi` of a smaller kind).
 
-Inference occurs in elaboration; the kernel validates the resulting kind
-annotations and rejects mismatches.
+The elaborator, the kernel re-check (`K0043`) and MIR lowering (required
+capture modes) all use this one analysis, so they agree on every kind. (The
+elaborator falls back to a syntactic approximation only for a body the kernel
+cannot type yet, e.g. one with unsolved metavariables.)
 
 ### 4.1 Implicit binders are observational-only
 
@@ -216,53 +246,70 @@ annotation; removing it should still infer the same kind.
 
 ### 9.2 Inferred `FnOnce` (move capture)
 
+The captured value must be non-Copy for the capture to be a move. (A type
+whose fields are all Copy, such as `Box Nat` with
+`(inductive Box (pi A (sort 1) (sort 1)) (ctor mk_box (pi {A (sort 1)} (pi x A (Box A)))))`,
+derives Copy, so capturing it is a copy and the closure is `Fn`.) The
+`affine` marker makes a type non-Copy:
+
 ```lisp
-(inductive Box (pi A (sort 1) (sort 1))
-  (ctor mk_box (pi {A (sort 1)} (pi x A (Box A)))))
+(inductive (affine) Ticket (sort 1)
+  (ctor mk_ticket (pi id Nat Ticket)))
 
 (def make_once
-  (pi b (Box Nat) (pi #[once] _ Nat (Box Nat)))
-  (lam b (Box Nat)
-    ;; Captures `b` by move => inferred FnOnce (even if not annotated).
-    (lam #[once] _ Nat b)))
+  (pi t Ticket (pi #[once] _ Nat Ticket))
+  (lam t Ticket
+    ;; Captures the affine `t` by move => inferred FnOnce (even if not annotated).
+    (lam _ Nat t)))
 ```
 
 ### 9.3 Inferred `FnMut` (mutable capture)
 
 ```lisp
-;; Assume a primitive that mutates a mutable reference.
-(axiom unsafe set_ref
-  (pi {A (sort 1)} (pi r (Ref Mut A) (pi v A Nat))))
+(def step_twice
+  (pi g (pi #[mut] x Nat Nat) (pi #[mut] n Nat Nat))
+  (lam g (pi #[mut] x Nat Nat)
+    ;; Calls the captured FnMut function `g` (a mutable use of `g`) => inferred FnMut.
+    (lam #[mut] n Nat (g (g n)))))
 
-(def make_counter
-  (pi r (Ref Mut Nat) (pi #[mut] _ Nat Nat))
-  (lam r (Ref Mut Nat)
-    ;; Mutates through `r` => inferred FnMut.
-    (lam #[mut] _ Nat (set_ref r zero))))
+(def step_twice_bad
+  (pi g (pi #[mut] x Nat Nat) (pi n Nat Nat))
+  (lam g (pi #[mut] x Nat Nat)
+    ;; ERROR (F0206): requires FnMut, the expected type says Fn.
+    (lam n Nat (g (g n)))))
 ```
 
 ### 9.4 Explicit Kind Too Small (error)
 
 ```lisp
+(inductive (affine) Ticket (sort 1)
+  (ctor mk_ticket (pi id Nat Ticket)))
+
 (def bad_kind
-  (pi b (Box Nat) (pi #[fn] _ Nat (Box Nat)))
-  (lam b (Box Nat)
-    ;; ERROR: inferred FnOnce, annotated as Fn.
-    (lam #[fn] _ Nat b)))
+  (pi t Ticket (pi #[fn] _ Nat Ticket))
+  (lam t Ticket
+    ;; ERROR (F0207): inferred FnOnce, annotated as Fn.
+    (lam #[fn] _ Nat t)))
 ```
 
 ### 9.5 Coercion: `Fn` to `FnOnce`
 
 ```lisp
 (def apply_once
-  (pi f (pi #[once] x Nat Nat) (pi v Nat Nat))
+  (pi f (pi #[once] x Nat Nat) (pi #[once] v Nat Nat))
   (lam f (pi #[once] x Nat Nat)
-    (lam v Nat (f v))))
+    ;; The inner closure captures `f` and calls it; an FnOnce call consumes `f`,
+    ;; so the inner closure is itself FnOnce (with `(pi v Nat Nat)` here the
+    ;; definition is rejected: F0206, expected Fn, got FnOnce).
+    (lam #[once] v Nat (f v))))
 
 (def add_one
   (pi #[fn] x Nat Nat)
   (lam x Nat (succ x)))
 
-;; Should coerce `add_one : Fn` into `FnOnce`.
+;; Coerces `add_one : Fn` into `FnOnce` at the call.
 (def test_coercion Nat (apply_once add_one zero))
 ```
+
+The programs of §9.1–§9.5 are checked by `cli/tests/ownership_soundness.rs`
+(`function_kinds_spec_examples`).

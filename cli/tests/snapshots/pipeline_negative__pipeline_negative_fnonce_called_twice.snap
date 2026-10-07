@@ -4,4 +4,4 @@ expression: output
 ---
 Status: Ok
 Diagnostics:
-- Error: [K0021] Environment error defining 'dup_fnonce': OwnershipError(UseAfterMove(1))
+- Error: [K0021] Environment error defining 'dup_fnonce': Ownership violation [UseAfterMove]: variable 'f' is used after it was moved

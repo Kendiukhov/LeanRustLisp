@@ -1,0 +1,200 @@
+;; Case study A: length-indexed vectors with kernel-checked proofs.
+;;
+;; A complete program (no elided bodies): the vector type, total operations whose types carry the
+;; length, and proofs about them that are checked by the kernel like every other definition.
+;; The theorem `vreverse_involutive` states  vreverse (vreverse v) = v  for every element type A,
+;; length n and vector v.
+;;
+;; Run from the repository root (see case_studies/lrl/README.md for the recorded outputs):
+;;   lrl run case_studies/lrl/vectors.lrl                                  (check everything)
+;;   lrl compile case_studies/lrl/vectors.lrl --backend typed -o vectors    (then ./vectors)
+;;   lrl compile case_studies/lrl/vectors.lrl --backend dynamic -o vectors
+;;
+;; Implicit arguments ({A}, {n}) are inferred everywhere. `vtail` is defined through a split of the
+;; vector; the note above `VSplit` below says why (more in README.md, section A).
+
+;; ---------------------------------------------------------------------------------------------
+;; 1. Data
+;; ---------------------------------------------------------------------------------------------
+
+(inductive Unit (sort 1) (ctor unit Unit))
+
+;; Vec A n: vectors of exactly n elements of type A. The length n is an index.
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+;; min 1 k (used by vtail below); `nat_pred` (saturating predecessor) comes from the stdlib.
+(def min1 (pi k Nat Nat)
+  (lam k Nat (match k Nat (case (zero) zero) (case (succ j ih) 1))))
+
+;; ---------------------------------------------------------------------------------------------
+;; 2. Total operations
+;; ---------------------------------------------------------------------------------------------
+
+;; Head of a non-empty vector: no run-time check and no default value. The motive computes the
+;; result type from the length: Unit for length zero, A for a successor. The argument has type
+;; Vec A (succ n), so the motive is A at the result; the vnil case is checked against Unit and
+;; returns `unit` (the type makes it unreachable).
+(def vhead (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A (succ n)) A)))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A (succ n))
+    (match v (motive (lam k Nat (lam w (Vec A k)
+                       (match k (sort 1) (case (zero) Unit) (case (succ k1 ih) A)))))
+      (case (vnil) unit)
+      (case (vcons h t ih) h))))))
+
+;; Tail of a non-empty vector, for any element type A.
+;; Note: the direct definition (motive Vec A (nat_pred k), cons case returning the tail t) is
+;; rejected by the kernel for a generic A: the recursor computes the induction hypothesis of t
+;; eagerly, which consumes t (see neg/vectors_vtail_direct_generic.lrl). Instead, recursion computes a
+;; split of the vector -- its head as a vector of length min1 k and its tail -- and rebuilds the
+;; tail of the next level from the induction hypothesis (vjoin). This costs O(n).
+(inductive VSplit (pi A (sort 1) (pi k Nat (sort 1)))
+  (ctor vsplit_mk (pi {A (sort 1)} (pi {k Nat}
+    (pi hd (Vec A (min1 k)) (pi tl (Vec A (nat_pred k)) (VSplit A k)))))))
+
+(def vappend (pi {A (sort 1)} (pi {n Nat} (pi {m Nat}
+               (pi xs (Vec A n) (pi #[once] ys (Vec A m) (Vec A (add n m)))))))
+  (lam {A} (sort 1) (lam {n} Nat (lam {m} Nat (lam xs (Vec A n) (lam #[once] ys (Vec A m)
+    (match xs (motive (lam k Nat (lam w (Vec A k) (Vec A (add k m)))))
+      (case (vnil) ys)
+      (case (vcons h t ih) (vcons h ih)))))))))
+
+;; vjoin: a split of length k back to a vector of length k (by cases on k: hd ++ tl).
+(def vjoin (pi {A (sort 1)} (pi {k Nat} (pi #[once] s (VSplit A k) (Vec A k))))
+  (lam {A} (sort 1) (lam {k} Nat (lam #[once] s (VSplit A k)
+    ((match k (motive (lam j Nat (pi #[once] p (VSplit A j) (Vec A j))))
+       (case (zero) (lam #[once] p (VSplit A zero) vnil))
+       (case (succ j ih) (lam #[once] p (VSplit A (succ j))
+          (match p (Vec A (succ j)) (case (vsplit_mk hd tl) (vappend hd tl))))))
+     s)))))
+
+(def vsplit (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) (VSplit A n))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n)
+    (match v (motive (lam k Nat (lam w (Vec A k) (VSplit A k))))
+      (case (vnil) (vsplit_mk vnil vnil))
+      (case (vcons h t ih) (vsplit_mk (vcons h vnil) (vjoin ih))))))))
+
+(def vtail (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A (succ n)) (Vec A n))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A (succ n))
+    (match (vsplit v) (Vec A n) (case (vsplit_mk hd tl) tl))))))
+
+;; vmap: the cons case calls the captured f once per element, so f must be an Fn function
+;; (calling it only reads it); with a #[once] function type the elaborator rejects the
+;; definition (F0206, neg/vectors_vmap_fnonce.lrl).
+(def vmap (pi {A (sort 1)} (pi {B (sort 1)} (pi {n Nat} (pi f (pi x A B) (pi v (Vec A n) (Vec B n))))))
+  (lam {A} (sort 1) (lam {B} (sort 1) (lam {n} Nat (lam f (pi x A B) (lam v (Vec A n)
+    (match v (motive (lam k Nat (lam w (Vec A k) (Vec B k))))
+      (case (vnil) vnil)
+      (case (vcons h t ih) (vcons (f h) ih)))))))))
+
+;; vsnoc: append one element at the end; the length grows by one.
+(def vsnoc (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) (pi #[once] x A (Vec A (succ n))))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n) (lam #[once] x A
+    (match v (motive (lam k Nat (lam w (Vec A k) (Vec A (succ k)))))
+      (case (vnil) (vcons x vnil))
+      (case (vcons h t ih) (vcons h ih))))))))
+
+;; vreverse via vsnoc; the type says the length is preserved.
+(def vreverse (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) (Vec A n))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n)
+    (match v (motive (lam k Nat (lam w (Vec A k) (Vec A k))))
+      (case (vnil) vnil)
+      (case (vcons h t ih) (vsnoc ih h)))))))
+
+(def vto_list (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) (List A))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n)
+    (match v (List A) (case (vnil) nil) (case (vcons h t ih) (cons h ih)))))))
+
+(def vsum (pi {n Nat} (pi v (Vec Nat n) Nat))
+  (lam {n} Nat (lam v (Vec Nat n)
+    (match v Nat (case (vnil) zero) (case (vcons h t ih) (add h ih))))))
+
+;; The length is read from the index; the vector itself is not traversed.
+(def vlength (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) Nat)))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n) n))))
+
+;; ---------------------------------------------------------------------------------------------
+;; 3. Equality toolkit (Eq and refl are in the prelude; Eq A x y lives in Prop = (sort 0))
+;; ---------------------------------------------------------------------------------------------
+
+(def cong (pi {A (sort 1)} (pi {B (sort 1)} (pi f (pi #[once] x A B)
+            (pi {x A} (pi {y A} (pi e (Eq A x y) (Eq B (f x) (f y))))))))
+  (lam {A} (sort 1) (lam {B} (sort 1) (lam f (pi #[once] x A B) (lam {x} A (lam {y} A (lam e (Eq A x y)
+    (match e (motive (lam b A (lam w (Eq A x b) (Eq B (f x) (f b)))))
+      (case (refl) (refl B (f x)))))))))))
+
+(def sym (pi {A (sort 1)} (pi {x A} (pi {y A} (pi e (Eq A x y) (Eq A y x)))))
+  (lam {A} (sort 1) (lam {x} A (lam {y} A (lam e (Eq A x y)
+    (match e (motive (lam b A (lam w (Eq A x b) (Eq A b x))))
+      (case (refl) (refl A x))))))))
+
+(def trans (pi {A (sort 1)} (pi {x A} (pi {y A} (pi {z A}
+             (pi e1 (Eq A x y) (pi e2 (Eq A y z) (Eq A x z)))))))
+  (lam {A} (sort 1) (lam {x} A (lam {y} A (lam {z} A (lam e1 (Eq A x y) (lam e2 (Eq A y z)
+    (match e2 (motive (lam b A (lam w (Eq A y b) (Eq A x b))))
+      (case (refl) e1)))))))))
+
+;; ---------------------------------------------------------------------------------------------
+;; 4. Theorems about vreverse
+;; ---------------------------------------------------------------------------------------------
+
+;; vreverse (vsnoc v x) = vcons x (vreverse v), by induction on v. In the vcons h t case both
+;; sides compute: vreverse (vsnoc (vcons h t) x) to vsnoc (vreverse (vsnoc t x)) h, and
+;; vcons x (vreverse (vcons h t)) to vsnoc (vcons x (vreverse t)) h; they are equal by the
+;; induction hypothesis under vsnoc _ h. (The hole `_` is the length of t, which the case pattern
+;; cannot name: it is an implicit field of vcons.)
+(def vreverse_vsnoc (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) (pi x A
+                      (Eq (Vec A (succ n)) (vreverse (vsnoc v x)) (vcons x (vreverse v)))))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n) (lam x A
+    (match v (motive (lam k Nat (lam w (Vec A k)
+                (Eq (Vec A (succ k)) (vreverse (vsnoc w x)) (vcons x (vreverse w))))))
+      (case (vnil) (refl (Vec A 1) (vcons x vnil)))
+      (case (vcons h t ih) (cong (lam #[once] u (Vec A _) (vsnoc u h)) ih))))))))
+
+;; The involution: vreverse (vreverse v) = v for every A, n and v : Vec A n. In the vcons h t
+;; case, vreverse (vreverse (vcons h t)) computes to vreverse (vsnoc (vreverse t) h)
+;;   = vcons h (vreverse (vreverse t))   by vreverse_vsnoc
+;;   = vcons h t                         by the induction hypothesis under vcons h.
+(def vreverse_involutive (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n)
+                           (Eq (Vec A n) (vreverse (vreverse v)) v))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n)
+    (match v (motive (lam k Nat (lam w (Vec A k) (Eq (Vec A k) (vreverse (vreverse w)) w))))
+      (case (vnil) (refl (Vec A zero) vnil))
+      (case (vcons h t ih) (trans (vreverse_vsnoc (vreverse t) h) (cong (vcons h) ih))))))))
+
+;; A corollary using all three equality lemmas: vreverse is injective.
+(def vreverse_injective (pi {A (sort 1)} (pi {n Nat} (pi {v (Vec A n)} (pi {w (Vec A n)}
+                          (pi e (Eq (Vec A n) (vreverse v) (vreverse w)) (Eq (Vec A n) v w))))))
+  (lam {A} (sort 1) (lam {n} Nat (lam {v} (Vec A n) (lam {w} (Vec A n)
+    (lam e (Eq (Vec A n) (vreverse v) (vreverse w))
+      (trans (trans (sym (vreverse_involutive v)) (cong vreverse e))
+             (vreverse_involutive w))))))))
+
+;; ---------------------------------------------------------------------------------------------
+;; 5. Using the operations and the theorems
+;; ---------------------------------------------------------------------------------------------
+
+(def v3 (Vec Nat 3) (vcons 1 (vcons 2 (vcons 3 vnil))))
+
+;; The theorem instantiated at a concrete vector (a proof term; erased before code generation).
+(def v3_reverse_twice (Eq (Vec Nat 3) (vreverse (vreverse v3)) v3)
+  (vreverse_involutive v3))
+
+;; Program entry (the last definition). Prints:
+;;   1   vhead v3
+;;   3   vhead (vreverse v3)
+;;   6   vsum (vreverse v3)
+;;   5   vsum (vtail v3)
+;;   60  vsum (vmap (lam x (nat_mul x ten)) v3)   (the closure captures `ten`)
+;;   3   length (vto_list (vreverse v3))   (List Nat length from the stdlib)
+;; and returns 6 = vlength (vappend v3 v3), read from the index 3 + 3.
+(def main Nat
+  (let ten Nat 10
+    (let a Nat (print_nat (vhead v3))
+      (let b Nat (print_nat (vhead (vreverse v3)))
+        (let c Nat (print_nat (vsum (vreverse v3)))
+          (let d Nat (print_nat (vsum (vtail v3)))
+            (let e Nat (print_nat (vsum (vmap (lam x Nat (nat_mul x ten)) v3)))
+              (let f Nat (print_nat (length (vto_list (vreverse v3))))
+                (vlength (vappend v3 v3))))))))))

@@ -1,0 +1,26 @@
+;; Q10 (negative): the token is used again after the match, which consumed it in both branches.
+;; Identical to q10_consume_both_branches.lrl except for the lines marked CHANGED.
+;; Expected: rejected before running (use after move).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive Color (sort 1) (ctor red Color) (ctor green Color) (ctor blue Color))
+
+(def burn (pi code Nat (pi t Tok Nat))
+  (lam code Nat (lam t Tok (match t Nat (case (mk_tok id) (print_nat (add code id)))))))
+
+(def route_if (pi b Bool (pi t Tok Nat))
+  (lam b Bool (lam t Tok
+    (add (match b Nat          ;; CHANGED: (add <match> (burn 9 t))
+      (case (true) (burn 5 t))
+      (case (false) (burn 50 t)))
+    (burn 9 t)))))   ;; CHANGED: t used again after the match consumed it
+
+(def route_match (pi c Color (pi t Tok Nat))
+  (lam c Color (lam t Tok
+    (match c Nat
+      (case (red) (burn 10 t))
+      (case (green) (burn 7 t))
+      (case (blue) (burn 70 t))))))
+
+(def main Nat
+  (add (route_if true (mk_tok 1))           ;; prints 6
+       (route_match green (mk_tok 1))))     ;; prints 8

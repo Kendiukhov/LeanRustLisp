@@ -1,0 +1,15 @@
+;; Class 13 (macro twin) - `with-borrow-then-eat` expands to the same nested
+;; lets; its binders `r` and `n` are hygienic.
+;; Expected: MIR M201 (UseWhileBorrowed).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+(def eat (pi t Tok Nat) (lam t Tok (succ (succ zero))))
+
+(defmacro with-borrow-then-eat (v)
+  `(let r (Ref #[r] Shared Tok) (& ,v)
+     (let n Nat (eat ,v)
+       (look r))))
+
+(def bwc (pi t Tok Nat)
+  (lam t Tok (with-borrow-then-eat t)))

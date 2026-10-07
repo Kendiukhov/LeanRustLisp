@@ -1,0 +1,6 @@
+;; MIR-independence probe for the stage matrix (case_studies/tools/run_stage_matrix.sh, set `mir_gaps`).
+;; Regression probe: MIR ownership used not to track moves of Fn/FnMut function values
+;; (`check_operand_moves`, mir/src/analysis/ownership.rs): a function value moved into a let binding
+;; and then called was accepted by MIR. It now reports M100. The kernel rejects `twice` (K0021 'f').
+(def twice (pi f (pi x Nat Nat) Nat)
+  (lam f (pi x Nat Nat) (let g (pi x Nat Nat) f (f zero))))

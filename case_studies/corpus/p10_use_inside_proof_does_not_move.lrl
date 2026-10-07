@@ -1,0 +1,12 @@
+;; Positive control P10 (nearest legal variant of class 02) - building a
+;; proof that mentions a token does not move it: proofs are erased, so the
+;; token is still available to be consumed afterwards.
+;; Expected: accepted; main = 3.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok n) n))))
+(inductive Holds (sort 0) (ctor hold (pi t Tok Holds)))
+
+(def stash (pi t Tok Nat)
+  (lam t Tok (let p Holds (hold t) (burn t))))
+
+(def main Nat (stash (mk_tok 3)))

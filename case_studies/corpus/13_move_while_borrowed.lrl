@@ -1,0 +1,15 @@
+;; Class 13 - moving a value while a shared borrow of it is still live.
+;; `r` borrows `t`, `t` is then moved into `eat`, and `r` is used afterwards.
+;; The kernel counts the borrow as a read (allowed before the move); MIR's
+;; NLL borrow check rejects the move.
+;; Expected: MIR M201 (UseWhileBorrowed).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+(def eat (pi t Tok Nat) (lam t Tok (succ (succ zero))))
+
+(def bwc (pi t Tok Nat)
+  (lam t Tok
+    (let r (Ref #[r] Shared Tok) (& t)
+      (let n Nat (eat t)
+        (look r)))))

@@ -41,6 +41,41 @@ It is defined once in `prelude_api.lrl` and must not be redefined in backend imp
   - `index_vec_dyn`, `index_slice`, `index_array`
   - `RefCell`, `Mutex`, `Atomic`
 
+## `Comp` Lives in `(sort 2)`
+
+`Comp` is the return type that the kernel requires of `partial` definitions (`Comp A`). It is
+declared as
+
+```
+(inductive Comp (pi A (sort 1) (sort 2))
+  (ctor ret (pi A (sort 1) (Comp A)))
+  (ctor bind (pi A (sort 1) (pi B (sort 1) (pi m (Comp A) (pi n (Comp B) (Comp B)))))))
+```
+
+so `Comp A : (sort 2)` for every `A : (sort 1)`. The reason is the kernel's universe rule for
+inductive declarations (`docs/spec/core_calculus.md` §4): `bind`'s result is `Comp B`, so `A` is
+not a uniform parameter, and `A` (in `ret` and `bind`) and `B` (in `bind`) are constructor fields
+whose type `(sort 1)` has universe level 2. With `Comp` in `(sort 1)` these fields made `(sort 1)`
+a retract of `Comp Nat` (`ElC (bind A Nat (ret A) (ret Nat)) ≡ A` for `ElC : Comp Nat -> (sort 1)`
+defined by `match`), which is unsound; the kernel now rejects that declaration.
+
+Design choice: the constructors and the surface API (`ret`, `bind`, `std/control/comp.lrl`'s
+`comp_pure` / `comp_bind`) are unchanged; only the universe moved. `Comp` is value-erased (`ret`
+carries no value; it is only built, returned and sequenced by partial code), so the larger
+universe costs little. User-visible consequences (the universe hierarchy is not cumulative):
+
+- `Comp A` is not a `(sort 1)` type: it cannot be an element type (`List (Comp Nat)`), the
+  argument of a function generic over `(A : (sort 1))`, or a field of a `(sort 1)` inductive
+  (`K0017`); `(def CT (sort 1) (Comp Nat))` is a type error.
+- Matching on a `Bool`/`Nat` with motive `(Comp Nat)` eliminates into `(sort 2)`; this works as
+  before (the elaborator computes the recursor level from the motive).
+
+The alternative considered was a phantom `Comp` in `(sort 1)` with `A` a uniform parameter and a
+homogeneous `bind : Comp A -> Comp A -> Comp A` (plus a cast `Comp A -> Comp B` defined in the
+stdlib); it would keep `Comp A` in `(sort 1)` but change the arity of the `bind` constructor used by
+existing programs. It was not needed: moving `Comp` to `(sort 2)` left the test suite and the
+case-study programs unchanged.
+
 ## Platform Surface (Allowed in Impl Layers)
 
 Backend implementation preludes are restricted to platform-dependent items:

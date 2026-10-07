@@ -1,0 +1,11 @@
+;; Class 12 - two live mutable borrows of the same value. Both `&mut x` are
+;; passed to one curried call, so the first loan is still held (by the partial
+;; application) when the second is created. The kernel counts `&mut x` as a
+;; mutable use (not a move) and does no loan tracking; MIR's NLL borrow check
+;; rejects the conflict.
+;; Expected: MIR M200 (ConflictingBorrow).
+(def use_two (pi a (Ref #[r] Mut Nat) (pi b (Ref #[r] Mut Nat) Nat))
+  (lam a (Ref #[r] Mut Nat) (lam b (Ref #[r] Mut Nat) zero)))
+
+(def two_mut (pi x Nat Nat)
+  (lam x Nat (use_two (&mut x) (&mut x))))

@@ -1,0 +1,9 @@
+;; Class 05 - a closure annotated #[fn] that consumes a captured value.
+;; The inner lambda returns the captured affine token, i.e. moves it out of
+;; its environment, so it can run at most once (FnOnce); the annotation
+;; #[fn] claims it can be called any number of times.
+;; Expected: elaborator F0207 (FunctionKindAnnotationTooSmall).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def keep_forever (pi t Tok (pi #[fn] u Nat Tok))
+  (lam t Tok (lam #[fn] u Nat t)))

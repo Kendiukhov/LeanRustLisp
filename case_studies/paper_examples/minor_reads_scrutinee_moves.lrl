@@ -1,0 +1,17 @@
+;; Paper, subsection "What is proved" (sec:own:meta), paper/jot_r1/sections/ownership.tex,
+;; paragraph "The mechanized core calculus": O-Rec-Seq checks the minor premises before the
+;; scrutinee (the order in which compiled LRL code builds them), so the kernel accepts a recursor
+;; application whose minor premise reads a resource that the scrutinee consumes, and MIR then
+;; rejects it as a use of a value while it is borrowed (M201).
+;; Here the type is recursive (Nat): the succ case only reads the token t (through a shared
+;; borrow), and the scrutinee (burn t) consumes t.
+;; Expected: M201 ... because it is borrowed as Shared.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok n) n))))
+(def peek (pi t (Ref #[r] Shared Tok) Nat) (lam t (Ref #[r] Shared Tok) zero))
+(def f (pi t Tok Nat)
+  (lam t Tok
+    (match (burn t) Nat
+      (case (zero) zero)
+      (case (succ m ih) (peek (& t))))))
+(def main Nat (f (mk_tok 2)))

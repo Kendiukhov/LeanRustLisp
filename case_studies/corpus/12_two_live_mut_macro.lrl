@@ -1,0 +1,9 @@
+;; Class 12 (macro twin) - `alias-mut` expands to `(use_two (&mut x) (&mut x))`.
+;; Expected: MIR M200 (ConflictingBorrow).
+(def use_two (pi a (Ref #[r] Mut Nat) (pi b (Ref #[r] Mut Nat) Nat))
+  (lam a (Ref #[r] Mut Nat) (lam b (Ref #[r] Mut Nat) zero)))
+
+(defmacro alias-mut (v) `(use_two (&mut ,v) (&mut ,v)))
+
+(def two_mut (pi x Nat Nat)
+  (lam x Nat (alias-mut x)))

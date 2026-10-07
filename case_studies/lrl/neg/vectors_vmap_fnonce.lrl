@@ -1,0 +1,20 @@
+;; Negative variant of case study A (../vectors.lrl). The declarations up to the marked line
+;; are copied from vectors.lrl (comments and unused definitions omitted); only the code after
+;; it is new.
+;; Expected: rejected: with a #[once] (FnOnce) function type, calling the captured f consumes it, but the
+;; vcons case runs once per element, so it may only read its captures (it must be an Fn closure):
+;; F0206 function kind mismatch.
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+;; ---- new code ----
+
+;; vmap of vectors.lrl with #[once] on the function type: the cons case, which runs once per
+;; element, calls (consumes) the captured f.
+(def vmap_once (pi {A (sort 1)} (pi {B (sort 1)} (pi {n Nat} (pi #[once] f (pi #[once] x A B) (pi v (Vec A n) (Vec B n))))))
+  (lam {A} (sort 1) (lam {B} (sort 1) (lam {n} Nat (lam #[once] f (pi #[once] x A B) (lam v (Vec A n)
+    (match v (motive (lam k Nat (lam w (Vec A k) (Vec B k))))
+      (case (vnil) vnil)
+      (case (vcons h t ih) (vcons (f h) ih)))))))))

@@ -1,0 +1,13 @@
+;; Positive control P03 (nearest legal variant of class 12) - two live SHARED
+;; borrows of the same non-Copy value.
+;; Expected: accepted; main = 2.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+
+(def two (pi t Tok Nat)
+  (lam t Tok
+    (let r1 (Ref #[r] Shared Tok) (& t)
+      (let r2 (Ref #[r] Shared Tok) (& t)
+        (add (look r1) (look r2))))))
+
+(def main Nat (two (mk_tok 0)))

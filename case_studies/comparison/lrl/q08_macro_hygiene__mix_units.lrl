@@ -1,0 +1,23 @@
+;; Q8 (negative): a macro-generated operation used at the wrong type: a Meters value passed to
+;; the generated `seconds_add`. Identical to q08_macro_hygiene.lrl except for the line marked
+;; CHANGED. Expected: a type error before running.
+(defmacro defunit (T mk) (inductive T (sort 1) (ctor mk (pi v Nat T))))
+(defmacro defadd (T mk op)
+  (def op (pi a T (pi b T T))
+    (lam a T (lam b T
+      (match a T (case (mk x) (match b T (case (mk y) (mk (add x y))))))))))
+(defmacro defval (T mk val) (def val (pi u T Nat) (lam u T (match u Nat (case (mk x) x)))))
+
+(defunit Meters meters)
+(defadd Meters meters meters_add)
+(defval Meters meters meters_val)
+(defunit Seconds seconds)
+(defadd Seconds seconds seconds_add)
+(defval Seconds seconds seconds_val)
+
+(defmacro with_tmp (e) (let tmp Nat 100 (add tmp e)))
+
+(def main Nat
+  (add (print_nat (meters_val (meters_add (meters 3) (meters 4))))        ;; 7
+  (add (print_nat (seconds_val (seconds_add (seconds 5) (meters 6))))    ;; CHANGED: Meters added to Seconds
+       (print_nat (let tmp Nat 1 (with_tmp tmp))))))                     ;; 101 (hygienic)

@@ -1,0 +1,15 @@
+[package]
+name = "vectors_kernel_check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Kernel-only checks for case study A (case_studies/lrl/vectors.lrl): admitted proofs, their axiom sets, and false statements submitted directly to the kernel"
+
+# Not a member of the repository workspace: a read-only harness over the public APIs of
+# the compiler crates (no compiler API is changed or weakened).
+[workspace]
+
+[dependencies]
+cli = { path = "../../../cli" }
+kernel = { path = "../../../kernel" }
+frontend = { path = "../../../frontend" }

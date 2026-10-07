@@ -1,0 +1,5 @@
+;; Class 21 (hand-written version, accepted) - an `unsafe` definition written
+;; directly by the user. Accepted; total code that calls it is rejected
+;; (class 16). The violation class is the macro twin.
+;; Expected: accepted (exit status 0).
+(unsafe raw_peek (pi n Nat Nat) (lam n Nat n))

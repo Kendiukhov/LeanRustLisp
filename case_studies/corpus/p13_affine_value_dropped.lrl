@@ -1,0 +1,9 @@
+;; Positive control P13 - an affine token is dropped without being used.
+;; This documents what is NOT enforced: `affine` means "at most once", not
+;; "exactly once" (no linearity: an unused channel or token is accepted).
+;; Expected: accepted; main = 0.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def drop_it (pi t Tok Nat) (lam t Tok zero))
+
+(def main Nat (drop_it (mk_tok 9)))

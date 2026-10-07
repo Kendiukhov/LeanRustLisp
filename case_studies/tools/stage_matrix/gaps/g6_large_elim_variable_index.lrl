@@ -1,0 +1,9 @@
+;; MIR-independence probe for the stage matrix (case_studies/tools/run_stage_matrix.sh, set `mir_gaps`).
+;; Regression probe (kernel accepts; MIR must accept too): a type computed by large elimination at a
+;; VARIABLE index (`T (succ n)` whnf-reduces to `Pair Nat (T n)` with `T n` stuck) is lowered with a stuck
+;; `Opaque("app")` component; the call in `main` passes a value of the concrete type `Pair Nat Bool`.
+;; Before MIR typing accepted stuck types against loan-free known types (`stuck_type_meets_loan_free_type`,
+;; mir/src/analysis/typing.rs), `main` was rejected with M300 "Call argument type mismatch".
+(def T (pi n Nat (sort 1)) (lam n Nat (match n (sort 1) (case (zero) Bool) (case (succ k ih) (Pair Nat ih)))))
+(def fstn (pi n Nat (pi v (T (succ n)) Nat)) (lam n Nat (lam v (T (succ n)) (pair_fst Nat (T n) v))))
+(def main Nat (fstn 0 (mk_pair {Nat} {Bool} 5 true)))

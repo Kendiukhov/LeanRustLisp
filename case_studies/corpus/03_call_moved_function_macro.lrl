@@ -1,0 +1,10 @@
+;; Class 03 (macro twin) - `box-and-call` expands to
+;; `(mk_r (mk_fbox f) (f zero))`.
+;; Expected: kernel K0021 [UseAfterMove] naming `f`.
+(inductive FBox (sort 1) (ctor mk_fbox (pi f (pi x Nat Nat) FBox)))
+(inductive R (sort 1) (ctor mk_r (pi b FBox (pi n Nat R))))
+
+(defmacro box-and-call (g) `(mk_r (mk_fbox ,g) (,g zero)))
+
+(def use_after (pi f (pi x Nat Nat) R)
+  (lam f (pi x Nat Nat) (box-and-call f)))

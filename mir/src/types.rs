@@ -89,6 +89,11 @@ impl CtorId {
 pub struct AdtLayout {
     pub adt: AdtId,
     pub variants: Vec<VariantLayout>,
+    /// The kernel's Copy instances of this inductive, as MIR type templates over the
+    /// parameters (`Param(i)`): the ADT is Copy at arguments `args` iff, for some instance,
+    /// every requirement is Copy at `args` (docs/spec/ownership_model.md, Copy). Empty when the
+    /// inductive has no Copy instance (e.g. it is `affine`).
+    pub copy_requirements: Vec<Vec<MirType>>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +176,34 @@ impl AdtLayoutRegistry {
         self.layouts.get(adt)
     }
 
+    /// Copy-ness of a MIR type with the inductives' Copy instances available: like
+    /// `MirType::is_copy`, except that an ADT is Copy when one of its Copy instances is
+    /// satisfied at its arguments (`MirType::is_copy` has no access to the instances and treats
+    /// every ADT as non-Copy). A cyclic query is not Copy, as in the kernel.
+    pub fn type_is_copy(&self, ty: &MirType) -> bool {
+        self.type_is_copy_inner(ty, &mut Vec::new())
+    }
+
+    fn type_is_copy_inner(&self, ty: &MirType, stack: &mut Vec<MirType>) -> bool {
+        let MirType::Adt(adt, args) = ty else {
+            return ty.is_copy();
+        };
+        if stack.contains(ty) {
+            return false;
+        }
+        let Some(layout) = self.layouts.get(adt) else {
+            return false;
+        };
+        stack.push(ty.clone());
+        let result = layout.copy_requirements.iter().any(|requirements| {
+            requirements.iter().all(|requirement| {
+                self.type_is_copy_inner(&requirement.substitute_params(args), stack)
+            })
+        });
+        stack.pop();
+        result
+    }
+
     pub fn field_type(
         &self,
         adt: &AdtId,
@@ -195,6 +228,15 @@ pub struct IdRegistry {
     def_by_name: HashMap<String, DefId>,
     builtin_adts: HashMap<Builtin, AdtId>,
     adt_num_params: HashMap<AdtId, usize>,
+    /// For each inductive, one flag per uniform parameter: `true` if the parameter is a
+    /// type (its binder type is a sort, possibly after a Π-telescope), `false` if it is a
+    /// value parameter (e.g. `x : A` in `Eq A x`). Value parameters do not influence the
+    /// runtime representation and are lowered to the `Unit` placeholder.
+    adt_type_params: HashMap<AdtId, Vec<bool>>,
+    /// For each inductive, one MIR type per uniform parameter: the type of a value parameter
+    /// (its binder type, with earlier parameters as `Param`), `Unit` for a type parameter. The
+    /// value is not part of the runtime representation, but constructors still receive it.
+    adt_param_value_types: HashMap<AdtId, Vec<MirType>>,
     adt_layouts: AdtLayoutRegistry,
     indexable_adts: HashSet<AdtId>,
     index_defs: HashSet<DefId>,
@@ -210,6 +252,7 @@ impl IdRegistry {
         let mut ctor_arities = HashMap::new();
         let mut builtin_adts = HashMap::new();
         let mut adt_num_params = HashMap::new();
+        let mut adt_type_params = HashMap::new();
         let mut indexable_adts = HashSet::new();
         let mut errors = Vec::new();
 
@@ -229,6 +272,10 @@ impl IdRegistry {
             let adt_id = AdtId::with_builtin(name, builtin.clone());
             adt_by_name.insert(name.clone(), adt_id.clone());
             adt_num_params.insert(adt_id.clone(), decl.num_params);
+            adt_type_params.insert(
+                adt_id.clone(),
+                param_type_flags(env, &decl.ty, decl.num_params),
+            );
             if has_marker_checked(
                 env,
                 &decl.markers,
@@ -271,6 +318,8 @@ impl IdRegistry {
             def_by_name,
             builtin_adts,
             adt_num_params,
+            adt_type_params,
+            adt_param_value_types: HashMap::new(),
             adt_layouts: AdtLayoutRegistry::default(),
             indexable_adts,
             index_defs,
@@ -280,8 +329,18 @@ impl IdRegistry {
             errors: Vec::new(),
         };
         registry.build_layouts(env, &mut errors);
+        registry.build_param_value_types(env, &mut errors);
         registry.errors = errors;
         registry
+    }
+
+    /// The MIR type of the argument a constructor of `adt` receives for parameter `idx`: the
+    /// parameter's type for a value parameter (e.g. `Nat` for `k` in `VSplit A k`), `Unit` for
+    /// a type parameter (types are erased). `None` for unknown ADTs or indices.
+    pub fn adt_param_value_type(&self, adt: &AdtId, idx: usize) -> Option<&MirType> {
+        self.adt_param_value_types
+            .get(adt)
+            .and_then(|types| types.get(idx))
     }
 
     pub fn adt_id(&self, name: &str) -> Option<AdtId> {
@@ -312,6 +371,16 @@ impl IdRegistry {
 
     pub fn adt_num_params(&self, adt: &AdtId) -> Option<usize> {
         self.adt_num_params.get(adt).copied()
+    }
+
+    /// Whether parameter `idx` of `adt` is a type parameter (see `adt_type_params`).
+    /// Unknown ADTs and out-of-range indices are treated as type parameters.
+    pub fn adt_param_is_type(&self, adt: &AdtId, idx: usize) -> bool {
+        self.adt_type_params
+            .get(adt)
+            .and_then(|flags| flags.get(idx))
+            .copied()
+            .unwrap_or(true)
     }
 
     pub fn adt_layouts(&self) -> &AdtLayoutRegistry {
@@ -350,6 +419,35 @@ impl IdRegistry {
         !self.errors.is_empty()
     }
 
+    fn build_param_value_types(&mut self, env: &Env, errors: &mut Vec<IdRegistryError>) {
+        let mut param_value_types = HashMap::new();
+        let mut inductives: Vec<_> = env.inductives.iter().collect();
+        inductives.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (name, decl) in inductives {
+            let adt_id = self
+                .adt_by_name
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| AdtId::new(name));
+            let mut types = Vec::with_capacity(decl.num_params);
+            let mut current = decl.ty.clone();
+            for idx in 0..decl.num_params {
+                let Term::Pi(dom, body, _, _) = &*current else {
+                    break;
+                };
+                if self.adt_param_is_type(&adt_id, idx) {
+                    types.push(MirType::Unit);
+                } else {
+                    // The binder's type is in the scope of the `idx` parameters before it.
+                    types.push(lower_type_template(dom, idx, 0, env, self, errors));
+                }
+                current = body.clone();
+            }
+            param_value_types.insert(adt_id, types);
+        }
+        self.adt_param_value_types = param_value_types;
+    }
+
     fn build_layouts(&mut self, env: &Env, errors: &mut Vec<IdRegistryError>) {
         let mut layouts = HashMap::new();
         let mut inductives: Vec<_> = env.inductives.iter().collect();
@@ -368,15 +466,75 @@ impl IdRegistry {
                     fields,
                 });
             }
+            // Copy instances whose requirements mention only the parameters (derived
+            // instances always do; an explicit instance over the indices too is skipped, so MIR
+            // stays conservative for it). Lowering problems of a requirement are not layout
+            // errors: an unrepresentable requirement is `Opaque`, which is never Copy.
+            let mut copy_requirements = Vec::new();
+            for instance in env.copy_instances().get(name).into_iter().flatten() {
+                if instance.param_count != decl.num_params {
+                    continue;
+                }
+                let mut scratch = Vec::new();
+                copy_requirements.push(
+                    instance
+                        .requirements
+                        .iter()
+                        .map(|req| {
+                            lower_type_template(req, decl.num_params, 0, env, self, &mut scratch)
+                        })
+                        .collect(),
+                );
+            }
             layouts.insert(
                 adt_id.clone(),
                 AdtLayout {
                     adt: adt_id,
                     variants,
+                    copy_requirements,
                 },
             );
         }
         self.adt_layouts = AdtLayoutRegistry { layouts };
+    }
+}
+
+/// One flag per uniform parameter of an inductive whose type is `ind_ty`: `true` when the
+/// parameter's binder type is a sort or a Π-telescope ending in a sort (a type or a type
+/// family), `false` for a value parameter.
+fn param_type_flags(env: &Env, ind_ty: &Rc<Term>, num_params: usize) -> Vec<bool> {
+    let mut flags = Vec::with_capacity(num_params);
+    let mut current = ind_ty.clone();
+    while flags.len() < num_params {
+        let Term::Pi(dom, body, _, _) = &*current else {
+            break;
+        };
+        flags.push(binder_is_type_like(env, dom));
+        current = body.clone();
+    }
+    while flags.len() < num_params {
+        flags.push(true);
+    }
+    flags
+}
+
+fn binder_is_type_like(env: &Env, dom: &Rc<Term>) -> bool {
+    let mut current = match whnf(env, dom.clone(), Transparency::Reducible) {
+        Ok(norm) => norm,
+        // Keep the historical behaviour (lower the argument as a type) if normalisation fails.
+        Err(_) => return true,
+    };
+    loop {
+        match &*current {
+            Term::Sort(_) => return true,
+            Term::Pi(_, body, _, _) => {
+                current = match whnf(env, body.clone(), Transparency::Reducible) {
+                    Ok(norm) => norm,
+                    Err(_) => return true,
+                };
+            }
+            _ => return false,
+        }
     }
 }
 
@@ -528,7 +686,7 @@ fn opaque_reason(term: &Rc<Term>) -> String {
             match &*head {
                 Term::Const(name, _) => format!("app {}", name),
                 Term::Ind(name, _) => format!("app ind {}", name),
-                _ => "app".to_string(),
+                _ => STUCK_TYPE_REASON.to_string(),
             }
         }
         Term::Pi(_, _, _, _) => "pi".to_string(),
@@ -561,9 +719,11 @@ fn lower_inductive_template(
         .or_else(|| env.inductives.get(name).map(|decl| decl.num_params))
         .unwrap_or(args.len());
 
+    // MIR types describe runtime representations: index arguments are erased and value
+    // parameters become the `Unit` placeholder (see docs/spec/mir/typing.md).
     let mut kept_args = Vec::new();
-    for (idx, arg) in args.iter().enumerate() {
-        if idx < param_count {
+    for (idx, arg) in args.iter().enumerate().take(param_count) {
+        if ids.adt_param_is_type(&adt_id, idx) {
             kept_args.push(lower_type_template(
                 arg,
                 num_params,
@@ -573,7 +733,7 @@ fn lower_inductive_template(
                 errors,
             ));
         } else {
-            kept_args.push(MirType::IndexTerm(arg.clone()));
+            kept_args.push(MirType::Unit);
         }
     }
 
@@ -718,10 +878,11 @@ pub enum MirType {
     Opaque {
         reason: String,
     },
-    /// Inductive type (AdtId, Generic Args)
-    /// Note: Value arguments (indices) are represented as MirType::IndexTerm entries
-    /// appended after the type parameters, so index-sensitive identity is preserved
-    /// while keeping runtime layout driven by parameter types only.
+    /// Inductive type (AdtId, Generic Args): one argument per uniform parameter of the
+    /// inductive. MIR types are runtime representation types, so index arguments of an
+    /// indexed family are erased (`Vec A n` and `Vec A m` are the same MIR type) and value
+    /// (non-type) parameters are represented by `Unit`. Index/value-level typing is the
+    /// kernel's responsibility; see docs/spec/mir/typing.md.
     Adt(AdtId, Vec<MirType>),
     /// Reference: &'region mut? T
     Ref(Region, Box<MirType>, Mutability),
@@ -744,8 +905,6 @@ pub enum MirType {
     RawPtr(Box<MirType>, Mutability),
     /// Interior Mutability wrapper (RefCell, Mutex, Atomic)
     InteriorMutable(Box<MirType>, IMKind),
-    /// Index term placeholder for dependent ADTs (not a runtime type).
-    IndexTerm(Rc<Term>),
     /// Generic type parameter placeholder (for layout templates)
     Param(usize),
 }
@@ -757,7 +916,21 @@ pub enum IMKind {
     Atomic,  // Hardware atomics
 }
 
+/// `Opaque` reason of a *stuck* type: a type whose weak head normal form is an application
+/// whose head is neither an inductive type nor a constant -- a type-family variable applied to
+/// arguments (`P y`), or a recursor blocked on an unknown major premise, such as the large
+/// elimination `rec Nat (λ _. Type) Unit (λ _ _. A) n` for an unknown `n`. Unlike an opaque
+/// nominal type (an axiom type, reason `const ...`/`app ...`), a stuck type is equal to an
+/// ordinary type for every instantiation of its variables, and values of it are represented
+/// uniformly at run time; see docs/spec/mir/typing.md, "Types Computed at Run Time".
+pub const STUCK_TYPE_REASON: &str = "app";
+
 impl MirType {
+    /// Whether this is the MIR type of a stuck type ([`STUCK_TYPE_REASON`]).
+    pub fn is_stuck_type(&self) -> bool {
+        matches!(self, MirType::Opaque { reason } if reason == STUCK_TYPE_REASON)
+    }
+
     pub fn is_copy(&self) -> bool {
         match self {
             MirType::Unit | MirType::Bool | MirType::Nat => true,
@@ -771,7 +944,6 @@ impl MirType {
             MirType::Closure(_, _, _, _, _) => false,
             MirType::InteriorMutable(_, _) => false, // Usually not Copy (RefCell/Mutex are not)
             MirType::Param(_) => false,
-            MirType::IndexTerm(_) => false,
         }
     }
 
@@ -821,7 +993,6 @@ impl MirType {
             MirType::InteriorMutable(inner, kind) => {
                 MirType::InteriorMutable(Box::new(inner.substitute_params(params)), *kind)
             }
-            MirType::IndexTerm(term) => MirType::IndexTerm(term.clone()),
             MirType::Opaque { reason } => MirType::Opaque {
                 reason: reason.clone(),
             },
@@ -921,7 +1092,6 @@ impl fmt::Debug for MirType {
                 .field(kind)
                 .finish(),
             MirType::Param(idx) => f.debug_tuple("Param").field(idx).finish(),
-            MirType::IndexTerm(term) => f.debug_tuple("IndexTerm").field(term).finish(),
         }
     }
 }
@@ -948,6 +1118,102 @@ mod tests {
             "expected marker registry error details, got {:?}",
             ids.errors()
         );
+    }
+
+    /// MIR Copy-ness of ADTs follows the kernel's Copy instances: a `List Nat` field of an
+    /// `affine` value may be copied out of it (case study B's channel log, bug W_B_protocol_1),
+    /// a `List Tok` with `Tok` affine may not, and the affine type itself is never Copy.
+    #[test]
+    fn adt_copy_follows_kernel_copy_instances() {
+        use kernel::ast::{marker_name, AxiomTag, BinderInfo, Constructor, Definition};
+        let mut env = Env::new();
+        let sort1 = Term::sort(Level::Succ(Box::new(Level::Zero)));
+        env.set_allow_reserved_primitives(true);
+        for marker in [
+            TypeMarker::InteriorMutable,
+            TypeMarker::MayPanicOnBorrowViolation,
+            TypeMarker::ConcurrencyPrimitive,
+            TypeMarker::AtomicPrimitive,
+            TypeMarker::Indexable,
+        ] {
+            env.add_definition(Definition::axiom_with_tags(
+                marker_name(marker).to_string(),
+                sort1.clone(),
+                vec![AxiomTag::Unsafe],
+            ))
+            .expect("marker definition");
+        }
+        env.set_allow_reserved_primitives(false);
+        env.init_marker_registry().expect("marker registry");
+        env.add_inductive(InductiveDecl::new(
+            "N".to_string(),
+            sort1.clone(),
+            vec![
+                Constructor {
+                    name: "z".to_string(),
+                    ty: Term::ind("N".to_string()),
+                },
+                Constructor {
+                    name: "s".to_string(),
+                    ty: Term::pi(
+                        Term::ind("N".to_string()),
+                        Term::ind("N".to_string()),
+                        BinderInfo::Default,
+                    ),
+                },
+            ],
+        ))
+        .expect("add N");
+        let mut tok = InductiveDecl::new(
+            "Tok".to_string(),
+            sort1.clone(),
+            vec![Constructor {
+                name: "mk_tok".to_string(),
+                ty: Term::ind("Tok".to_string()),
+            }],
+        );
+        tok.markers = vec![marker_def_id(TypeMarker::Affine)];
+        env.add_inductive(tok).expect("add Tok");
+        // inductive L (A : Type) : Type | lnil | lcons (h : A) (t : L A)
+        let l_of = |a: Rc<Term>| Term::app(Term::ind("L".to_string()), a);
+        env.add_inductive(InductiveDecl::new(
+            "L".to_string(),
+            Term::pi(sort1.clone(), sort1.clone(), BinderInfo::Default),
+            vec![
+                Constructor {
+                    name: "lnil".to_string(),
+                    ty: Term::pi(sort1.clone(), l_of(Term::var(0)), BinderInfo::Implicit),
+                },
+                Constructor {
+                    name: "lcons".to_string(),
+                    ty: Term::pi(
+                        sort1.clone(),
+                        Term::pi(
+                            Term::var(0),
+                            Term::pi(l_of(Term::var(1)), l_of(Term::var(2)), BinderInfo::Default),
+                            BinderInfo::Default,
+                        ),
+                        BinderInfo::Implicit,
+                    ),
+                },
+            ],
+        ))
+        .expect("add L");
+
+        let ids = IdRegistry::from_env(&env);
+        let layouts = ids.adt_layouts();
+        let n = MirType::Adt(ids.adt_id("N").expect("N"), vec![]);
+        let tok = MirType::Adt(ids.adt_id("Tok").expect("Tok"), vec![]);
+        let l = ids.adt_id("L").expect("L");
+        assert!(
+            layouts.type_is_copy(&n),
+            "a field-free-or-Copy-fields type is Copy"
+        );
+        assert!(!layouts.type_is_copy(&tok), "an affine type is not Copy");
+        assert!(layouts.type_is_copy(&MirType::Adt(l.clone(), vec![n.clone()])));
+        assert!(!layouts.type_is_copy(&MirType::Adt(l.clone(), vec![tok])));
+        assert!(!layouts.type_is_copy(&MirType::Adt(l, vec![MirType::Param(0)])));
+        assert!(!n.is_copy(), "MirType::is_copy alone stays conservative");
     }
 
     #[test]

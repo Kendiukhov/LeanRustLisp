@@ -1,0 +1,13 @@
+;; Positive control P07 (nearest legal variant of class 04) - an FnOnce
+;; closure that consumes a captured token is called exactly once.
+;; Expected: accepted; main = 8 (token 5 + argument 3).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok i) i))))
+
+(def apply_once (pi f (pi #[once] x Nat Nat) (pi #[once] v Nat Nat))
+  (lam f (pi #[once] x Nat Nat) (lam #[once] v Nat (f v))))
+
+(def use_tok (pi t Tok Nat)
+  (lam t Tok (apply_once (lam #[once] x Nat (add x (burn t))) 3)))
+
+(def main Nat (use_tok (mk_tok 5)))

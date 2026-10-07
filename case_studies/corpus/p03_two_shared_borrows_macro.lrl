@@ -1,0 +1,15 @@
+;; Positive control P03 (macro twin) - `look-twice` expands to the two
+;; borrows; the binders `r1`, `r2` are hygienic.
+;; Expected: accepted; main = 2.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+
+(defmacro look-twice (v)
+  `(let r1 (Ref #[r] Shared Tok) (& ,v)
+     (let r2 (Ref #[r] Shared Tok) (& ,v)
+       (add (look r1) (look r2)))))
+
+(def two (pi t Tok Nat)
+  (lam t Tok (look-twice t)))
+
+(def main Nat (two (mk_tok 0)))

@@ -1,0 +1,14 @@
+;; Paper, subsection "What is proved" (sec:own:meta, paper/jot_r1/sections/ownership.tex),
+;; the paragraph after Lemma "Kind widening" (lem:widening): "the compiler
+;; accepts an FnMut closure that reborrows a captured mutable reference and rejects the same closure
+;; annotated FnOnce when the reference is used afterwards (K0021)". This is the FnMut version:
+;; `g` reborrows the captured `r` (it uses the reference mutably without taking it), so `r` can be
+;; used after `g` is built and called.
+;; Expected: accepted; `main` (not printed in the paper) passes `(&mut x)`; the dynamic binary prints
+;; `Result: Nat(2)`. Compare widen_fnonce_moves.lrl.
+(def poke (pi r (Ref #[r] Mut Nat) Nat) (lam r (Ref #[r] Mut Nat) zero))
+(def f (pi r (Ref #[r] Mut Nat) Nat)
+  (lam r (Ref #[r] Mut Nat)
+    (let g (pi #[mut] u Nat Nat) (lam #[mut] u Nat (poke r))
+      (let a Nat (g zero) (poke r)))))
+(def main Nat (let x Nat (succ (succ zero)) (let y Nat (f (&mut x)) x)))

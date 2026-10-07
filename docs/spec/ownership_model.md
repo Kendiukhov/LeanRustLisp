@@ -4,19 +4,48 @@ This document outlines how LeanRustLisp integrates Rust-style ownership into a d
 
 ## 1. Core Principle
 
-**Affine Types**: Values are affine by default.
-*   Usage: 0 or 1 times.
+**Affine Types**: a value whose type is not Copy is affine.
+*   Usage: 0 or 1 times (moves); reads and borrows do not use it up.
 *   Drop: Allowed (destructors run).
-*   Copy: Opt-in via derived Copy instances on inductives (surface syntax: `(inductive copy ...)`). Explicit Copy instances are permitted only under `unsafe` and are tracked as unsafe axioms.
+*   Copy: sorts, types, type families and proofs; `Ref Shared _`; and every inductive type whose
+    Copy instance (derived structurally for every declaration, or explicit and `unsafe`) holds for
+    its arguments. A declaration opts out of derivation with the `affine` marker:
+    `(inductive (affine) Chan (sort 1) ...)` is never Copy, even if every field is.
+    `(inductive copy ...)` turns a derivation failure into an error. Function types (other than
+    proofs and type families), `Ref Mut _`, interior-mutable and affine inductives, opaque types
+    and type variables are not Copy.
 
 ## 1.1 Copy Instances and Safety
 
 Copy instances come from two sources:
 
-*   **Derived**: `(inductive copy ...)` requests derivation. The kernel checks that the inductive is not interior-mutable and that all constructor fields are Copy (or depend only on parameters). If derivation fails and `copy` was requested, the declaration is rejected.
-*   **Explicit**: `(unsafe instance copy (pi ...))` registers a Copy instance. Explicit instances are always treated as unsafe axioms (recorded as `copy_instance(TypeName)` with the `unsafe` tag) and are rejected for interior-mutable inductives.
+*   **Derived**: the kernel attempts structural derivation for *every* inductive declaration (`Env::add_inductive` → `derive_copy_instance`); writing `(inductive copy ...)` only turns a derivation failure into an error. Derivation fails for interior-mutable inductives and for inductives marked `affine`. Otherwise the instance is parameterised by the type's uniform **parameters** only (`num_params`), and every constructor binder after the parameters is a runtime **field** — including binders that appear as index arguments of the constructor's result type (indices are not parameters, so such binders are stored). Each field must be Copy, expressed as a requirement over the parameters:
+    *   a recursive field (the type itself applied to its parameters and any indices) adds no requirement: Copy-ness never depends on indices, so an indexed family such as `Vec A n` is Copy exactly when `A` is (like `List A`);
+    *   for a field whose type is another inductive family, only that family's parameter arguments are kept;
+    *   a field whose type depends on an earlier field in any other way, or a non-uniform recursive occurrence, makes derivation fail (the type is then not Copy).
+*   **Explicit**: `(unsafe instance copy (pi ...))` registers a Copy instance. Explicit instances are always treated as unsafe axioms (recorded as `copy_instance(TypeName)` with the `unsafe` tag) and are rejected for interior-mutable inductives and for affine inductives (`K0052`).
 
 Explicit instances take precedence over derived ones during Copy resolution.
+
+Independently of instances, a type whose values are erased at run time is Copy
+(`is_erased_type` in `kernel/src/checker.rs`): a sort, an arity `Pi ... -> Sort` (a type family),
+or a proposition (a type whose type is `Prop`; its values are proofs). So a proof of a
+proposition that stores a non-Copy witness is still duplicable.
+
+### 1.2 The `affine` marker
+
+`affine` reuses the inductive marker syntax (`(inductive (affine) Name Type ctors...)`, also
+`(inductive (affine indexable) ...)`). It is built into the kernel (`TypeMarker::Affine`): unlike
+`interior_mutable` or `indexable` it needs no prelude marker definition, adds no axiom
+dependency, and only makes the ownership check stricter: no Copy instance is derived for the
+type, an explicit Copy instance is rejected, and `(inductive copy (affine) ...)` is rejected
+(`K0052`). The marker is also rejected (`K0052`) on an inductive in `Prop`: proofs are erased at
+run time and always Copy, so the marker could not take effect. Affinity applies to values bound
+to variables; a global definition is a constant (each reference denotes the definition's value
+anew, as a Rust `const`), so `(def g Chan (mk_chan 3))` may be referenced more than once. Example: with `(inductive (affine) Chan (sort 1) (ctor mk_chan (pi id Nat Chan)))`,
+`(lam c Chan (mk_cp c c))` is rejected with
+`K0021 ... [UseAfterMove]: variable 'c' is used after it was moved`; without the marker `Chan`
+is Copy and the same definition is accepted.
 
 ## 2. Borrowing & References
 
@@ -37,6 +66,12 @@ Surface `&`/`&mut` desugar to the reserved primitives `borrow_shared` and `borro
 primitives are admitted by the kernel as total axioms with fixed signatures. Their safety
 contract is enforced by the MIR borrow checker (outside the TCB), so safe code may borrow without
 an explicit `unsafe` marker.
+
+Borrowing is not moving: in the kernel's ownership walk the argument of `borrow_shared` is a
+*read* and the argument of `borrow_mut` a *mutable use* of the variable (§6.2). Both require that
+the variable has not been moved, and neither moves it. Whether a move happens while a loan is
+still live (`M201`), and whether loans conflict (`M200`) or outlive their referent (`M203`), is
+decided by the MIR borrow checker alone.
 
 ## 3. Lifetimes at the Type Level
 
@@ -72,6 +107,14 @@ Example (return tied to the first argument):
 Elision rule (Rust-style): if a signature contains exactly one distinct
 reference lifetime among its inputs, unlabeled return references are assigned
 that lifetime. Otherwise, return references must be explicitly labeled.
+A *signature* is a complete chain of `pi`s (all the arguments of a curried
+function type, up to its final result); the rule is checked once per chain, not
+for each curried suffix. Each unlabeled input reference counts as a lifetime of
+its own. So `(pi a (Ref Shared Nat) (pi n Nat (Ref Shared Nat)))` (one input
+lifetime, the reference first) is accepted like `(pi n Nat (pi a (Ref Shared Nat)
+(Ref Shared Nat)))`, while two unlabeled input references, or none, with an
+unlabeled result are rejected (`F0208` in the elaborator, `K0045` in the kernel).
+A `pi` appearing as an argument type or inside the result is a signature of its own.
 
 ## 4. Mutation & Dependent Types
 
@@ -121,6 +164,106 @@ resources. For ownership soundness:
 
 ---
 
+## 6.2 Kernel ownership check (trusted)
+
+`Env::add_definition` runs an affine ownership walk over every definition value
+(`check_ownership_in_term` in `kernel/src/checker.rs`; top-level expressions are submitted the
+same way by the CLI driver). Violations are `K0021` errors that name the variable
+(`Ownership violation [UseAfterMove]: variable 'k' is used after it was moved`).
+
+**State.** The walk threads a stack with one entry per variable in scope: whether it is Copy,
+whether it is an implicit binder, and whether it has been *moved*. A *repetition barrier* marks
+the start of a scope that may run more than once.
+
+**Erased positions.** A subterm is *erased* — not evaluated at run time, no ownership effect at
+all, allowed even after a move — if it is a type, a type family or a proof. Concretely: binder
+types of `lam`/`let`/`fix`, every `pi` type, a `let` value whose declared type is erased, an
+argument whose expected domain is erased (a sort, an arity, or a proposition: type arguments and
+proof arguments), an application whose own type is erased (e.g. `Eq A x y`, or a lemma
+`cong ... e`), and the parameters, motive and indices of a recursor application (plus its minor
+premises, major premise and extra arguments when their domains are erased, e.g. an elimination
+into `Prop`). Erased subterms are skipped by the walk.
+
+**Uses of a variable in a runtime position.**
+
+*   *move* (consume): the variable as a value (argument, constructor field, `let` value, result),
+    or the head of a call of an `FnOnce` function;
+*   *read*: the head of a call of an `Fn` function, the argument of `borrow_shared`;
+*   *mutable use*: the head of a call of an `FnMut` function, the argument of `borrow_mut`.
+
+For a Copy variable every use is allowed. For a non-Copy variable every use requires that it has
+not been moved (`UseAfterMove`); a move marks it moved; a move of a variable bound outside the
+innermost repetition barrier is `ConsumedInRepeatedScope`. A move or mutable use of an implicit
+binder of non-Copy type is `ImplicitNonCopyUse`.
+
+**Closures.** In `lam^k x:A. t` (kind `k`), a use in mode `m` of a variable bound outside the
+lambda counts as `min(m, capmode(k))`, where `capmode(Fn) = read`, `capmode(FnMut) = mutable
+use`, `capmode(FnOnce) = move` (an `Fn` closure only reads what it captures, so a move inside an
+`Fn` closure body is a read of the captured variable; the kind check below rejects the closure
+if it really moves a non-Copy capture). The body is walked in the same state, so moves inside a
+closure body are moves of the captured variables at the point where the closure is built.
+
+**Applications.** `h a1 ... an`: the head is used first — a variable head according to the kind
+of its type's first `pi`, a compound head is evaluated (walked as a value) — then the arguments
+left to right, skipping erased ones. `borrow_shared {A} x` / `borrow_mut {A} x` with a variable
+`x` read / mutably use `x`; a compound argument is evaluated (moved) as a temporary.
+
+**`let x : A = v; t`**: `v` (unless erased), then `t` with `x` pushed (Copy iff `A` is Copy).
+
+**Recursors** `Rec_I params motive minors indices major extra...`. The application must supply
+the motive and all minor premises in place (`RecursorWithoutMinorPremises`; minor premises
+passed later through a variable could not be checked). Parameters, motive and indices are
+erased.
+
+*   `I` *non-recursive* (no constructor has a field of type `I ...`) and the application
+    *saturated* (the major premise is supplied): exactly one minor premise runs, after the major
+    premise is evaluated (also the order of MIR's inline lowering). The major premise is walked
+    first; then every minor premise is walked from the same state, and the moved sets are joined
+    (a variable is moved after the elimination if some branch moved it). So
+    `(match b T (case (true) (close c)) (case (false) (finish c)))` is accepted, and a use of `c`
+    after the match is rejected.
+*   `I` *recursive*, or the application *unsaturated* (applied without its major premise, for any
+    `I`): the arguments are walked left to right (minor premises are built as values before any
+    dispatch: as closures before the major premise is evaluated, as in MIR, or held by the
+    function value that an unsaturated application returns). A minor premise is *repeatable* if
+    the application is unsaturated, or `I` is branching (some constructor has two or more
+    recursive fields), or its constructor has a recursive field. So for an unsaturated
+    application every minor premise is repeatable, also for a non-recursive `I`: in
+    `((rec Bool) (lam z Bool Nat) (burn k) (burn k))` both field-less cases are evaluated when
+    the partial application is built, and the second `(burn k)` is a use after move (`K0021`
+    `UseAfterMove`), whereas the saturated `((rec Bool) (lam z Bool Nat) (burn k) (burn k) b)`
+    is accepted. (An unsaturated recursor is in any case rejected later by lowering,
+    "Partially applied recursor".) A repeatable minor premise of a
+    constructor with fields must be a lambda (or a global constant / constructor;
+    `RepeatedMinorNotLambda`) and is walked under a repetition barrier, so it may not move
+    non-Copy variables bound outside it (`ConsumedInRepeatedScope`); a repeatable minor premise
+    of a field-less constructor is the value returned for every occurrence of the constructor
+    and must be Copy (`RepeatedMinorValueNotCopy`). Other minor premises (the base case of a
+    linear recursion) may move outer variables.
+*   Inside a minor premise the fields are pushed as variables; a recursive field of non-Copy type
+    starts out *moved*, because the recursor computes the induction hypotheses eagerly and so
+    consumes the field before the minor premise runs (`RecursiveFieldConsumedByIh`); such fields
+    must be bound by lambdas (`MinorMustBindRecursiveField`).
+
+**Fixpoints.** `fix f:T. t` walks `t` under a repetition barrier (the body runs once per
+recursive call).
+
+**Function kinds** (`K0043`, checked when the kernel infers the type of every `lam`). The
+*uses* of the variables free in a lambda body are computed by one stateless analysis that uses
+the same positions as the walk (`term_variable_uses`): erased occurrences and reads count as
+`read`, then `mutable use`, then `move`, taking the strongest use and applying the closure
+downgrade above for nested lambdas. A captured variable is *moved into* the closure if it is not
+Copy and its use is `move` (a moved `Ref Mut` is a mutable use), *mutably borrowed* if its use
+is `mutable use` and it is not Copy, and *read* otherwise (a Copy capture is always read: the
+closure works on its own copy). The required kind is `FnOnce` if some capture is moved, else
+`FnMut` if some capture is mutably borrowed, else `Fn`, and `lam^k` is accepted iff the required
+kind is at most `k` (`Fn < FnMut < FnOnce`). The elaborator stamps lambdas with the kind
+computed by this same analysis (`analyze_closure_captures`), and MIR lowering uses it for the
+capture modes it requires, so the three components agree; the elaborator falls back to a
+syntactic approximation only for terms the kernel cannot type yet.
+
+---
+
 ## 7. Implementation: MIR-Based Analysis
 
 The ownership and borrow checking is implemented in the `mir` crate as a dataflow analysis over the Mid-level Intermediate Representation (MIR).
@@ -159,16 +302,23 @@ enum LocalState {
 - **Use after move**: Detects when a moved value is used again
 - **Double move in arguments**: Catches same value moved multiple times in a call
 - **Uninitialized use**: Prevents reading uninitialized locals
-- **Linear type consumption**: Ensures linear (non-Copy) types are consumed exactly once
+- **Borrow and call of a moved value**: a shared or mutable borrow (`Rvalue::Ref`), a discriminant read, or a call of a
+  function value that has been moved is a use after move (function values moved by an assignment or an argument are
+  tracked; a function value moved into a closure's environment because the closure only calls it is not)
+- **Affine, not linear**: a non-Copy value may be dropped without being consumed (used *at most* once); no check
+  requires consumption. `M104` (`LinearNotConsumed`) is defined in `mir/src/errors.rs` but no analysis reports it
 - **Return initialization**: Verifies return value is initialized on all paths
 
 **Copy type detection:**
-Types are considered Copy if:
-- They are `Sort` (types themselves)
-- They are inductive types with a resolved Copy instance whose requirements are Copy (derived or explicit)
-- Function types (`Pi`) are never Copy
-Function values are non-Copy by default; capture information currently affects
-call mode, not Copy.
+MIR asks the kernel (`is_copy_type_in_env` / `is_copy_type_in_ctx`, §1): sorts, erased types
+(type families, propositions), `Ref Shared _`, and inductive types with a Copy instance whose
+requirements hold. A local whose type is a proposition (`LocalDecl::is_prop`) is Copy unless its
+MIR type is a function, closure or opaque type. Function values are non-Copy by default; capture
+information currently affects call mode, not Copy. MIR's own checks (typing and ownership) decide
+whether a field projected out of a non-Copy value may be copied with the same Copy instances,
+translated to MIR types when the layouts are built (`AdtLayout::copy_requirements`,
+`AdtLayoutRegistry::type_is_copy` in `mir/src/types.rs`): a `List Nat` field of an `affine` value
+may be copied out of it, an affine field may not.
 
 ```rust
 fn is_copy_type(&self, ty: &Rc<Term>) -> bool {

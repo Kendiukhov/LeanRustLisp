@@ -1,0 +1,13 @@
+;; Positive control P10 (macro twin) - `witness-then-burn` expands to
+;; `(let p Holds (hold t) (burn t))`.
+;; Expected: accepted; main = 3.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok n) n))))
+(inductive Holds (sort 0) (ctor hold (pi t Tok Holds)))
+
+(defmacro witness-then-burn (v) `(let p Holds (hold ,v) (burn ,v)))
+
+(def stash (pi t Tok Nat)
+  (lam t Tok (witness-then-burn t)))
+
+(def main Nat (stash (mk_tok 3)))

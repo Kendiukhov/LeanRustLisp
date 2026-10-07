@@ -1,0 +1,22 @@
+;; Q9 (positive): mutable borrows. `(&mut x)` creates a `Ref Mut` to x; MIR's NLL borrow checker
+;; forbids two live mutable borrows of one variable. Accepted here: two `&mut` of two different
+;; variables passed to one call, and two `&mut` of the same variable whose lifetimes do not
+;; overlap (the first is dead before the second is created). Then x and y are read again.
+;; LRL has no operation that reads or writes through a reference (the prelude declares only
+;; borrow_shared / borrow_mut), so `touch2` / `touch` cannot modify anything: they only
+;; receive the references.
+(def touch2 (pi a (Ref #[r] Mut Nat) (pi b (Ref #[r] Mut Nat) Nat))
+  (lam a (Ref #[r] Mut Nat) (lam b (Ref #[r] Mut Nat) zero)))
+
+(def touch (pi a (Ref #[r] Mut Nat) Nat) (lam a (Ref #[r] Mut Nat) zero))
+
+(def demo (pi x Nat (pi y Nat Nat))
+  (lam x Nat (lam y Nat
+    (let n1 Nat (touch2 (&mut x) (&mut y))            ;; distinct variables
+      (let r1 (Ref #[r] Mut Nat) (&mut x)
+        (let n2 Nat (touch r1)                        ;; last use of r1
+          (let r2 (Ref #[r] Mut Nat) (&mut x)         ;; r1 is dead here (NLL)
+            (let n3 Nat (touch r2)
+              (add (print_nat x) (print_nat y))))))))))
+
+(def main Nat (demo 1 10))

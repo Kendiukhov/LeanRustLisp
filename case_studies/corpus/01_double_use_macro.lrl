@@ -1,0 +1,11 @@
+;; Class 01 (macro twin) - the macro `pair-of` duplicates its argument, so its
+;; expansion at the call site is exactly `(mk_tp t t)` from 01_double_use.lrl.
+;; Expected: kernel K0021 [UseAfterMove] naming `t`, with the label
+;; "macro 'pair-of' expanded here".
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive TP (sort 1) (ctor mk_tp (pi a Tok (pi b Tok TP))))
+
+(defmacro pair-of (x) `(mk_tp ,x ,x))
+
+(def dup (pi t Tok TP)
+  (lam t Tok (pair-of t)))

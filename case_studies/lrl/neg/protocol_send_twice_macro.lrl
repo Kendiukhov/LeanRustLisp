@@ -1,0 +1,34 @@
+;; Negative variant of case study B (../protocol.lrl).  The declarations up to the marked line
+;; are copied from protocol.lrl (comments and unused definitions omitted); only the code after
+;; it is new.
+;; Expected: the same K0021 UseAfterMove naming `c` as protocol_send_twice.lrl, now labelled
+;; with the call site of the macro that produced the double use.
+
+(inductive (affine) Chan (pi n Nat (sort 1))
+  (ctor mk_chan (pi {n Nat} (pi log (List Nat) (Chan n)))))
+(inductive Receipt (sort 1)
+  (ctor receipt (pi log (List Nat) Receipt)))
+(def open_chan (pi n Nat (Chan n))
+  (lam n Nat (mk_chan nil)))
+(def close (pi c (Chan zero) Receipt)
+  (lam c (Chan zero)
+    (match c Receipt (case (mk_chan log) (receipt log)))))
+(defmacro defsend (name payload encode)
+  (def name (pi {n Nat} (pi c (Chan (succ n)) (pi #[once] x payload (Chan n))))
+    (lam {n} Nat (lam c (Chan (succ n)) (lam #[once] x payload
+      (match c (Chan n)
+        (case (mk_chan log) (mk_chan (cons (encode x) log)))))))))
+(def log (pi m Nat Nat) (lam m Nat (print_nat m)))
+(defsend send Nat log)
+
+;; ---- new code ----
+
+;; A careless "send, then retry" macro: its template mentions the channel argument twice, so
+;; `(send-and-retry c 7)` expands to exactly the body of `replay` in protocol_send_twice.lrl.
+;; `c` occurs only once in the source.
+(defmacro send-and-retry (ch v)
+  (let r Receipt (close (send ch v))
+    (close (send ch v))))
+
+(def retry (pi c (Chan 1) Receipt)
+  (lam c (Chan 1) (send-and-retry c 7)))

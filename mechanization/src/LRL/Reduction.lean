@@ -1,41 +1,39 @@
 import LRL.Syntax
 
+/-!
+# LRL reduction — simply-typed fragment
+
+`shift` increments free variables above a cutoff.
+`subst` substitutes a term for a specific de Bruijn index and shifts the
+remaining free variables down by one (the standard de Bruijn substitution).
+`Step` is the single-step call-by-name/full-reduction relation with β,
+appL, appR, and lam congruences.
+-/
+
 namespace LRL
 
-/-- Shift indices in a term by `d` above cutoff `c`. -/
-def shift (t : Term) (c d : Nat) : Term :=
-  match t with
-  | Term.var k => if k < c then Term.var k else Term.var (k + d)
-  | Term.sort l => Term.sort l
-  | Term.const n ls => Term.const n ls
-  | Term.app t1 t2 => Term.app (shift t1 c d) (shift t2 c d)
-  | Term.lam ty b => Term.lam (shift ty c d) (shift b (c + 1) d)
-  | Term.pi ty b => Term.pi (shift ty c d) (shift b (c + 1) d)
-  | Term.letE ty v b => Term.letE (shift ty c d) (shift v c d) (shift b (c + 1) d)
+/-- `shift d c t`: add `d` to every free variable in `t` whose index is ≥ `c`. -/
+def shift (d : Nat) : Nat → Term → Term
+  | c, .var k   => if k < c then .var k else .var (k + d)
+  | c, .lam τ b => .lam τ (shift d (c + 1) b)
+  | c, .app f a => .app (shift d c f) (shift d c a)
 
-/-- Substitute `s` for variable `k` in `t`. -/
-def subst (t : Term) (k : Nat) (s : Term) : Term :=
-  match t with
-  | Term.var i =>
-    if i == k then s
-    else if i > k then Term.var (i - 1)
-    else Term.var i
-  | Term.sort l => Term.sort l
-  | Term.const n ls => Term.const n ls
-  | Term.app t1 t2 => Term.app (subst t1 k s) (subst t2 k s)
-  | Term.lam ty b => Term.lam (subst ty k s) (subst b (k + 1) (shift s 0 1))
-  | Term.pi ty b => Term.pi (subst ty k s) (subst b (k + 1) (shift s 0 1))
-  | Term.letE ty v b => Term.letE (subst ty k s) (subst v k s) (subst b (k + 1) (shift s 0 1))
+/-- `subst j s t`: substitute `s` for de Bruijn index `j` in `t`, decrementing
+    free variables above `j` by one. Variables under binders are handled by
+    incrementing `j` and shifting `s` by one. -/
+def subst (j : Nat) (s : Term) : Term → Term
+  | .var k =>
+      if k = j then s
+      else if k > j then .var (k - 1)
+      else .var k
+  | .lam τ b => .lam τ (subst (j + 1) (shift 1 0 s) b)
+  | .app f a => .app (subst j s f) (subst j s a)
 
-/-- Single step beta reduction. -/
-inductive Step : Term -> Term -> Prop where
-  | beta : Step (Term.app (Term.lam _ b) arg) (subst b 0 arg)
-  -- Add congruence rules here...
-
-/-- Definitional equality (conversion). -/
-inductive Conv : Term -> Term -> Prop where
-  | refl (t : Term) : Conv t t
-  | step (t t' t'' : Term) : Step t t' -> Conv t' t'' -> Conv t t''
-  -- Add symmetry, transitivity, eta...
+/-- Single-step reduction with β and standard congruences. -/
+inductive Step : Term → Term → Prop where
+  | beta  {τ b a}   : Step (.app (.lam τ b) a) (subst 0 a b)
+  | appL  {f f' a}  : Step f f' → Step (.app f a) (.app f' a)
+  | appR  {f a a'}  : Step a a' → Step (.app f a) (.app f a')
+  | lamCg {τ b b'}  : Step b b' → Step (.lam τ b) (.lam τ b')
 
 end LRL

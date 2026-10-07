@@ -1,0 +1,12 @@
+;; Class 25 (macro twin) - `eat-then-look` expands to
+;; `(let n Nat (eat t) (look (& t)))`.
+;; Expected: kernel K0021 [UseAfterMove] naming `t`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+(def eat (pi t Tok Nat) (lam t Tok (succ (succ zero))))
+
+(defmacro eat-then-look (v) `(let n Nat (eat ,v) (look (& ,v))))
+
+(def bam (pi t Tok Nat)
+  (lam t Tok (eat-then-look t)))

@@ -1,0 +1,15 @@
+;; Positive control P09 (nearest legal variant of classes 12/20) - two
+;; mutable borrows of the same token that are NOT live at the same time
+;; (each call returns before the next borrow), then a move.
+;; Expected: accepted; main = 4.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def poke (pi r (Ref #[r] Mut Tok) Nat) (lam r (Ref #[r] Mut Tok) (succ zero)))
+(def eat (pi t Tok Nat) (lam t Tok (succ (succ zero))))
+
+(def mut_then_mut (pi t Tok Nat)
+  (lam t Tok
+    (let n Nat (poke (&mut t))
+      (let m Nat (poke (&mut t))
+        (add (add n m) (eat t))))))
+
+(def main Nat (mut_then_mut (mk_tok 0)))

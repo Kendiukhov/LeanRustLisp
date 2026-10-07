@@ -1,0 +1,11 @@
+;; Class 09 - the body of a fixpoint (general recursion, `partial`) consumes a
+;; captured owned value. The body runs once per recursive call.
+;; Expected: kernel K0021 [ConsumedInRepeatedScope] naming `k`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(partial eat (pi k Tok (Comp Nat)) (lam k Tok (ret Nat)))
+
+(partial loop_eat (pi k Tok (pi #[once] n Nat (Comp Nat)))
+  (lam k Tok
+    (fix go (pi #[once] n Nat (Comp Nat))
+      (lam #[once] n Nat (bind Nat Nat (eat k) (go n))))))

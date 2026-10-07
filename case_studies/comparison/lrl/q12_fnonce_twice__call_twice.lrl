@@ -1,0 +1,16 @@
+;; Q12 (negative): the once-only closure `consume` is called twice. Identical to
+;; q12_fnonce_twice.lrl except for the line marked CHANGED. Expected: rejected before running.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def burn (pi u Nat (pi t Tok Nat))
+  (lam u Nat (lam t Tok (match t Nat (case (mk_tok id) (add id u))))))
+
+(def apply_once (pi #[once] f (pi #[once] u Nat Nat) Nat)
+  (lam #[once] f (pi #[once] u Nat Nat) (f 2)))
+
+(def main Nat
+  (let t Tok (mk_tok 5)
+    (let consume (pi #[once] u Nat Nat) (lam #[once] u Nat (burn u t))
+      (add (print_nat (add (consume 1) (consume 2)))   ;; CHANGED: consume called twice
+           (let t2 Tok (mk_tok 5)
+             (print_nat (apply_once (lam #[once] u Nat (burn u t2)))))))))  ;; 7

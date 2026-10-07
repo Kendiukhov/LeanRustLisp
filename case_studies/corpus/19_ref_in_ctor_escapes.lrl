@@ -1,0 +1,11 @@
+;; Class 19 - a reference stored in a constructor escapes its referent.
+;; `leak` returns a struct holding a borrow of its own parameter `t`, which is
+;; dropped when `leak` returns (T4 finding F1: the loan is carried by the
+;; constructed value).
+;; Expected: MIR M203 (DanglingReference).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+
+(inductive RB (sort 1) (ctor rb (pi r (Ref #[r] Shared Tok) RB)))
+
+(def leak (pi t Tok RB)
+  (lam t Tok (rb (& t))))

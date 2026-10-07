@@ -1,0 +1,35 @@
+;; Negative variant of case study A (../vectors.lrl). The declarations up to the marked line
+;; are copied from vectors.lrl (comments and unused definitions omitted); only the code after
+;; it is new.
+;; Expected: rejected: the statement is false (its right-hand side lacks vreverse); the proof of the true
+;; lemma vreverse_vsnoc, reused for it, does not check.
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+(def vsnoc (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) (pi #[once] x A (Vec A (succ n))))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n) (lam #[once] x A
+    (match v (motive (lam k Nat (lam w (Vec A k) (Vec A (succ k)))))
+      (case (vnil) (vcons x vnil))
+      (case (vcons h t ih) (vcons h ih))))))))
+(def vreverse (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) (Vec A n))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n)
+    (match v (motive (lam k Nat (lam w (Vec A k) (Vec A k))))
+      (case (vnil) vnil)
+      (case (vcons h t ih) (vsnoc ih h)))))))
+(def cong (pi {A (sort 1)} (pi {B (sort 1)} (pi f (pi #[once] x A B)
+            (pi {x A} (pi {y A} (pi e (Eq A x y) (Eq B (f x) (f y))))))))
+  (lam {A} (sort 1) (lam {B} (sort 1) (lam f (pi #[once] x A B) (lam {x} A (lam {y} A (lam e (Eq A x y)
+    (match e (motive (lam b A (lam w (Eq A x b) (Eq B (f x) (f b)))))
+      (case (refl) (refl B (f x)))))))))))
+
+;; ---- new code ----
+
+;; FALSE: vreverse (vsnoc v x) = vcons x v  (correct: vcons x (vreverse v)).
+(def vreverse_vsnoc_wrong (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) (pi x A
+                            (Eq (Vec A (succ n)) (vreverse (vsnoc v x)) (vcons x v))))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n) (lam x A
+    (match v (motive (lam k Nat (lam w (Vec A k)
+                (Eq (Vec A (succ k)) (vreverse (vsnoc w x)) (vcons x w)))))
+      (case (vnil) (refl (Vec A 1) (vcons x vnil)))
+      (case (vcons h t ih) (cong (lam #[once] u (Vec A _) (vsnoc u h)) ih))))))))

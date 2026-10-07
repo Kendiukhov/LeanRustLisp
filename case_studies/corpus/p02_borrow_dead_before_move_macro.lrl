@@ -1,0 +1,16 @@
+;; Positive control P02 (macro twin) - `look-then-eat` expands to the nested
+;; lets of p02_borrow_dead_before_move.lrl.
+;; Expected: accepted; main = 3.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+(def eat (pi t Tok Nat) (lam t Tok (succ (succ zero))))
+
+(defmacro look-then-eat (v)
+  `(let r (Ref #[r] Shared Tok) (& ,v)
+     (let n Nat (look r)
+       (add n (eat ,v)))))
+
+(def bdc (pi t Tok Nat)
+  (lam t Tok (look-then-eat t)))
+
+(def main Nat (bdc (mk_tok 0)))

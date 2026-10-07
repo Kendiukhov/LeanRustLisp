@@ -1,0 +1,24 @@
+;; Positive control P19 (formerly violation class 30; file name kept) - an FnOnce
+;; closure whose result is a proof, passed twice. `g` would consume the token `k`
+;; when called, but its type `(pi #[once] u Nat Tru)` is a proposition (a function
+;; into Prop): `g` is a proof, erased at run time and therefore Copy (ownership
+;; model, Copy of erased types), so passing it twice is legal. The kernel never
+;; walks the proof; MIR lowering builds proof-typed closures without captures and
+;; never evaluates their bodies (proofs are erased), so MIR accepts it too.
+;; (Before this was fixed, MIR still lowered the closure as a value capturing `k`
+;; and rejected the second move with M100.)
+;; Expected: accepted; the dynamic binary prints `Result: Nat(0)`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok n) n))))
+(inductive Tru (sort 0) (ctor triv Tru))
+
+(def use2 (pi g (pi #[once] u Nat Tru) (pi h (pi #[once] u Nat Tru) Nat))
+  (lam g (pi #[once] u Nat Tru) (lam h (pi #[once] u Nat Tru)
+    (let a Tru (g zero) (let b Tru (h zero) zero)))))
+
+(def f (pi k Tok Nat)
+  (lam k Tok
+    (let g (pi #[once] u Nat Tru) (lam #[once] u Nat (let n Nat (burn k) triv))
+      (use2 g g))))
+
+(def main Nat (f (mk_tok 3)))

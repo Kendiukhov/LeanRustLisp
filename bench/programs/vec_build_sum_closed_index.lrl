@@ -1,0 +1,30 @@
+;; Compile-time probe vec_build_sum_closed_index: the same program as vec_build_sum.lrl, except that
+;; `main` applies vsum and vbuild to the closed expression `size` directly, so `size` appears in the
+;; type index of `(vbuild size) : Vec Nat size`. Used only for the compile-time experiment
+;; `python3 bench/run_bench.py indexcost` (front half of the compiler as a function of n).
+;; Every element is 1, so the result is n.
+;; @SIZE@ is replaced by the driver (bench/run_bench.py) with `(nat_mul A B)` for small literals
+;; A and B, so that n is computed at run time instead of being written as one large unary literal.
+;;
+;; The forms named on the @copied-from line are copied verbatim from the case study;
+;; `python3 bench/run_bench.py check` verifies that they are still identical to it.
+;; @copied-from case_studies/lrl/vectors.lrl: Vec vsum
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+(def vsum (pi {n Nat} (pi v (Vec Nat n) Nat))
+  (lam {n} Nat (lam v (Vec Nat n)
+    (match v Nat (case (vnil) zero) (case (vcons h t ih) (add h ih))))))
+
+;; ---- workload ----
+(def vbuild (pi n Nat (Vec Nat n))
+  (lam n Nat
+    (match n (motive (lam k Nat (Vec Nat k)))
+      (case (zero) vnil)
+      (case (succ k ih) (vcons 1 ih)))))
+
+(def size Nat @SIZE@)
+
+(def main Nat (vsum (vbuild size)))

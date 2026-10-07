@@ -1,0 +1,6 @@
+;; Class 04 - an FnOnce closure called twice.
+;; A call of a variable whose type is `(pi #[once] ...)` consumes the
+;; variable, so the second call uses a moved value.
+;; Expected: kernel K0021 [UseAfterMove] naming `f`.
+(def call_twice (pi f (pi #[once] x Nat Nat) Nat)
+  (lam f (pi #[once] x Nat Nat) (add (f zero) (f zero))))

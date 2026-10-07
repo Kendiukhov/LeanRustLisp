@@ -81,7 +81,6 @@ fn erase_runtime_type(ty: &MirType, prop_adts: &HashSet<AdtId>) -> MirType {
         | MirType::Bool
         | MirType::Nat
         | MirType::Opaque { .. }
-        | MirType::IndexTerm(_)
         | MirType::Param(_) => ty.clone(),
     }
 }
@@ -115,7 +114,10 @@ pub fn erase_proofs(body: &mut Body) {
         } else {
             decl.ty = erase_runtime_type(&decl.ty, &prop_adts);
         }
-        decl.is_copy = decl.ty.is_copy();
+        // Erasure only replaces proof types by `()`, so a local can only become more
+        // copyable. Keep the lowering's Copy flag (computed with the kernel's Copy instances,
+        // e.g. for user ADTs, which `MirType::is_copy` cannot see) instead of recomputing it.
+        decl.is_copy = decl.is_copy || decl.ty.is_copy();
         decl.closure_captures = decl
             .closure_captures
             .iter()

@@ -1,0 +1,10 @@
+;; Paper, subsection "Function kinds" (label sec:core:kinds, paper/jot_r1/sections/core.tex): in a curried function each Pi has its own kind.
+;; The inner function captures the token `a` and moves it into the pair, so it must be FnOnce
+;; (`#[once]`); the outer function captures nothing and is Fn.
+;; Expected: accepted. `main` (not printed in the paper) applies it; the dynamic binary prints
+;; `Result: Nat(1)`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok Tok))
+(def pair_with (pi a Tok (pi #[once] b Nat (Pair Tok Nat)))
+  (lam a Tok (lam #[once] b Nat (mk_pair a b))))
+
+(def main Nat (match (pair_with mk_tok (succ zero)) Nat (case (mk_pair t n) n)))

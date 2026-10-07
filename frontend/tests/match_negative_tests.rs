@@ -155,7 +155,7 @@ fn elaboration_match_case_type_mismatch_rejected() {
         .expect_err("Case bodies should be checked against the motive");
     assert!(matches!(
         err,
-        ElabError::UnificationError(_, _) | ElabError::TypeMismatch { .. }
+        ElabError::UnificationError(_, _, _) | ElabError::TypeMismatch { .. }
     ));
 }
 

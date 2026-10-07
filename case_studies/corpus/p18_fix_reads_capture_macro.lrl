@@ -1,0 +1,19 @@
+;; Positive control P18 (macro twin) - `count-down-with` expands to the
+;; fixpoint; its binders `go`, `n`, `r` are hygienic.
+;; Expected: accepted; the binary prints 2, 1, 0.
+(def is_zero (pi n Nat Bool)
+  (lam n Nat (match n Bool (case (zero) true) (case (succ m ih) false))))
+(def pred (pi n Nat Nat)
+  (lam n Nat (match n Nat (case (zero) zero) (case (succ m ih) m))))
+
+(defmacro count-down-with (g)
+  `(fix go (pi n Nat (Comp Nat))
+     (lam n Nat
+       (match (is_zero n) (Comp Nat)
+         (case (true) (ret Nat))
+         (case (false) (let r Nat (,g (pred n)) (go (pred n))))))))
+
+(partial count_print (pi f (pi x Nat Nat) (pi n Nat (Comp Nat)))
+  (lam f (pi x Nat Nat) (count-down-with f)))
+
+(partial main (Comp Nat) (count_print (lam x Nat (print_nat x)) 3))

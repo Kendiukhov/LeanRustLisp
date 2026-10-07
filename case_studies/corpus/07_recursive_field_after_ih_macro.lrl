@@ -1,0 +1,14 @@
+;; Class 07 (macro twin) - the case body is produced by the macro
+;; `keep-tail`, which expands to `(qcons rest ih)`.
+;; Expected: kernel K0021 [RecursiveFieldConsumedByIh] naming `rest`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive TL (sort 1) (ctor tnil TL) (ctor tcons (pi h Tok (pi t TL TL))))
+(inductive TQ (sort 1) (ctor qnil TQ) (ctor qcons (pi a TL (pi b TQ TQ))))
+
+(defmacro keep-tail (tail rec) `(qcons ,tail ,rec))
+
+(def suffixes (pi l TL TQ)
+  (lam l TL
+    (match l TQ
+      (case (tnil) qnil)
+      (case (tcons h rest ih) (keep-tail rest ih)))))

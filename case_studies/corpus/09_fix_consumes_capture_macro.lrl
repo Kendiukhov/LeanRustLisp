@@ -1,0 +1,13 @@
+;; Class 09 (macro twin) - `forever-eat` expands to the same fixpoint; the
+;; template's binders `go` and `n` are hygienic.
+;; Expected: kernel K0021 [ConsumedInRepeatedScope] naming `k`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(partial eat (pi k Tok (Comp Nat)) (lam k Tok (ret Nat)))
+
+(defmacro forever-eat (tok)
+  `(fix go (pi #[once] n Nat (Comp Nat))
+     (lam #[once] n Nat (bind Nat Nat (eat ,tok) (go n)))))
+
+(partial loop_eat (pi k Tok (pi #[once] n Nat (Comp Nat)))
+  (lam k Tok (forever-eat k)))

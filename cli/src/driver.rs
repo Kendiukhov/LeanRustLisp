@@ -1,7 +1,7 @@
 use frontend::declaration_parser::{DeclarationParseError, DeclarationParser};
 use frontend::diagnostics::{Diagnostic, DiagnosticCollector, DiagnosticHandler};
 use frontend::elaborator::{ElabError, Elaborator};
-use frontend::macro_expander::{Expander, ExpansionError};
+use frontend::macro_expander::{Expander, ExpansionError, MacroTraceEntry};
 use frontend::parser::{ParseError, Parser};
 use frontend::surface::{Declaration, Span, SurfaceTerm, SurfaceTermKind, Syntax, SyntaxKind};
 use kernel::ast::{
@@ -24,6 +24,7 @@ const CODE_DRIVER_EVAL_BLOCKED: &str = "C0004";
 const CODE_DRIVER_INTERIOR_MUTABILITY_GATED: &str = "C0005";
 const CODE_DRIVER_LINT_PANIC_FREE: &str = "C0006";
 const CODE_DRIVER_MACRO_IMPORT_FORM: &str = "C0007";
+const CODE_DRIVER_FIX_IN_EXPRESSION: &str = "C0008";
 
 #[derive(Debug)]
 pub enum DriverError {
@@ -151,12 +152,24 @@ fn build_term_span_map(elab: &Elaborator) -> mir::lower::TermSpanMap {
         .map(|(ptr, id)| (*ptr, id.0))
         .collect();
     mir::lower::TermSpanMap::new(spans_by_id, term_ids_by_ptr)
+        .with_pinned_terms(elab.pinned_terms().to_vec())
 }
 
 fn span_for_mir_location(location: Option<MirSpan>, span_table: &MirSpanMap) -> Option<Span> {
     location
         .and_then(|loc| span_table.get(&loc).copied())
         .map(to_frontend_span)
+}
+
+/// Source span of a borrow error: its own location, or else (e.g. a reference that outlives a
+/// value dropped at a compiler-inserted `StorageDead`, which has no source position) the
+/// location where the offending loan was issued.
+fn span_for_borrow_error(
+    error: &mir::errors::BorrowError,
+    span_table: &MirSpanMap,
+) -> Option<Span> {
+    span_for_mir_location(error.location(), span_table)
+        .or_else(|| span_for_mir_location(error.loan_location(), span_table))
 }
 
 fn diagnostic_from_parse_error(err: &ParseError) -> Diagnostic {
@@ -183,12 +196,34 @@ fn diagnostic_from_elab_error(context: &str, err: &ElabError) -> Diagnostic {
     diagnostic
 }
 
+/// Message for a failure of `Elaborator::solve_constraints` on `what` (`'name'`,
+/// `expression`, `instance`). Constraints that stay blocked keep the "Unsolved constraints"
+/// message; a postponed constraint that turned out to be false once the metavariables were
+/// solved is an ordinary elaboration (type) error.
+fn constraint_failure_message(what: &str, e: &ElabError) -> String {
+    match e {
+        ElabError::UnsolvedConstraints(_) => format!("Unsolved constraints in {}: {:?}", what, e),
+        _ => format!("Elaboration error (Value) in {}: {}", what, e),
+    }
+}
+
 fn attach_elab_metadata(mut diagnostic: Diagnostic, err: &ElabError) -> Diagnostic {
     diagnostic = diagnostic.with_code(err.diagnostic_code());
     if let Some(span) = err.span() {
         diagnostic = diagnostic.with_span(span);
     }
     diagnostic
+}
+
+/// Fills in the source names of the variables in a kernel ownership error (the kernel reports
+/// the binder's term address; the elaborator recorded the binder's source name).
+fn resolve_kernel_error_names(
+    err: &mut kernel::checker::TypeError,
+    binder_names: &HashMap<usize, String>,
+) {
+    if let kernel::checker::TypeError::OwnershipError(ownership) = err {
+        ownership.resolve_names(binder_names);
+    }
 }
 
 fn diagnostic_from_kernel_error(
@@ -690,6 +725,381 @@ fn rollback_failed_definition(
     }
 }
 
+/// MIR validation pipeline shared by every path that admits code through `process_code`
+/// (`run`, the legacy file mode, the REPL, `compile`, packages): lowers the kernel-admitted
+/// definition `name` to MIR and runs MIR typing, the MIR ownership (move) analysis, the NLL
+/// borrow checker and, under `--panic-free`, the panic-free lints, on the definition body
+/// **and on every closure body derived from it** (the same checks `compiler.rs` runs before
+/// codegen). Top-level expressions are validated through this function as well, as an
+/// anonymous definition (see `check_expression_admission`).
+///
+/// Diagnostics are reported through `diagnostics`; artifacts are appended to `artifacts` when
+/// `options.collect_artifacts` is set. Returns `false` if any check failed, in which case the
+/// caller must not admit (or evaluate) the code.
+fn validate_definition_mir(
+    env: &Env,
+    name: &str,
+    term_span_map: &Rc<mir::lower::TermSpanMap>,
+    options: &PipelineOptions,
+    expander: &mut Expander,
+    diagnostics: &mut DiagnosticCollector,
+    artifacts: &mut Vec<Artifact>,
+) -> bool {
+    let Some(d) = env.definitions().get(name) else {
+        return true;
+    };
+    let Some(val) = &d.value else {
+        return true;
+    };
+    let mut failed = false;
+
+    let ids = mir::types::IdRegistry::from_env(env);
+    if ids.has_errors() {
+        for err in ids.errors() {
+            let mut diagnostic = Diagnostic::error(err.to_string());
+            if let Some(span) = err.span() {
+                diagnostic = diagnostic.with_span(to_frontend_span(span));
+            }
+            handle_diagnostic(diagnostics, expander, diagnostic);
+        }
+        return false;
+    }
+    let mut ctx = match mir::lower::LoweringContext::new_with_metadata(
+        vec![],
+        d.ty.clone(),
+        env,
+        &ids,
+        Some(term_span_map.clone()),
+        Some(name.to_string()),
+        Some(Rc::new(d.capture_modes.clone())),
+    ) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            let mut diagnostic = Diagnostic::error(format!("Lowering error in {}: {}", name, e));
+            if let Some(span) = e.span() {
+                diagnostic = diagnostic.with_span(to_frontend_span(span));
+            }
+            handle_diagnostic(diagnostics, expander, diagnostic);
+            return false;
+        }
+    };
+    let dest = mir::Place::from(mir::Local(0));
+    let target = mir::BasicBlock(1);
+    ctx.body.basic_blocks.push(mir::BasicBlockData {
+        statements: vec![],
+        terminator: None,
+    });
+    if let Err(e) = ctx.lower_term(val, dest, target) {
+        let mut diagnostic = Diagnostic::error(format!("Lowering error in {}: {}", name, e));
+        if let Some(span) = e.span() {
+            diagnostic = diagnostic.with_span(to_frontend_span(span));
+        }
+        handle_diagnostic(diagnostics, expander, diagnostic);
+        return false;
+    }
+    ctx.set_block(target);
+    ctx.terminate_with_term_span(val, mir::Terminator::Return);
+
+    mir::transform::storage::insert_exit_storage_deads(&mut ctx.body);
+
+    if options.collect_artifacts {
+        artifacts.push(Artifact::MirBody {
+            name: name.to_string(),
+            body: format!("{:?}", ctx.body),
+        });
+    }
+
+    // Check MIR typing
+    let mut typing = mir::analysis::typing::TypingChecker::new(&ctx.body);
+    typing.check();
+    let typing_errors = typing.errors();
+    if !typing_errors.is_empty() {
+        failed = true;
+    }
+    for e in typing_errors {
+        let mut diagnostic = Diagnostic::error(format!("MIR typing error in {}: {}", name, e))
+            .with_code(e.diagnostic_code());
+        if let Some(span) = span_for_mir_location(e.location(), &ctx.span_table) {
+            diagnostic = diagnostic.with_span(span);
+        }
+        handle_diagnostic(diagnostics, expander, diagnostic);
+    }
+
+    // Check Ownership
+    let mut ownership = mir::analysis::ownership::OwnershipAnalysis::new(&ctx.body);
+    ownership.analyze();
+    let ownership_errors = ownership.check_structured();
+    if !ownership_errors.is_empty() {
+        failed = true;
+    }
+    let ownership_error_strings: Vec<String> =
+        ownership_errors.iter().map(|e| e.to_string()).collect();
+    for e in &ownership_errors {
+        let mut diagnostic = Diagnostic::error(format!("Ownership error in {}: {}", name, e))
+            .with_code(e.diagnostic_code());
+        if let Some(span) = span_for_mir_location(e.location(), &ctx.span_table) {
+            diagnostic = diagnostic.with_span(span);
+        }
+        handle_diagnostic(diagnostics, expander, diagnostic);
+    }
+
+    // Check Borrows
+    // Check NLL
+    let mut nll = mir::analysis::nll::NllChecker::new(&ctx.body);
+    nll.check();
+    let nll_result = nll.into_result();
+    if !nll_result.errors.is_empty() {
+        failed = true;
+    }
+    for e in &nll_result.errors {
+        let mut diagnostic = Diagnostic::error(format!("Borrow error in {}: {}", name, e))
+            .with_code(e.diagnostic_code());
+        if let Some(span) = span_for_borrow_error(e, &ctx.span_table) {
+            diagnostic = diagnostic.with_span(span);
+        }
+        handle_diagnostic(diagnostics, expander, diagnostic);
+    }
+    let panic_free_runtime_checks = options.panic_free && !nll_result.runtime_checks.is_empty();
+    if panic_free_runtime_checks {
+        failed = true;
+        let mut diagnostic = Diagnostic::error(format!(
+            "Panic-free profile violation in {}: borrow checking inserted {} runtime check(s).",
+            name,
+            nll_result.runtime_checks.len()
+        ))
+        .with_code(CODE_DRIVER_LINT_PANIC_FREE);
+        if let Some(first_check) = nll_result.runtime_checks.first() {
+            if let Some(span) = span_for_mir_location(
+                Some(MirSpan {
+                    block: first_check.location.block,
+                    statement_index: first_check.location.statement_index,
+                }),
+                &ctx.span_table,
+            ) {
+                diagnostic = diagnostic.with_span(span);
+            }
+        }
+        handle_diagnostic(diagnostics, expander, diagnostic);
+    }
+    if nll_result.is_ok() && !panic_free_runtime_checks {
+        nll_result.inject_runtime_checks(&mut ctx.body);
+    }
+
+    if options.panic_free {
+        // Check Lints (Panic Free)
+        let mut linter = mir::lints::PanicFreeLinter::new(&ctx.body);
+        linter.check();
+        if !linter.errors.is_empty() {
+            failed = true;
+        }
+        for e in &linter.errors {
+            handle_diagnostic(
+                diagnostics,
+                expander,
+                Diagnostic::error(format!("Lint error in {}: {}", name, e))
+                    .with_code(CODE_DRIVER_LINT_PANIC_FREE),
+            );
+        }
+    }
+
+    // Derived (closure) bodies: a definition whose value is a `lam` lowers to a wrapper body
+    // that only builds `closure#0`; the actual code lives in the derived bodies, so every check
+    // above is repeated on each of them (same order as the compile path in `compiler.rs`).
+    let mut derived_bodies = ctx.derived_bodies.borrow_mut();
+    let derived_span_tables = ctx.derived_span_tables.borrow();
+    for (i, body) in derived_bodies.iter_mut().enumerate() {
+        mir::transform::storage::insert_exit_storage_deads(body);
+
+        let mut typing = mir::analysis::typing::TypingChecker::new(body);
+        typing.check();
+        let closure_typing_errors = typing.errors();
+        if !closure_typing_errors.is_empty() {
+            failed = true;
+        }
+        for e in closure_typing_errors {
+            let mut diagnostic =
+                Diagnostic::error(format!("MIR typing error in {} closure {}: {}", name, i, e))
+                    .with_code(e.diagnostic_code());
+            if let Some(span_table) = derived_span_tables.get(i) {
+                if let Some(span) = span_for_mir_location(e.location(), span_table) {
+                    diagnostic = diagnostic.with_span(span);
+                }
+            }
+            handle_diagnostic(diagnostics, expander, diagnostic);
+        }
+
+        let mut ownership = mir::analysis::ownership::OwnershipAnalysis::new(body);
+        ownership.analyze();
+        let closure_ownership_errors = ownership.check_structured();
+        if !closure_ownership_errors.is_empty() {
+            failed = true;
+        }
+        for e in &closure_ownership_errors {
+            let mut diagnostic =
+                Diagnostic::error(format!("Ownership error in {} closure {}: {}", name, i, e))
+                    .with_code(e.diagnostic_code());
+            if let Some(span_table) = derived_span_tables.get(i) {
+                if let Some(span) = span_for_mir_location(e.location(), span_table) {
+                    diagnostic = diagnostic.with_span(span);
+                }
+            }
+            handle_diagnostic(diagnostics, expander, diagnostic);
+        }
+
+        let mut nll = mir::analysis::nll::NllChecker::new(body);
+        nll.check();
+        let nll_result = nll.into_result();
+        if !nll_result.errors.is_empty() {
+            failed = true;
+        }
+        for e in &nll_result.errors {
+            let mut diagnostic =
+                Diagnostic::error(format!("Borrow error in {} closure {}: {}", name, i, e))
+                    .with_code(e.diagnostic_code());
+            if let Some(span_table) = derived_span_tables.get(i) {
+                if let Some(span) = span_for_borrow_error(e, span_table) {
+                    diagnostic = diagnostic.with_span(span);
+                }
+            }
+            handle_diagnostic(diagnostics, expander, diagnostic);
+        }
+        let panic_free_runtime_checks = options.panic_free && !nll_result.runtime_checks.is_empty();
+        if panic_free_runtime_checks {
+            failed = true;
+            let mut diagnostic = Diagnostic::error(format!(
+                "Panic-free profile violation in {} closure {}: borrow checking inserted {} runtime check(s).",
+                name,
+                i,
+                nll_result.runtime_checks.len()
+            ))
+            .with_code(CODE_DRIVER_LINT_PANIC_FREE);
+            if let Some(span_table) = derived_span_tables.get(i) {
+                if let Some(first_check) = nll_result.runtime_checks.first() {
+                    if let Some(span) = span_for_mir_location(
+                        Some(MirSpan {
+                            block: first_check.location.block,
+                            statement_index: first_check.location.statement_index,
+                        }),
+                        span_table,
+                    ) {
+                        diagnostic = diagnostic.with_span(span);
+                    }
+                }
+            }
+            handle_diagnostic(diagnostics, expander, diagnostic);
+        }
+        if nll_result.is_ok() && !panic_free_runtime_checks {
+            nll_result.inject_runtime_checks(body);
+        }
+
+        if options.panic_free {
+            let mut linter = mir::lints::PanicFreeLinter::new(body);
+            linter.check();
+            if !linter.errors.is_empty() {
+                failed = true;
+            }
+            for e in &linter.errors {
+                handle_diagnostic(
+                    diagnostics,
+                    expander,
+                    Diagnostic::error(format!("Lint error in {} closure {}: {}", name, i, e))
+                        .with_code(CODE_DRIVER_LINT_PANIC_FREE),
+                );
+            }
+        }
+    }
+
+    if options.collect_artifacts {
+        artifacts.push(Artifact::BorrowCheck {
+            name: name.to_string(),
+            ownership_errors: ownership_error_strings,
+            result: nll_result,
+        });
+    }
+
+    !failed
+}
+
+/// Name under which a top-level expression is checked as an anonymous definition. It only
+/// lives in a scratch copy of the environment and appears in diagnostics
+/// (e.g. "Ownership error in <expr> closure 0: ...").
+const TOP_LEVEL_EXPR_NAME: &str = "<expr>";
+
+/// Admission check for a top-level expression (file mode, `run`, REPL `:eval`/`:type`/bare
+/// input, and expressions in compiled files). The expression is submitted to the kernel as an
+/// anonymous definition in a scratch copy of the environment, so it gets exactly the kernel's
+/// add-time checks that a `def` gets (typing, the affine ownership check, capture-mode
+/// validation), and then the same MIR validation as a definition (`validate_definition_mir`).
+/// The anonymous definition is marked `unsafe` only so that the kernel skips the
+/// effect/termination/axiom-noncomputable gates, which never applied to expressions (axiom use in
+/// evaluated expressions stays gated by `C0004`). The scratch environment is discarded, so the
+/// real environment is unchanged. Returns `false` (after reporting diagnostics) on rejection.
+#[allow(clippy::too_many_arguments)]
+fn check_expression_admission(
+    env: &Env,
+    elab: &Elaborator,
+    core_term: &Rc<Term>,
+    ty: &Rc<Term>,
+    expr_span: Span,
+    options: &PipelineOptions,
+    expander: &mut Expander,
+    diagnostics: &mut DiagnosticCollector,
+) -> bool {
+    // `fix` (general recursion) is allowed only in `partial` definitions, as in every
+    // declaration form. The anonymous definition below is `unsafe` (see above), for which the
+    // kernel's effect check allows `fix`, so the rule is enforced here; otherwise a looping `fix`
+    // in an expression would be unfolded without bound when the expression is evaluated for
+    // display (normalisation of top-level values), aborting the process with a stack overflow.
+    if kernel::checker::contains_fix(core_term) {
+        handle_diagnostic(
+            diagnostics,
+            expander,
+            Diagnostic::error(
+                "fix is only allowed in partial definitions: a top-level expression may not \
+                 contain fix (move the recursion into a `partial` definition)"
+                    .to_string(),
+            )
+            .with_code(CODE_DRIVER_FIX_IN_EXPRESSION)
+            .with_span(expr_span),
+        );
+        return false;
+    }
+    let name = TOP_LEVEL_EXPR_NAME;
+    let closure_ids = kernel::ownership::collect_closure_ids(core_term, name);
+    let closure_free_vars = kernel::ownership::collect_closure_free_vars(core_term);
+    let capture_modes = kernel::ownership::map_capture_modes_to_closures_filtered(
+        &closure_ids,
+        &closure_free_vars,
+        elab.capture_mode_map(),
+    );
+    let mut def = Definition::unsafe_def(name.to_string(), ty.clone(), core_term.clone());
+    def.capture_modes = capture_modes;
+
+    let mut scratch_env = env.clone();
+    if let Err(mut e) = scratch_env.add_definition(def) {
+        resolve_kernel_error_names(&mut e, elab.binder_name_map());
+        handle_diagnostic(
+            diagnostics,
+            expander,
+            diagnostic_from_kernel_error("Kernel check failed for expression", &e, Some(expr_span)),
+        );
+        return false;
+    }
+
+    let term_span_map = Rc::new(build_term_span_map(elab));
+    // Artifacts of the anonymous definition are not part of the processing result.
+    let mut scratch_artifacts = Vec::new();
+    validate_definition_mir(
+        &scratch_env,
+        name,
+        &term_span_map,
+        options,
+        expander,
+        diagnostics,
+        &mut scratch_artifacts,
+    )
+}
+
 #[derive(Debug, Clone)]
 struct ImportedModule {
     module: String,
@@ -771,7 +1181,77 @@ fn new_elaborator_with_resolution<'a>(
 
 /// Unified Pipeline Driver
 /// Takes source code, updates Env/Expander, and returns results/diagnostics.
+///
+/// Diagnostics reported after macro expansion (elaboration, kernel, MIR) are related to the
+/// macro calls of this source that produced the code they point at (see
+/// `attach_macro_call_sites`).
 pub fn process_code(
+    source: &str,
+    filename: &str,
+    env: &mut Env,
+    expander: &mut Expander,
+    options: &PipelineOptions,
+    diagnostics: &mut DiagnosticCollector,
+) -> Result<ProcessingResult, DriverError> {
+    let first_diagnostic = diagnostics.diagnostics.len();
+    let _ = expander.take_expanded_call_sites();
+    let result = process_code_inner(source, filename, env, expander, options, diagnostics);
+    let call_sites = expander.take_expanded_call_sites();
+    attach_macro_call_sites(
+        &mut diagnostics.diagnostics[first_diagnostic..],
+        &call_sites,
+    );
+    result
+}
+
+/// Adds labels relating each diagnostic to the macro calls (of the same source) involved:
+/// a diagnostic whose span lies inside a macro call site points at code produced by that macro
+/// (template code carries the call site's span); a macro call inside the diagnostic's span was
+/// expanded within the reported code. Diagnostics that already carry the expansion stack
+/// (reported during expansion) are left unchanged.
+fn attach_macro_call_sites(diagnostics: &mut [Diagnostic], call_sites: &[MacroTraceEntry]) {
+    if call_sites.is_empty() {
+        return;
+    }
+    let mut sites: Vec<&MacroTraceEntry> = Vec::new();
+    for site in call_sites {
+        if !sites
+            .iter()
+            .any(|seen| seen.name == site.name && seen.span == site.span)
+        {
+            sites.push(site);
+        }
+    }
+    sites.sort_by_key(|site| (site.span.start, site.span.end));
+
+    for diagnostic in diagnostics.iter_mut() {
+        let Some(span) = diagnostic.span else {
+            continue;
+        };
+        if diagnostic
+            .labels
+            .iter()
+            .any(|(_, label)| label.starts_with("macro expansion"))
+        {
+            continue;
+        }
+        for site in &sites {
+            let site_span = site.span;
+            if site_span.start <= span.start && span.end <= site_span.end {
+                diagnostic.labels.push((
+                    site_span,
+                    format!("in code produced by macro '{}'", site.name),
+                ));
+            } else if span.start <= site_span.start && site_span.end <= span.end {
+                diagnostic
+                    .labels
+                    .push((site_span, format!("macro '{}' expanded here", site.name)));
+            }
+        }
+    }
+}
+
+fn process_code_inner(
     source: &str,
     filename: &str,
     env: &mut Env,
@@ -790,7 +1270,10 @@ pub fn process_code(
         }
     };
 
-    let syntax_nodes = apply_macro_imports(expander, &module_id, syntax_nodes, diagnostics)?;
+    let syntax_nodes = apply_macro_imports(expander, &module_id, syntax_nodes, diagnostics);
+    // Macro calls expanded while loading imported macro files belong to other sources.
+    let _ = expander.take_expanded_call_sites();
+    let syntax_nodes = syntax_nodes?;
 
     emit_syntax_compat_warnings(&syntax_nodes, diagnostics);
 
@@ -798,12 +1281,25 @@ pub fn process_code(
         let mut decl_parser = DeclarationParser::new(expander);
         decl_parser.parse(syntax_nodes)
     };
-    drain_macro_diagnostics(expander, diagnostics);
+    let pending = expander.take_pending_diagnostics();
+    let drained_errors = pending
+        .iter()
+        .any(|diagnostic| matches!(diagnostic.level, frontend::diagnostics::Level::Error));
+    for diagnostic in pending {
+        diagnostics.handle(diagnostic);
+    }
 
     let decls = match parse_result {
         Ok(decls) => decls,
         Err(e) => {
-            handle_diagnostic(diagnostics, expander, diagnostic_from_decl_parse_error(&e));
+            // An expansion error the expander has already reported as a diagnostic (e.g. a
+            // macro boundary violation, with its expansion stack) is not reported twice.
+            let already_reported = drained_errors
+                && matches!(&e, DeclarationParseError::Expansion(err)
+                    if err.is_reported_as_pending_diagnostic());
+            if !already_reported {
+                handle_diagnostic(diagnostics, expander, diagnostic_from_decl_parse_error(&e));
+            }
             return Err(DriverError::ParseValidations(vec![format!("{:?}", e)]));
         }
     };
@@ -1059,9 +1555,9 @@ pub fn process_code(
                                 diagnostics,
                                 expander,
                                 attach_elab_metadata(
-                                    Diagnostic::error(format!(
-                                        "Unsolved constraints in '{}': {:?}",
-                                        name, e
+                                    Diagnostic::error(constraint_failure_message(
+                                        &format!("'{}'", name),
+                                        &e,
                                     )),
                                     &e,
                                 ),
@@ -1208,6 +1704,9 @@ pub fn process_code(
                     });
                 }
 
+                // Source names of the binders, for naming variables in ownership errors (the
+                // elaborator's borrow of the environment ends here).
+                let binder_names = elab.binder_name_map().clone();
                 match env.add_definition(def) {
                     Ok(_) => {
                         let mut post_admission_failed = false;
@@ -1240,327 +1739,18 @@ pub fn process_code(
                         }
 
                         // MIR Validation Pipeline (Unified)
-                        // Even in REPL/Driver mode, we check safety constraints.
-                        if let Some(d) = env.definitions().get(&name) {
-                            if let Some(val) = &d.value {
-                                let ids = mir::types::IdRegistry::from_env(env);
-                                if ids.has_errors() {
-                                    for err in ids.errors() {
-                                        let mut diagnostic = Diagnostic::error(err.to_string());
-                                        if let Some(span) = err.span() {
-                                            diagnostic =
-                                                diagnostic.with_span(to_frontend_span(span));
-                                        }
-                                        handle_diagnostic(diagnostics, expander, diagnostic);
-                                    }
-                                    rollback_failed_definition(
-                                        env,
-                                        &env_snapshot,
-                                        &mut processed,
-                                        deployed_len_checkpoint,
-                                        artifacts_len_checkpoint,
-                                        &name,
-                                        previous_term_span_map.as_ref(),
-                                    );
-                                    continue;
-                                }
-                                let mut ctx = match mir::lower::LoweringContext::new_with_metadata(
-                                    vec![],
-                                    d.ty.clone(),
-                                    env,
-                                    &ids,
-                                    Some(term_span_map.clone()),
-                                    Some(name.clone()),
-                                    Some(Rc::new(d.capture_modes.clone())),
-                                ) {
-                                    Ok(ctx) => ctx,
-                                    Err(e) => {
-                                        let mut diagnostic = Diagnostic::error(format!(
-                                            "Lowering error in {}: {}",
-                                            name, e
-                                        ));
-                                        if let Some(span) = e.span() {
-                                            diagnostic =
-                                                diagnostic.with_span(to_frontend_span(span));
-                                        }
-                                        handle_diagnostic(diagnostics, expander, diagnostic);
-                                        rollback_failed_definition(
-                                            env,
-                                            &env_snapshot,
-                                            &mut processed,
-                                            deployed_len_checkpoint,
-                                            artifacts_len_checkpoint,
-                                            &name,
-                                            previous_term_span_map.as_ref(),
-                                        );
-                                        continue;
-                                    }
-                                };
-                                let dest = mir::Place::from(mir::Local(0));
-                                let target = mir::BasicBlock(1);
-                                ctx.body.basic_blocks.push(mir::BasicBlockData {
-                                    statements: vec![],
-                                    terminator: None,
-                                });
-                                if let Err(e) = ctx.lower_term(val, dest, target) {
-                                    let mut diagnostic = Diagnostic::error(format!(
-                                        "Lowering error in {}: {}",
-                                        name, e
-                                    ));
-                                    if let Some(span) = e.span() {
-                                        diagnostic = diagnostic.with_span(to_frontend_span(span));
-                                    }
-                                    handle_diagnostic(diagnostics, expander, diagnostic);
-                                    rollback_failed_definition(
-                                        env,
-                                        &env_snapshot,
-                                        &mut processed,
-                                        deployed_len_checkpoint,
-                                        artifacts_len_checkpoint,
-                                        &name,
-                                        previous_term_span_map.as_ref(),
-                                    );
-                                    continue;
-                                }
-                                ctx.set_block(target);
-                                ctx.terminate_with_term_span(val, mir::Terminator::Return);
-
-                                mir::transform::storage::insert_exit_storage_deads(&mut ctx.body);
-
-                                if options.collect_artifacts {
-                                    processed.artifacts.push(Artifact::MirBody {
-                                        name: name.clone(),
-                                        body: format!("{:?}", ctx.body),
-                                    });
-                                }
-
-                                // Check MIR typing
-                                let mut typing =
-                                    mir::analysis::typing::TypingChecker::new(&ctx.body);
-                                typing.check();
-                                let typing_errors = typing.errors();
-                                if !typing_errors.is_empty() {
-                                    post_admission_failed = true;
-                                }
-                                for e in typing_errors {
-                                    let mut diagnostic = Diagnostic::error(format!(
-                                        "MIR typing error in {}: {}",
-                                        name, e
-                                    ))
-                                    .with_code(e.diagnostic_code());
-                                    if let Some(span) =
-                                        span_for_mir_location(e.location(), &ctx.span_table)
-                                    {
-                                        diagnostic = diagnostic.with_span(span);
-                                    }
-                                    handle_diagnostic(diagnostics, expander, diagnostic);
-                                }
-
-                                // Check Ownership
-                                let mut ownership =
-                                    mir::analysis::ownership::OwnershipAnalysis::new(&ctx.body);
-                                ownership.analyze();
-                                let ownership_errors = ownership.check_structured();
-                                if !ownership_errors.is_empty() {
-                                    post_admission_failed = true;
-                                }
-                                let ownership_error_strings: Vec<String> =
-                                    ownership_errors.iter().map(|e| e.to_string()).collect();
-                                for e in &ownership_errors {
-                                    let mut diagnostic = Diagnostic::error(format!(
-                                        "Ownership error in {}: {}",
-                                        name, e
-                                    ))
-                                    .with_code(e.diagnostic_code());
-                                    if let Some(span) =
-                                        span_for_mir_location(e.location(), &ctx.span_table)
-                                    {
-                                        diagnostic = diagnostic.with_span(span);
-                                    }
-                                    handle_diagnostic(diagnostics, expander, diagnostic);
-                                }
-
-                                // Check Borrows
-                                // Check NLL
-                                let mut nll = mir::analysis::nll::NllChecker::new(&ctx.body);
-                                nll.check();
-                                let nll_result = nll.into_result();
-                                if !nll_result.errors.is_empty() {
-                                    post_admission_failed = true;
-                                }
-                                for e in &nll_result.errors {
-                                    let mut diagnostic = Diagnostic::error(format!(
-                                        "Borrow error in {}: {}",
-                                        name, e
-                                    ))
-                                    .with_code(e.diagnostic_code());
-                                    if let Some(span) =
-                                        span_for_mir_location(e.location(), &ctx.span_table)
-                                    {
-                                        diagnostic = diagnostic.with_span(span);
-                                    }
-                                    handle_diagnostic(diagnostics, expander, diagnostic);
-                                }
-                                let panic_free_runtime_checks =
-                                    options.panic_free && !nll_result.runtime_checks.is_empty();
-                                if panic_free_runtime_checks {
-                                    post_admission_failed = true;
-                                    let mut diagnostic = Diagnostic::error(format!(
-                                        "Panic-free profile violation in {}: borrow checking inserted {} runtime check(s).",
-                                        name,
-                                        nll_result.runtime_checks.len()
-                                    ))
-                                    .with_code(CODE_DRIVER_LINT_PANIC_FREE);
-                                    if let Some(first_check) = nll_result.runtime_checks.first() {
-                                        if let Some(span) = span_for_mir_location(
-                                            Some(MirSpan {
-                                                block: first_check.location.block,
-                                                statement_index: first_check
-                                                    .location
-                                                    .statement_index,
-                                            }),
-                                            &ctx.span_table,
-                                        ) {
-                                            diagnostic = diagnostic.with_span(span);
-                                        }
-                                    }
-                                    handle_diagnostic(diagnostics, expander, diagnostic);
-                                }
-                                if nll_result.is_ok() && !panic_free_runtime_checks {
-                                    nll_result.inject_runtime_checks(&mut ctx.body);
-                                }
-
-                                if options.panic_free {
-                                    // Check Lints (Panic Free)
-                                    let mut linter = mir::lints::PanicFreeLinter::new(&ctx.body);
-                                    linter.check();
-                                    if !linter.errors.is_empty() {
-                                        post_admission_failed = true;
-                                    }
-                                    for e in &linter.errors {
-                                        handle_diagnostic(
-                                            diagnostics,
-                                            expander,
-                                            Diagnostic::error(format!(
-                                                "Lint error in {}: {}",
-                                                name, e
-                                            ))
-                                            .with_code(CODE_DRIVER_LINT_PANIC_FREE),
-                                        );
-                                    }
-                                }
-
-                                let mut derived_bodies = ctx.derived_bodies.borrow_mut();
-                                let derived_span_tables = ctx.derived_span_tables.borrow();
-                                for (i, body) in derived_bodies.iter_mut().enumerate() {
-                                    mir::transform::storage::insert_exit_storage_deads(body);
-
-                                    let mut typing =
-                                        mir::analysis::typing::TypingChecker::new(body);
-                                    typing.check();
-                                    let closure_typing_errors = typing.errors();
-                                    if !closure_typing_errors.is_empty() {
-                                        post_admission_failed = true;
-                                    }
-                                    for e in closure_typing_errors {
-                                        let mut diagnostic = Diagnostic::error(format!(
-                                            "MIR typing error in {} closure {}: {}",
-                                            name, i, e
-                                        ))
-                                        .with_code(e.diagnostic_code());
-                                        if let Some(span_table) = derived_span_tables.get(i) {
-                                            if let Some(span) =
-                                                span_for_mir_location(e.location(), span_table)
-                                            {
-                                                diagnostic = diagnostic.with_span(span);
-                                            }
-                                        }
-                                        handle_diagnostic(diagnostics, expander, diagnostic);
-                                    }
-
-                                    let mut nll = mir::analysis::nll::NllChecker::new(body);
-                                    nll.check();
-                                    let nll_result = nll.into_result();
-                                    if !nll_result.errors.is_empty() {
-                                        post_admission_failed = true;
-                                    }
-                                    for e in &nll_result.errors {
-                                        let mut diagnostic = Diagnostic::error(format!(
-                                            "Borrow error in {} closure {}: {}",
-                                            name, i, e
-                                        ))
-                                        .with_code(e.diagnostic_code());
-                                        if let Some(span_table) = derived_span_tables.get(i) {
-                                            if let Some(span) =
-                                                span_for_mir_location(e.location(), span_table)
-                                            {
-                                                diagnostic = diagnostic.with_span(span);
-                                            }
-                                        }
-                                        handle_diagnostic(diagnostics, expander, diagnostic);
-                                    }
-                                    let panic_free_runtime_checks =
-                                        options.panic_free && !nll_result.runtime_checks.is_empty();
-                                    if panic_free_runtime_checks {
-                                        post_admission_failed = true;
-                                        let mut diagnostic = Diagnostic::error(format!(
-                                            "Panic-free profile violation in {} closure {}: borrow checking inserted {} runtime check(s).",
-                                            name,
-                                            i,
-                                            nll_result.runtime_checks.len()
-                                        ))
-                                        .with_code(CODE_DRIVER_LINT_PANIC_FREE);
-                                        if let Some(span_table) = derived_span_tables.get(i) {
-                                            if let Some(first_check) =
-                                                nll_result.runtime_checks.first()
-                                            {
-                                                if let Some(span) = span_for_mir_location(
-                                                    Some(MirSpan {
-                                                        block: first_check.location.block,
-                                                        statement_index: first_check
-                                                            .location
-                                                            .statement_index,
-                                                    }),
-                                                    span_table,
-                                                ) {
-                                                    diagnostic = diagnostic.with_span(span);
-                                                }
-                                            }
-                                        }
-                                        handle_diagnostic(diagnostics, expander, diagnostic);
-                                    }
-                                    if nll_result.is_ok() && !panic_free_runtime_checks {
-                                        nll_result.inject_runtime_checks(body);
-                                    }
-
-                                    if options.panic_free {
-                                        let mut linter = mir::lints::PanicFreeLinter::new(body);
-                                        linter.check();
-                                        if !linter.errors.is_empty() {
-                                            post_admission_failed = true;
-                                        }
-                                        for e in &linter.errors {
-                                            handle_diagnostic(
-                                                diagnostics,
-                                                expander,
-                                                Diagnostic::error(format!(
-                                                    "Lint error in {} closure {}: {}",
-                                                    name, i, e
-                                                ))
-                                                .with_code(CODE_DRIVER_LINT_PANIC_FREE),
-                                            );
-                                        }
-                                    }
-                                }
-
-                                if options.collect_artifacts {
-                                    processed.artifacts.push(Artifact::BorrowCheck {
-                                        name: name.clone(),
-                                        ownership_errors: ownership_error_strings,
-                                        result: nll_result,
-                                    });
-                                }
-                            }
+                        // Even in REPL/Driver mode, we check safety constraints (on the definition
+                        // body and on every derived closure body, exactly like the compile path).
+                        if !validate_definition_mir(
+                            env,
+                            &name,
+                            &term_span_map,
+                            options,
+                            expander,
+                            diagnostics,
+                            &mut processed.artifacts,
+                        ) {
+                            post_admission_failed = true;
                         }
 
                         if post_admission_failed {
@@ -1594,15 +1784,18 @@ pub fn process_code(
                             }
                         }
                     }
-                    Err(e) => handle_diagnostic(
-                        diagnostics,
-                        expander,
-                        diagnostic_from_kernel_error(
-                            &format!("Environment error defining '{}'", name),
-                            &e,
-                            Some(val_span),
-                        ),
-                    ),
+                    Err(mut e) => {
+                        resolve_kernel_error_names(&mut e, &binder_names);
+                        handle_diagnostic(
+                            diagnostics,
+                            expander,
+                            diagnostic_from_kernel_error(
+                                &format!("Environment error defining '{}'", name),
+                                &e,
+                                Some(val_span),
+                            ),
+                        )
+                    }
                 }
             }
 
@@ -1767,7 +1960,21 @@ pub fn process_code(
                     axioms: vec![],
                     primitive_deps: vec![],
                 };
-                let previous = env.insert_inductive_placeholder(placeholder);
+                let previous = match env.insert_inductive_placeholder(placeholder) {
+                    Ok(previous) => previous,
+                    Err(e) => {
+                        handle_diagnostic(
+                            diagnostics,
+                            expander,
+                            diagnostic_from_kernel_error(
+                                &format!("Error registering inductive '{}'", name),
+                                &e,
+                                Some(ty_span),
+                            ),
+                        );
+                        continue;
+                    }
+                };
 
                 // Constructors
                 let mut kernel_ctors = Vec::new();
@@ -2081,10 +2288,7 @@ pub fn process_code(
                                 diagnostics,
                                 expander,
                                 attach_elab_metadata(
-                                    Diagnostic::error(format!(
-                                        "Unsolved constraints in expression: {:?}",
-                                        e
-                                    )),
+                                    Diagnostic::error(constraint_failure_message("expression", &e)),
                                     &e,
                                 ),
                             );
@@ -2141,6 +2345,22 @@ pub fn process_code(
                             continue;
                         }
 
+                        // Same admission checks as a definition (kernel ownership + capture
+                        // modes, then MIR typing/ownership/NLL) before the expression is
+                        // displayed or evaluated.
+                        if !check_expression_admission(
+                            env,
+                            &elab,
+                            &core_term,
+                            &ty,
+                            expr_span,
+                            options,
+                            expander,
+                            diagnostics,
+                        ) {
+                            continue;
+                        }
+
                         // WHNF type if needed
                         let ty_norm = match kernel::checker::whnf(
                             env,
@@ -2185,9 +2405,22 @@ pub fn process_code(
                                 }
                             }
                             if allow_eval {
-                                let val_norm = nbe_normalize(env, core_term);
-                                //let val_norm = nbe_eval(env, core_term); // Use eval for now? No, normalize for readable output
-                                println!("Eval: {:?}", val_norm);
+                                match kernel::nbe::normalize_for_display(
+                                    &core_term,
+                                    env,
+                                    Transparency::All,
+                                ) {
+                                    Ok(val_norm) => println!("Eval: {:?}", val_norm),
+                                    Err(err) => {
+                                        // Depth limit (or another evaluation error): show the
+                                        // expression unevaluated rather than crash, and say so.
+                                        eprintln!(
+                                            "Warning: evaluation of this expression stopped ({:?}); it is shown unevaluated",
+                                            err
+                                        );
+                                        println!("Eval: {:?}", core_term);
+                                    }
+                                }
                             }
                         }
                     }
@@ -2345,7 +2578,7 @@ fn elaborate_instance_type(
             diagnostics,
             expander,
             attach_elab_metadata(
-                Diagnostic::error(format!("Unsolved constraints in instance: {:?}", e)),
+                Diagnostic::error(constraint_failure_message("instance", &e)),
                 &e,
             ),
         );
@@ -2401,6 +2634,13 @@ fn format_kernel_error(err: &kernel::checker::TypeError) -> String {
         kernel::checker::TypeError::FunctionKindTooSmall { annotated, required } => format!(
             "Function kind mismatch: annotated {:?} but requires {:?}",
             annotated, required
+        ),
+        kernel::checker::TypeError::OwnershipError(err) => {
+            format!("Ownership violation [{}]: {}", err.variant_name(), err)
+        }
+        kernel::checker::TypeError::AffineCopyConflict { ind } => format!(
+            "Inductive '{}' is marked affine and cannot be Copy (it is declared copy, given an explicit Copy instance, or is a proposition, whose proofs are always duplicable)",
+            ind
         ),
         kernel::checker::TypeError::RefLifetimeLabelMismatch {
             expected_label,
@@ -2602,15 +2842,6 @@ fn classical_choice_type(false_name: &str) -> Rc<Term> {
     Term::pi(prop, body, BinderInfo::Default)
 }
 
-fn nbe_normalize(env: &Env, term: Rc<Term>) -> Rc<Term> {
-    match kernel::nbe::eval(&term, &vec![], env, Transparency::All) {
-        Ok(val) => match kernel::nbe::quote(val, 0, env, Transparency::All) {
-            Ok(t) => t,
-            Err(_) => term,
-        },
-        Err(_) => term,
-    }
-}
 
 #[cfg(test)]
 mod tests {

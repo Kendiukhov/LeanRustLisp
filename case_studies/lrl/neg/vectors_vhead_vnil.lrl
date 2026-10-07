@@ -1,0 +1,20 @@
+;; Negative variant of case study A (../vectors.lrl). The declarations up to the marked line
+;; are copied from vectors.lrl (comments and unused definitions omitted); only the code after
+;; it is new.
+;; Expected: type error: vhead needs a Vec A (succ n); vnil has type Vec A zero.
+
+(inductive Unit (sort 1) (ctor unit Unit))
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+(def vhead (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A (succ n)) A)))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A (succ n))
+    (match v (motive (lam k Nat (lam w (Vec A k)
+                       (match k (sort 1) (case (zero) Unit) (case (succ k1 ih) A)))))
+      (case (vnil) unit)
+      (case (vcons h t ih) h))))))
+
+;; ---- new code ----
+
+;; The head of the empty vector.
+(def head_of_empty Nat (vhead (vnil {Nat})))

@@ -1,0 +1,15 @@
+;; Positive control P01 (nearest legal variant of classes 01/26) - the same
+;; token is consumed in BOTH branches of a match on Bool. Only one branch
+;; runs, so the branches are alternatives.
+;; Expected: accepted; main = 2.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def spend (pi t Tok (pi #[once] n Nat Nat))
+  (lam t Tok (lam #[once] n Nat (match t Nat (case (mk_tok i) (add i n))))))
+
+(def pick (pi t Tok (pi #[once] b Bool Nat))
+  (lam t Tok (lam #[once] b Bool
+    (match b Nat
+      (case (true) (spend t 1))
+      (case (false) (spend t 2))))))
+
+(def main Nat (pick (mk_tok 0) false))

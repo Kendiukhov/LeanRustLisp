@@ -1,0 +1,11 @@
+;; Class 02 - use after moving into a function.
+;; `burn` takes its token by value. `burn_then_keep` passes `t` to `burn`
+;; and then returns `t` as well.
+;; Expected: kernel K0021 [UseAfterMove] naming `t`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def burn (pi t Tok Nat)
+  (lam t Tok (match t Nat (case (mk_tok i) i))))
+
+(def burn_then_keep (pi t Tok Tok)
+  (lam t Tok (let n Nat (burn t) t)))

@@ -1,0 +1,11 @@
+;; Positive control P15 (hand-written version) - this is the alpha-renamed
+;; expansion of the macro twin: the macro's own token `t2` and the caller's
+;; token `t` are different variables, each consumed once.
+;; Expected: accepted; main = 5 (1 + 4).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok i) i))))
+
+(def with_fresh (pi t Tok Nat)
+  (lam t Tok (let t2 Tok (mk_tok 1) (add (burn t2) (burn t)))))
+
+(def main Nat (with_fresh (mk_tok 4)))

@@ -1,0 +1,13 @@
+;; Class 23 (macro twin) - `nat-rec-with` expands to
+;; `((rec Nat) (lam z Nat TL) tnil f n)`.
+;; Expected: kernel K0021 [RepeatedMinorNotLambda].
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive TL (sort 1) (ctor tnil TL) (ctor tcons (pi h Tok (pi t TL TL))))
+
+(defmacro nat-rec-with (step count) `((rec Nat) (lam z Nat TL) tnil ,step ,count))
+
+(def spread (pi k Tok (pi #[once] n Nat TL))
+  (lam k Tok (lam #[once] n Nat
+    (let f (pi #[once] m Nat (pi #[once] ih TL TL))
+           (lam #[once] m Nat (lam #[once] ih TL (tcons k ih)))
+      (nat-rec-with f n)))))

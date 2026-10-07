@@ -1,0 +1,27 @@
+;; Negative variant of case study A (../vectors.lrl). The declarations up to the marked line
+;; are copied from vectors.lrl (comments and unused definitions omitted); only the code after
+;; it is new.
+;; Expected: rejected: vreverse [1, 2] computes to [2, 1], so refl does not prove that it equals [1, 2].
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+(def vsnoc (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) (pi #[once] x A (Vec A (succ n))))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n) (lam #[once] x A
+    (match v (motive (lam k Nat (lam w (Vec A k) (Vec A (succ k)))))
+      (case (vnil) (vcons x vnil))
+      (case (vcons h t ih) (vcons h ih))))))))
+(def vreverse (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) (Vec A n))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n)
+    (match v (motive (lam k Nat (lam w (Vec A k) (Vec A k))))
+      (case (vnil) vnil)
+      (case (vcons h t ih) (vsnoc ih h)))))))
+
+;; ---- new code ----
+
+(def v12 (Vec Nat 2) (vcons 1 (vcons 2 vnil)))
+
+;; FALSE: reversing [1, 2] gives [1, 2].
+(def reverse_is_identity_on_12
+  (Eq (Vec Nat 2) (vreverse v12) (vcons 1 (vcons 2 vnil)))
+  (refl (Vec Nat 2) (vcons 1 (vcons 2 vnil))))

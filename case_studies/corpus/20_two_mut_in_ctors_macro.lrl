@@ -1,0 +1,16 @@
+;; Class 20 (macro twin) - `mut-handle` expands to `(mb (&mut t))`; it is
+;; used for both handles.
+;; Expected: MIR M200 (ConflictingBorrow).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def poke (pi r (Ref #[r] Mut Tok) Nat) (lam r (Ref #[r] Mut Tok) (succ zero)))
+
+(inductive MB (sort 1) (ctor mb (pi r (Ref #[r] Mut Tok) MB)))
+(def pokeb (pi b MB Nat) (lam b MB (match b Nat (case (mb r) (poke r)))))
+
+(defmacro mut-handle (v) `(mb (&mut ,v)))
+
+(def f (pi t Tok Nat)
+  (lam t Tok
+    (let a MB (mut-handle t)
+      (let b MB (mut-handle t)
+        (add (pokeb a) (pokeb b))))))

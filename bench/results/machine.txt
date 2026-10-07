@@ -1,0 +1,27 @@
+date: 2026-10-05T18:08:42
+machdep.cpu.brand_string: Apple M2 Pro
+hw.ncpu: 10
+hw.perflevel0.physicalcpu (performance cores): 6
+hw.perflevel1.physicalcpu (efficiency cores): 4
+hw.memsize: 34359738368
+sw_vers:
+ProductName:		macOS
+ProductVersion:		26.3
+BuildVersion:		25D125
+rustc -vV:
+rustc 1.78.0 (9b00956e5 2024-04-29)
+binary: rustc
+commit-hash: 9b00956e56009bab2aa15d7bff10916599e3d6d6
+commit-date: 2024-04-29
+host: aarch64-apple-darwin
+release: 1.78.0
+LLVM version: 18.1.2
+cargo -V: cargo 1.78.0 (54d8815d0 2024-03-26)
+python: 3.11.9 (/Users/ihorkendiukhov/anaconda3/bin/python3)
+uptime: 18:08  up 21:02, 1 user, load averages: 2.78 3.69 3.74
+stack soft limit for measured processes (ulimit -s, KiB): 65520
+lrl binary: /private/tmp/claude-501/-Volumes-Crucial-X6-MacBook-Code-leanrustlisp/4c0357f0-9be9-469e-bba8-627fe4a2405e/scratchpad/target_release/release/cli (5475088 bytes)
+lrl sha256: 43640e57f8be283a369d266b2c2d2f0d325be3f69d53911d4de39c1a51f1da13
+git HEAD: efe7bc09763b4755267f14a45556fa5b6dcb7a2f
+git status --short: 105 entries (84 modified, 19 untracked, 2 deleted)
+git diff --shortstat (tracked files vs HEAD):  86 files changed, 7946 insertions(+), 2104 deletions(-)

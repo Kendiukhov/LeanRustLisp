@@ -1,0 +1,8 @@
+;; Class 14 (macro twin) - `borrow-of` expands to `(& t)`.
+;; Expected: MIR M203 (DanglingReference).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(defmacro borrow-of (v) `(& ,v))
+
+(def esc (pi t Tok (Ref #[r] Shared Tok))
+  (lam t Tok (borrow-of t)))

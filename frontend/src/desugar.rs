@@ -285,6 +285,10 @@ impl Desugarer {
                     span,
                 )
             }
+            SurfaceTermKind::MatchMotive(motive) => {
+                let new_motive = Self::substitute_surface_var(*motive, name, replacement);
+                mk_term(SurfaceTermKind::MatchMotive(Box::new(new_motive)), span)
+            }
             SurfaceTermKind::Eval(code, cap) => {
                 let new_code = Self::substitute_surface_var(*code, name, replacement);
                 let new_cap = Self::substitute_surface_var(*cap, name, replacement);
@@ -812,7 +816,29 @@ impl Desugarer {
                             }
 
                             let disc = self.desugar_with_env(list[1].clone(), env)?;
-                            let ret_ty = self.desugar_with_env(list[2].clone(), env)?;
+                            // `(match e (motive M) ...)`: explicit dependent motive;
+                            // anything else is the constant return type.
+                            let ret_ty = match &list[2].kind {
+                                SyntaxKind::List(items)
+                                    if items.first().is_some_and(|head| {
+                                        matches!(&head.kind, SyntaxKind::Symbol(s) if s == "motive")
+                                    }) =>
+                                {
+                                    if items.len() != 2 {
+                                        return Err(ExpansionError::InvalidSyntax(
+                                            "match".to_string(),
+                                            "Expected (motive M) with exactly one motive term"
+                                                .to_string(),
+                                        ));
+                                    }
+                                    let motive = self.desugar_with_env(items[1].clone(), env)?;
+                                    mk_term(
+                                        SurfaceTermKind::MatchMotive(Box::new(motive)),
+                                        list[2].span,
+                                    )
+                                }
+                                _ => self.desugar_with_env(list[2].clone(), env)?,
+                            };
 
                             let mut cases = Vec::new();
                             for case_syntax in list.iter().skip(3) {

@@ -4,12 +4,135 @@ use std::fmt;
 use std::rc::Rc;
 use thiserror::Error;
 
+/// A variable named in an ownership error.
+///
+/// `index` is the de Bruijn index of the variable at the point of the error. `binder` is the
+/// address of the term that binds it (a `Lam`, `LetE` or `Fix` node of the checked value, or a
+/// lambda of a minor premise); it is diagnostic metadata only (never printed) and lets a front
+/// end that recorded source names for its binder terms fill in `name`
+/// (see [`OwnershipError::resolve_names`]).
+#[derive(Clone, PartialEq, Eq)]
+pub struct VarRef {
+    pub index: usize,
+    pub binder: Option<usize>,
+    pub name: Option<String>,
+}
+
+impl VarRef {
+    pub fn new(index: usize, binder: Option<usize>) -> Self {
+        VarRef {
+            index,
+            binder,
+            name: None,
+        }
+    }
+}
+
+impl fmt::Display for VarRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.name {
+            Some(name) => write!(f, "'{}'", name),
+            None => write!(f, "#{} (de Bruijn index)", self.index),
+        }
+    }
+}
+
+impl fmt::Debug for VarRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.name {
+            Some(name) => write!(f, "{}", name),
+            None => write!(f, "#{}", self.index),
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum OwnershipError {
-    #[error("Use of moved variable at de Bruijn index {0}")]
-    UseAfterMove(usize),
-    #[error("Implicit binder of non-Copy type used in {mode} position at de Bruijn index {index}")]
-    ImplicitNonCopyUse { index: usize, mode: UsageMode },
+    /// A non-Copy variable is used (moved, read, mutably borrowed or called) after it was moved.
+    #[error("variable {0} is used after it was moved")]
+    UseAfterMove(VarRef),
+    #[error("implicit binder {var} of non-Copy type is used in {mode} position")]
+    ImplicitNonCopyUse { var: VarRef, mode: UsageMode },
+    /// A non-Copy variable bound outside a minor premise (or a fixpoint body) that may run more
+    /// than once is consumed inside it: every run would consume the same value again.
+    #[error(
+        "non-Copy variable {0} is consumed inside a minor premise or fixpoint body that may run more than once"
+    )]
+    ConsumedInRepeatedScope(VarRef),
+    /// A recursive constructor field of non-Copy type is used inside its minor premise. The
+    /// recursor already consumed it to compute the induction hypothesis.
+    #[error(
+        "recursive field {0} is not Copy and was consumed to compute its induction hypothesis; use the induction hypothesis instead"
+    )]
+    RecursiveFieldConsumedByIh(VarRef),
+    /// The minor premise of a constructor that may be eliminated more than once is not a
+    /// lambda abstraction, so the kernel cannot check that running it repeatedly is safe.
+    #[error(
+        "minor premise for constructor '{ctor}' may run more than once and must be written as a lambda abstraction"
+    )]
+    RepeatedMinorNotLambda { ctor: String },
+    /// The minor premise of a field-less constructor that may be eliminated more than once is a
+    /// value that the recursor returns for every occurrence of the constructor; it must be Copy.
+    #[error(
+        "minor premise for constructor '{ctor}' is returned for every occurrence of the constructor, but its type is not Copy"
+    )]
+    RepeatedMinorValueNotCopy { ctor: String },
+    /// A minor premise does not bind a recursive field of non-Copy type as a lambda parameter,
+    /// so the kernel cannot check that it is not used besides its induction hypothesis.
+    #[error(
+        "minor premise for constructor '{ctor}' must bind its recursive fields (of non-Copy type) as lambda parameters"
+    )]
+    MinorMustBindRecursiveField { ctor: String },
+    /// A recursor used as a runtime value without all of its minor premises: the missing minor
+    /// premises would be supplied later, out of sight of the recursor rule.
+    #[error(
+        "recursor for '{ind}' must be applied to its motive and all of its minor premises where it occurs"
+    )]
+    RecursorWithoutMinorPremises { ind: String },
+}
+
+impl OwnershipError {
+    /// Name of the error variant (stable; used in diagnostics and tests).
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            OwnershipError::UseAfterMove(_) => "UseAfterMove",
+            OwnershipError::ImplicitNonCopyUse { .. } => "ImplicitNonCopyUse",
+            OwnershipError::ConsumedInRepeatedScope(_) => "ConsumedInRepeatedScope",
+            OwnershipError::RecursiveFieldConsumedByIh(_) => "RecursiveFieldConsumedByIh",
+            OwnershipError::RepeatedMinorNotLambda { .. } => "RepeatedMinorNotLambda",
+            OwnershipError::RepeatedMinorValueNotCopy { .. } => "RepeatedMinorValueNotCopy",
+            OwnershipError::MinorMustBindRecursiveField { .. } => "MinorMustBindRecursiveField",
+            OwnershipError::RecursorWithoutMinorPremises { .. } => "RecursorWithoutMinorPremises",
+        }
+    }
+
+    /// The variable the error is about, if any.
+    pub fn var(&self) -> Option<&VarRef> {
+        match self {
+            OwnershipError::UseAfterMove(var)
+            | OwnershipError::ConsumedInRepeatedScope(var)
+            | OwnershipError::RecursiveFieldConsumedByIh(var)
+            | OwnershipError::ImplicitNonCopyUse { var, .. } => Some(var),
+            _ => None,
+        }
+    }
+
+    /// Fills in the source name of the variable from its binder term address, using a name
+    /// table recorded by the front end (binder term address -> source name).
+    pub fn resolve_names(&mut self, names: &HashMap<usize, String>) {
+        let var = match self {
+            OwnershipError::UseAfterMove(var)
+            | OwnershipError::ConsumedInRepeatedScope(var)
+            | OwnershipError::RecursiveFieldConsumedByIh(var)
+            | OwnershipError::ImplicitNonCopyUse { var, .. } => var,
+            _ => return,
+        };
+        if var.name.is_none() {
+            if let Some(binder) = var.binder {
+                var.name = names.get(&binder).cloned();
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,30 +334,141 @@ impl fmt::Display for UsageMode {
     }
 }
 
+/// Usage state of the variables in scope (a stack, innermost binder last).
+///
+/// Usage modes of a *runtime* occurrence of a variable: [`UsageContext::read_var`] is a read
+/// (call of an `Fn` function value, capture by an `Fn` closure, `borrow_shared`); `MutBorrow` is a
+/// mutable use (call of an `FnMut` value, capture by an `FnMut` closure, `borrow_mut`);
+/// `Consuming` is a move. Reads, mutable uses and moves of a non-Copy variable that was already
+/// moved are errors, and a move marks the variable as moved. Erased occurrences (types, proofs,
+/// motives, indices, parameters) are not recorded at all; `Observational` passed to
+/// [`UsageContext::use_var`] means such an erased occurrence and never fails.
+///
+/// A *repetition barrier* marks the start of a scope that may be executed more than once (a minor
+/// premise of a recursor that can be invoked several times, or a fixpoint body): non-Copy
+/// variables bound outside the innermost barrier may not be moved inside it.
 pub struct UsageContext {
     used: Vec<VarUsage>,
+    barriers: Vec<usize>,
+}
+
+/// The moved flags of every variable in scope (outermost first), see
+/// [`UsageContext::moved_state`].
+pub type MovedState = Vec<bool>;
+
+impl Default for UsageContext {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UsageContext {
     pub fn new() -> Self {
-        UsageContext { used: Vec::new() }
+        UsageContext {
+            used: Vec::new(),
+            barriers: Vec::new(),
+        }
     }
 
     pub fn push(&mut self, is_copy: bool) {
-        self.push_with_binder(is_copy, BinderInfo::Default);
+        self.push_binder(is_copy, BinderInfo::Default, None);
     }
 
     pub fn push_with_binder(&mut self, is_copy: bool, info: BinderInfo) {
+        self.push_binder(is_copy, info, None);
+    }
+
+    /// Pushes a variable; `binder` is the address of the binding term (for diagnostics).
+    pub fn push_binder(&mut self, is_copy: bool, info: BinderInfo, binder: Option<usize>) {
         let implicit = matches!(info, BinderInfo::Implicit | BinderInfo::StrictImplicit);
         self.used.push(VarUsage {
             used: false,
             is_copy,
             implicit,
+            consumed_by_ih: false,
+            binder,
         });
+    }
+
+    /// Pushes a recursive constructor field bound by a minor premise. A non-Copy recursive field
+    /// starts out moved: the recursor consumed it to compute the induction hypothesis.
+    pub fn push_recursive_field(&mut self, is_copy: bool, info: BinderInfo, binder: Option<usize>) {
+        self.push_binder(is_copy, info, binder);
+        if !is_copy {
+            if let Some(var) = self.used.last_mut() {
+                var.used = true;
+                var.consumed_by_ih = true;
+            }
+        }
     }
 
     pub fn pop(&mut self) {
         self.used.pop();
+    }
+
+    /// Number of variables in scope.
+    pub fn depth(&self) -> usize {
+        self.used.len()
+    }
+
+    /// Starts a scope that may run more than once (see the type documentation).
+    pub fn push_barrier(&mut self) {
+        self.barriers.push(self.used.len());
+    }
+
+    pub fn pop_barrier(&mut self) {
+        self.barriers.pop();
+    }
+
+    /// Snapshot of the moved flags of the variables in scope.
+    pub fn moved_state(&self) -> MovedState {
+        self.used.iter().map(|var| var.used).collect()
+    }
+
+    /// Restores a snapshot taken by [`UsageContext::moved_state`] at the same depth.
+    pub fn restore_moved_state(&mut self, state: &[bool]) {
+        for (var, moved) in self.used.iter_mut().zip(state) {
+            var.used = *moved;
+        }
+    }
+
+    /// Joins two moved states of the same depth: a variable is moved if it is moved in either
+    /// (used for alternative branches, only one of which runs).
+    pub fn join_moved_states(into: &mut MovedState, other: &[bool]) {
+        for (moved, other_moved) in into.iter_mut().zip(other) {
+            *moved = *moved || *other_moved;
+        }
+    }
+
+    fn var_ref(&self, idx: usize) -> VarRef {
+        let binder = self
+            .used
+            .len()
+            .checked_sub(1 + idx)
+            .and_then(|stack_idx| self.used[stack_idx].binder);
+        VarRef::new(idx, binder)
+    }
+
+    fn moved_error(&self, var: &VarUsage, idx: usize) -> OwnershipError {
+        if var.consumed_by_ih {
+            OwnershipError::RecursiveFieldConsumedByIh(self.var_ref(idx))
+        } else {
+            OwnershipError::UseAfterMove(self.var_ref(idx))
+        }
+    }
+
+    /// A runtime read of a variable (not a move): fails if the variable is non-Copy and was
+    /// already moved.
+    pub fn read_var(&mut self, idx: usize) -> Result<(), OwnershipError> {
+        if idx >= self.used.len() {
+            return Ok(());
+        }
+        let stack_idx = self.used.len() - 1 - idx;
+        let var = self.used[stack_idx];
+        if !var.is_copy && var.used {
+            return Err(self.moved_error(&var, idx));
+        }
+        Ok(())
     }
 
     pub fn is_implicit_non_copy(&self, idx: usize) -> bool {
@@ -246,29 +480,39 @@ impl UsageContext {
         var.implicit && !var.is_copy
     }
 
+    /// Records an occurrence of variable `idx` in `mode`: `Consuming` is a move, `MutBorrow` a
+    /// mutable use, `Observational` an erased occurrence (always succeeds; use
+    /// [`UsageContext::read_var`] for a runtime read).
     pub fn use_var(&mut self, idx: usize, mode: UsageMode) -> Result<(), OwnershipError> {
         if idx >= self.used.len() {
             return Ok(());
         }
         let stack_idx = self.used.len() - 1 - idx;
+        let innermost_barrier = self.barriers.last().copied().unwrap_or(0);
 
-        let var = &mut self.used[stack_idx];
+        let var = self.used[stack_idx];
         if var.implicit
             && (mode == UsageMode::Consuming || mode == UsageMode::MutBorrow)
             && !var.is_copy
         {
-            return Err(OwnershipError::ImplicitNonCopyUse { index: idx, mode });
+            return Err(OwnershipError::ImplicitNonCopyUse {
+                var: self.var_ref(idx),
+                mode,
+            });
         }
-        if mode == UsageMode::Observational || mode == UsageMode::MutBorrow || var.is_copy {
+        if mode == UsageMode::Observational || var.is_copy {
             return Ok(());
         }
 
         if var.used {
-            return Err(OwnershipError::UseAfterMove(idx));
+            return Err(self.moved_error(&var, idx));
         }
 
         if mode == UsageMode::Consuming {
-            var.used = true;
+            if stack_idx < innermost_barrier {
+                return Err(OwnershipError::ConsumedInRepeatedScope(self.var_ref(idx)));
+            }
+            self.used[stack_idx].used = true;
         }
         Ok(())
     }
@@ -279,6 +523,10 @@ struct VarUsage {
     used: bool,
     is_copy: bool,
     implicit: bool,
+    /// Set for a non-Copy recursive field bound by a minor premise (moved by the recursor).
+    consumed_by_ih: bool,
+    /// Address of the binding term (diagnostics only).
+    binder: Option<usize>,
 }
 
 pub fn check_ownership(
@@ -324,7 +572,6 @@ pub fn check_ownership(
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::ast::{BinderInfo, Level};
@@ -347,7 +594,48 @@ mod tests {
             BinderInfo::Default,
         );
         let res = check_ownership(&t, &mut ctx, UsageMode::Consuming);
-        assert!(matches!(res, Err(OwnershipError::UseAfterMove(0))));
+        assert!(matches!(res, Err(OwnershipError::UseAfterMove(ref var)) if var.index == 0));
+    }
+
+    #[test]
+    fn test_alternative_moved_states_are_joined() {
+        let mut ctx = UsageContext::new();
+        ctx.push(false); // a (index 1)
+        ctx.push(false); // b (index 0)
+        let before = ctx.moved_state();
+        let mut joined = before.clone();
+        // branch 1 moves a
+        ctx.use_var(1, UsageMode::Consuming).unwrap();
+        UsageContext::join_moved_states(&mut joined, &ctx.moved_state());
+        // branch 2 starts from the same state and moves a and b
+        ctx.restore_moved_state(&before);
+        ctx.use_var(1, UsageMode::Consuming).unwrap();
+        ctx.use_var(0, UsageMode::Consuming).unwrap();
+        UsageContext::join_moved_states(&mut joined, &ctx.moved_state());
+        ctx.restore_moved_state(&joined);
+        assert!(matches!(
+            ctx.read_var(0),
+            Err(OwnershipError::UseAfterMove(ref var)) if var.index == 0
+        ));
+        assert!(ctx.read_var(1).is_err());
+    }
+
+    #[test]
+    fn test_ownership_error_names_resolve_from_binder_addresses() {
+        let mut ctx = UsageContext::new();
+        ctx.push_binder(false, BinderInfo::Default, Some(0x1000));
+        ctx.use_var(0, UsageMode::Consuming).unwrap();
+        let mut err = ctx.use_var(0, UsageMode::Consuming).unwrap_err();
+        assert_eq!(err.variant_name(), "UseAfterMove");
+        assert_eq!(
+            err.to_string(),
+            "variable #0 (de Bruijn index) is used after it was moved"
+        );
+        let names: HashMap<usize, String> =
+            [(0x1000usize, "tok".to_string())].into_iter().collect();
+        err.resolve_names(&names);
+        assert_eq!(err.to_string(), "variable 'tok' is used after it was moved");
+        assert_eq!(format!("{:?}", err), "UseAfterMove(tok)");
     }
 
     #[test]

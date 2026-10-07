@@ -1,0 +1,16 @@
+[package]
+name = "stage_matrix"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Per-definition stage matrix (elaboration, kernel typing, kernel admission/ownership, MIR typing/ownership/borrow check) for LRL files"
+
+# Not a member of the repository workspace: a read-only harness over the public APIs of
+# the compiler crates (no compiler API is changed or weakened).
+[workspace]
+
+[dependencies]
+cli = { path = "../../../cli" }
+kernel = { path = "../../../kernel" }
+mir = { path = "../../../mir" }
+frontend = { path = "../../../frontend" }

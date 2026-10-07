@@ -1,0 +1,22 @@
+;; Proof-argument A/B pair, variant WITHOUT the proof argument (compare proof_arg_with.lrl; the two
+;; files differ only in the lines marked "differs").
+;; `outer A B` calls `step` A*B times: for each of the A outer steps, `count_from acc B` applies
+;; `step` B times starting from the running count `acc`. The result is A*B.
+;; @A@ and @B@ are replaced by the driver (bench/run_bench.py) with small literals.
+
+(def step (pi n Nat Nat)                                           ;; differs
+  (lam n Nat (succ n)))                                            ;; differs
+
+(def count_from (pi acc Nat (pi b Nat Nat))
+  (lam acc Nat (lam b Nat
+    (match b Nat
+      (case (zero) acc)
+      (case (succ j ih) (step ih))))))                             ;; differs
+
+(def outer (pi a Nat (pi b Nat Nat))
+  (lam a Nat (lam b Nat
+    (match a Nat
+      (case (zero) zero)
+      (case (succ j ih) (count_from ih b))))))
+
+(def main Nat (outer @A@ @B@))

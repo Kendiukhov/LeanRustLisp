@@ -284,4 +284,4 @@ If Rust is “systems programming without fear,” LRL is “systems programming
 
 ## License
 
-Dual licensed under **Apache-2.0 OR MIT** (`LICENSE`).
+Licensed under the **MIT License** (see `LICENSE`).

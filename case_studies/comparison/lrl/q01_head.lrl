@@ -1,0 +1,18 @@
+;; Q1 (positive): a length-indexed vector and a TOTAL head with no run-time check and no
+;; default value. `vhead` takes a `Vec A (succ n)`; its match has a dependent motive that is
+;; `Unit` at index zero and `A` at a successor index, so the `vnil` case (impossible for a
+;; `Vec A (succ n)`) only has to return `unit`.
+(inductive Unit (sort 1) (ctor unit Unit))
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+(def vhead (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A (succ n)) A)))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A (succ n))
+    (match v (motive (lam k Nat (lam w (Vec A k)
+                       (match k (sort 1) (case (zero) Unit) (case (succ k1 ih) A)))))
+      (case (vnil) unit)
+      (case (vcons h t ih) h))))))
+
+(def main Nat (print_nat (vhead (vcons 1 (vcons 2 vnil)))))

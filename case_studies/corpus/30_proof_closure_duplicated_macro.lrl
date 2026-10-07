@@ -1,0 +1,18 @@
+;; Positive control P19 (macro twin; formerly class 30) - `twice-to` expands to
+;; `(use2 g g)`. Expected: accepted; the dynamic binary prints `Result: Nat(0)`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok n) n))))
+(inductive Tru (sort 0) (ctor triv Tru))
+
+(def use2 (pi g (pi #[once] u Nat Tru) (pi h (pi #[once] u Nat Tru) Nat))
+  (lam g (pi #[once] u Nat Tru) (lam h (pi #[once] u Nat Tru)
+    (let a Tru (g zero) (let b Tru (h zero) zero)))))
+
+(defmacro twice-to (fn arg) `(,fn ,arg ,arg))
+
+(def f (pi k Tok Nat)
+  (lam k Tok
+    (let g (pi #[once] u Nat Tru) (lam #[once] u Nat (let n Nat (burn k) triv))
+      (twice-to use2 g))))
+
+(def main Nat (f (mk_tok 3)))

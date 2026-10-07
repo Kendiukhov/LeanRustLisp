@@ -1,0 +1,10 @@
+;; Positive control P17 (nearest legal variant of class 10) - an implicit
+;; binder of a non-Copy type may be READ (borrowed), just not consumed.
+;; Expected: accepted; main = 1.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+
+(def look_implicit (pi {t Tok} Nat)
+  (lam {t} Tok (look (& t))))
+
+(def main Nat (look_implicit {(mk_tok 0)}))

@@ -92,6 +92,10 @@ pub enum TypeMarker {
     AtomicPrimitive,
     /// Marks container types that support indexing sugar.
     Indexable,
+    /// Opts an inductive type out of Copy: its values are affine (used at most once) even when
+    /// every field is Copy. Built into the kernel: it needs no prelude marker definition, adds no
+    /// axiom dependency, and only makes the ownership check stricter.
+    Affine,
 }
 
 /// Explicit opt-in for MIR borrow-shape classification on opaque aliases.
@@ -115,6 +119,7 @@ pub fn marker_name(marker: TypeMarker) -> &'static str {
         TypeMarker::ConcurrencyPrimitive => "concurrency_primitive",
         TypeMarker::AtomicPrimitive => "atomic_primitive",
         TypeMarker::Indexable => "indexable",
+        TypeMarker::Affine => "affine",
     }
 }
 
@@ -480,6 +485,18 @@ fn normalize_max(levels: Vec<Level>) -> Level {
     })
 }
 
+/// True if `level` is at least 1 for every assignment of the level parameters (Lean 4's
+/// `is_not_zero`; `false` means "may be 0", e.g. `0`, a parameter `u`, `imax 1 u`).
+pub fn level_is_never_zero(level: &Level) -> bool {
+    match level {
+        Level::Succ(_) => true,
+        Level::Max(a, b) => level_is_never_zero(a) || level_is_never_zero(b),
+        Level::IMax(_, b) => level_is_never_zero(b),
+        Level::Zero | Level::Param(_) => false,
+    }
+}
+
+/// Normal form of a level, equal to `level` for every assignment of the level parameters.
 pub fn normalize_level(level: Level) -> Level {
     match level {
         Level::Zero | Level::Param(_) => level,
@@ -488,9 +505,18 @@ pub fn normalize_level(level: Level) -> Level {
             let a_norm = normalize_level(*a);
             let b_norm = normalize_level(*b);
             if matches!(b_norm, Level::Zero) {
+                // imax a 0 = 0
                 Level::Zero
-            } else {
+            } else if level_is_never_zero(&b_norm) {
+                // b >= 1 for every assignment: imax a b = max a b
                 normalize_max(vec![a_norm, b_norm])
+            } else if matches!(a_norm, Level::Zero) || a_norm == b_norm {
+                // imax 0 b = b and imax b b = b
+                b_norm
+            } else {
+                // b may be 0 (e.g. a level parameter): rewriting to `max a b` would identify
+                // levels that differ when b = 0, so the level stays an `imax`.
+                Level::IMax(Box::new(a_norm), Box::new(b_norm))
             }
         }
         Level::Max(a, b) => {

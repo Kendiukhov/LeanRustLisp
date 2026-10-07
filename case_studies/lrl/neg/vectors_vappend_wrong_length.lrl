@@ -1,0 +1,21 @@
+;; Negative variant of case study A (../vectors.lrl). The declarations up to the marked line
+;; are copied from vectors.lrl (comments and unused definitions omitted); only the code after
+;; it is new.
+;; Expected: type error: vappend v2 v2 has type Vec Nat (add 2 2), which computes to Vec Nat 4, not Vec Nat 3.
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+(def vappend (pi {A (sort 1)} (pi {n Nat} (pi {m Nat}
+               (pi xs (Vec A n) (pi #[once] ys (Vec A m) (Vec A (add n m)))))))
+  (lam {A} (sort 1) (lam {n} Nat (lam {m} Nat (lam xs (Vec A n) (lam #[once] ys (Vec A m)
+    (match xs (motive (lam k Nat (lam w (Vec A k) (Vec A (add k m)))))
+      (case (vnil) ys)
+      (case (vcons h t ih) (vcons h ih)))))))))
+
+;; ---- new code ----
+
+(def v2 (Vec Nat 2) (vcons 1 (vcons 2 vnil)))
+
+;; Claims that appending two 2-element vectors gives a 3-element vector.
+(def v3_claimed (Vec Nat 3) (vappend v2 v2))

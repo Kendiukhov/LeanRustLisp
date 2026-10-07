@@ -1,0 +1,12 @@
+;; Positive control P06 (nearest legal variant of class 03) - the function
+;; value is called (read) BEFORE it is moved into the box.
+;; Expected: accepted; main = 1.
+(inductive FBox (sort 1) (ctor mk_fbox (pi f (pi x Nat Nat) FBox)))
+(inductive R2 (sort 1) (ctor mk_r2 (pi n Nat (pi b FBox R2))))
+
+(def read_then_move (pi f (pi x Nat Nat) R2)
+  (lam f (pi x Nat Nat) (mk_r2 (f zero) (mk_fbox f))))
+
+(def first (pi r R2 Nat) (lam r R2 (match r Nat (case (mk_r2 n b) n))))
+
+(def main Nat (first (read_then_move succ)))

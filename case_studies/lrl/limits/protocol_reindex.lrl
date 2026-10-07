@@ -1,0 +1,40 @@
+;; What case study B (../protocol.lrl) does NOT enforce: this program is ACCEPTED.  The
+;; declarations up to the marked line are copied from protocol.lrl (comments and unused
+;; definitions omitted); only the code after it is new.
+;; LRL has no abstraction boundary for constructors: any code may pattern-match on a `Chan`
+;; and rebuild it with `mk_chan` at another index.  The protocol guarantee therefore holds
+;; only for code that uses `open_chan`, `send` and `close` and does not use `mk_chan`.
+
+(inductive (affine) Chan (pi n Nat (sort 1))
+  (ctor mk_chan (pi {n Nat} (pi log (List Nat) (Chan n)))))
+(inductive Receipt (sort 1)
+  (ctor receipt (pi log (List Nat) Receipt)))
+(def open_chan (pi n Nat (Chan n))
+  (lam n Nat (mk_chan nil)))
+(def close (pi c (Chan zero) Receipt)
+  (lam c (Chan zero)
+    (match c Receipt (case (mk_chan log) (receipt log)))))
+(defmacro defsend (name payload encode)
+  (def name (pi {n Nat} (pi c (Chan (succ n)) (pi #[once] x payload (Chan n))))
+    (lam {n} Nat (lam c (Chan (succ n)) (lam #[once] x payload
+      (match c (Chan n)
+        (case (mk_chan log) (mk_chan (cons (encode x) log)))))))))
+(def log (pi m Nat Nat) (lam m Nat (print_nat m)))
+(defsend send Nat log)
+
+;; ---- new code ----
+
+;; Turns a finished channel (no messages left) into one that may send 5 more.
+(def refill (pi c (Chan zero) (Chan 5))
+  (lam c (Chan zero)
+    (match c (Chan 5) (case (mk_chan log) (mk_chan log)))))
+
+(def count (pi l (List Nat) Nat)
+  (lam l (List Nat) (match l Nat (case (nil) zero) (case (cons x rest ih) (succ ih)))))
+
+(def logged (pi r Receipt Nat)
+  (lam r Receipt (match r Nat (case (receipt l) (count l)))))
+
+;; 1 send on a 1-message channel, then 5 more after `refill`: 6 messages are logged.
+(def main Nat
+  (logged (close (send (send (send (send (send (refill (send (open_chan 1) 1)) 2) 3) 4) 5) 6))))

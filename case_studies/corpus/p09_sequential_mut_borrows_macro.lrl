@@ -1,0 +1,16 @@
+;; Positive control P09 (macro twin) - `poke-twice-then-eat` expands to the
+;; nested lets; its binders `n`, `m` are hygienic.
+;; Expected: accepted; main = 4.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def poke (pi r (Ref #[r] Mut Tok) Nat) (lam r (Ref #[r] Mut Tok) (succ zero)))
+(def eat (pi t Tok Nat) (lam t Tok (succ (succ zero))))
+
+(defmacro poke-twice-then-eat (v)
+  `(let n Nat (poke (&mut ,v))
+     (let m Nat (poke (&mut ,v))
+       (add (add n m) (eat ,v)))))
+
+(def mut_then_mut (pi t Tok Nat)
+  (lam t Tok (poke-twice-then-eat t)))
+
+(def main Nat (mut_then_mut (mk_tok 0)))

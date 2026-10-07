@@ -1,0 +1,8 @@
+;; Class 16 - effect violation: a total definition calls an `unsafe`
+;; definition. Total definitions may appear in types and must stay inside the
+;; safe fragment.
+;; Expected: kernel K0022 (EffectError).
+(unsafe raw_peek (pi n Nat Nat) (lam n Nat n))
+
+(def total_peek (pi n Nat Nat)
+  (lam n Nat (raw_peek n)))

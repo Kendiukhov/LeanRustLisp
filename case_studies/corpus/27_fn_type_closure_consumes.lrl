@@ -1,0 +1,8 @@
+;; Class 27 - the declared function type says Fn (no kind annotation on the
+;; inner `pi`), but the returned closure consumes its captured token, so it
+;; is FnOnce. (Class 05 annotates the lambda itself; here only the type does.)
+;; Expected: elaborator F0206 (FunctionKindMismatch).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def konst (pi k Tok (pi n Nat Tok))
+  (lam k Tok (lam n Nat k)))

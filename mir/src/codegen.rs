@@ -45,11 +45,14 @@ pub fn codegen_recursors(inductives: &HashMap<String, InductiveDecl>, env: &Env)
         let num_ctors = decl.ctors.len();
         let num_indices = count_indices(&decl.ty, num_params);
         let total_args = num_params + 1 + num_ctors + num_indices + 1;
+        // Rust identifier part of the entry/impl function names (the inductive's name may be
+        // module-qualified or collide with a Rust name; see `sanitize_name`).
+        let fn_base = sanitize_name(ind_name);
 
         // Entry point
         code.push_str(&format!(
             "fn rec_{}_entry(arg_0: Value) -> Value {{\n",
-            ind_name
+            fn_base
         ));
         for i in 1..total_args {
             code.push_str(&format!(
@@ -61,7 +64,7 @@ pub fn codegen_recursors(inductives: &HashMap<String, InductiveDecl>, env: &Env)
             }
         }
 
-        code.push_str(&format!("        rec_{}_impl(", ind_name));
+        code.push_str(&format!("        rec_{}_impl(", fn_base));
         for i in 0..total_args {
             if i > 0 {
                 code.push_str(", ");
@@ -76,7 +79,7 @@ pub fn codegen_recursors(inductives: &HashMap<String, InductiveDecl>, env: &Env)
         code.push_str("}\n\n");
 
         // Impl
-        code.push_str(&format!("fn rec_{}_impl(", ind_name));
+        code.push_str(&format!("fn rec_{}_impl(", fn_base));
         for i in 0..total_args {
             if i > 0 {
                 code.push_str(", ");
@@ -139,7 +142,7 @@ pub fn codegen_recursors(inductives: &HashMap<String, InductiveDecl>, env: &Env)
                 if is_rec {
                     code.push_str(&format!(
                         "                    let ih_{} = rec_{}_impl(",
-                        a_i, ind_name
+                        a_i, fn_base
                     ));
                     for k in 0..total_args - 1 {
                         code.push_str(&format!("arg_{}.clone(), ", k));
@@ -586,6 +589,17 @@ fn runtime_discriminant(value: &Value) -> u64 {
     }
 }
 
+// The operand of a MIR `SwitchInt` is a constructor index (the result of a `Discriminant`
+// rvalue, emitted as `Value::Nat(index)`), not a scrutinee: read the number itself.
+// `runtime_discriminant` would map every index >= 1 to 1 (the `succ` case of `Nat`).
+fn runtime_switch_index(value: &Value) -> u64 {
+    match value {
+        Value::Nat(n) => *n,
+        Value::Unit => 0,
+        other => runtime_discriminant(other),
+    }
+}
+
 fn runtime_project_field(value: &Value, downcast_idx: Option<usize>, field_idx: usize) -> Value {
     match value {
         Value::Nat(n) => {
@@ -852,7 +866,7 @@ fn codegen_terminator(term: &Terminator, is_closure: bool, closure_base: usize) 
         Terminator::SwitchInt { discr, targets } => {
             // Switch on discriminant
             let val = codegen_operand(discr, is_closure, closure_base);
-            let mut code = format!("                match runtime_discriminant(&{}) {{\n", val);
+            let mut code = format!("                match runtime_switch_index(&{}) {{\n", val);
             for (v_idx, val) in targets.values.iter().enumerate() {
                 let target = targets.targets[v_idx];
                 code.push_str(&format!(
@@ -1026,7 +1040,7 @@ pub fn codegen_constant(lit: &Literal, closure_base: usize) -> String {
             } else if name == "List" {
                 "Value::Func(Rc::new(rec_list_entry))".to_string()
             } else {
-                format!("Value::Func(Rc::new(rec_{}_entry))", name)
+                format!("Value::Func(Rc::new(rec_{}_entry))", sanitize_name(name))
             }
         }
         Literal::OpaqueConst(reason) => format!(
@@ -1070,31 +1084,36 @@ pub fn codegen_constant(lit: &Literal, closure_base: usize) -> String {
             }
         }
         Literal::Fix(idx, captures) => {
-            // Recursive closure: env[0] is self, env[1..] are captures
+            // Recursive closure: env[0] is self, env[1..] are captures. The closure reaches
+            // itself through a weak reference stored in a slot after it has been allocated
+            // (`Rc::new_cyclic` cannot build an unsized `Rc<dyn Fn>`), upgraded at each call.
             let func_name = format!("closure_{}", closure_base + idx);
-            if captures.is_empty() {
-                format!("Value::Func(Rc::new_cyclic(|self_ref| {{ let self_val = Value::Func(self_ref.clone()); move |arg| {}(vec![self_val.clone()], arg) }}))", func_name)
-            } else {
-                let cap_clones: Vec<String> = captures
-                    .iter()
-                    .enumerate()
-                    .map(|(i, op)| {
-                        format!(
-                            "let __cap{} = {}.clone();",
-                            i,
-                            codegen_operand(op, false, closure_base)
-                        )
-                    })
-                    .collect();
-                let cap_vec: Vec<String> = (0..captures.len())
-                    .map(|i| format!("__cap{}.clone()", i))
-                    .collect();
-                format!("{{ {} Value::Func(Rc::new_cyclic(|self_ref| {{ let self_val = Value::Func(self_ref.clone()); let __env = vec![self_val.clone(), {}]; move |arg| {}(__env.clone(), arg) }})) }}",
-                    cap_clones.join(" "),
-                    cap_vec.join(", "),
-                    func_name
-                )
-            }
+            let cap_clones: Vec<String> = captures
+                .iter()
+                .enumerate()
+                .map(|(i, op)| {
+                    format!(
+                        "let __cap{} = {}.clone();",
+                        i,
+                        codegen_operand(op, false, closure_base)
+                    )
+                })
+                .collect();
+            let cap_vec: Vec<String> = (0..captures.len())
+                .map(|i| format!("__cap{}.clone()", i))
+                .collect();
+            format!(
+                "{{ {} let __caps: Vec<Value> = vec![{}]; \
+                 let __slot: Rc<std::cell::RefCell<Option<std::rc::Weak<dyn Fn(Value) -> Value>>>> = Rc::new(std::cell::RefCell::new(None)); \
+                 let __slot_in = __slot.clone(); \
+                 let __fix: Rc<dyn Fn(Value) -> Value> = Rc::new(move |arg| {{ \
+                 let __self = __slot_in.borrow().as_ref().and_then(|w| w.upgrade()).expect(\"fixpoint dropped while running\"); \
+                 let mut __env = vec![Value::Func(__self)]; __env.extend(__caps.iter().cloned()); {}(__env, arg) }}); \
+                 *__slot.borrow_mut() = Some(Rc::downgrade(&__fix)); Value::Func(__fix) }}",
+                cap_clones.join(" "),
+                cap_vec.join(", "),
+                func_name
+            )
         }
         Literal::InductiveCtor(ctor, arity, runtime_arity) => {
             let adt = &ctor.adt;
@@ -1156,6 +1175,121 @@ pub fn codegen_constant(lit: &Literal, closure_base: usize) -> String {
     }
 }
 
+/// Prefix of a mangled identifier (see [`sanitize_name`]).
+pub const MANGLE_PREFIX: &str = "lrl_";
+
+/// Rust keywords of every edition (strict, reserved and edition-dependent ones), plus `_`.
+/// Several of them (`crate`, `self`, `Self`, `super`, `_`) cannot even be raw identifiers.
+const RUST_KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
+    "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type",
+    "unsafe", "use", "where", "while", "abstract", "become", "box", "do", "final", "gen", "macro",
+    "override", "priv", "try", "typeof", "unsized", "virtual", "yield", "_",
+];
+
+/// Rust primitive types.
+const RUST_PRIMITIVES: &[&str] = &[
+    "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64",
+    "i128", "isize", "f16", "f32", "f64", "f128",
+];
+
+/// Names of the Rust standard prelude, crate roots, and std items that generated code uses
+/// unqualified. A user item with one of these names would shadow the one the generated code
+/// means (e.g. a user type `Box` breaks `Box<List<u64>>`, a user constructor `Some` breaks
+/// `Some(x)` patterns, a user type `u64` breaks every `Nat`).
+const RUST_STD_NAMES: &[&str] = &[
+    "Copy",
+    "Send",
+    "Sized",
+    "Sync",
+    "Unpin",
+    "Drop",
+    "Fn",
+    "FnMut",
+    "FnOnce",
+    "drop",
+    "Box",
+    "ToOwned",
+    "Clone",
+    "PartialEq",
+    "PartialOrd",
+    "Eq",
+    "Ord",
+    "AsRef",
+    "AsMut",
+    "Into",
+    "From",
+    "TryFrom",
+    "TryInto",
+    "Default",
+    "Iterator",
+    "Extend",
+    "IntoIterator",
+    "DoubleEndedIterator",
+    "ExactSizeIterator",
+    "FromIterator",
+    "Option",
+    "Some",
+    "None",
+    "Result",
+    "Ok",
+    "Err",
+    "String",
+    "ToString",
+    "Vec",
+    "std",
+    "core",
+    "alloc",
+    "Rc",
+    "Weak",
+    "RefCell",
+    "Cell",
+    "Mutex",
+    "Arc",
+    "Debug",
+    "Display",
+];
+
+/// Items defined by the generated runtimes of the two backends under fixed names.
+const GENERATED_NAMES: &[&str] = &["Value", "container_len", "list_len", "list_nth"];
+
+/// Name families of generated items: typed-runtime types (`LrlCallable`, `LrlRefMut`, ...),
+/// runtime helpers (`runtime_index`, ...), recursor entries (`rec_Nat_entry_0`,
+/// `rec_list_impl`, ...), closure bodies (`closure_3`, `closure_adapter_3`), the entry point
+/// (`__lrl_main`), and the mangling prefix itself (which keeps the mapping injective).
+const GENERATED_PREFIXES: &[&str] = &[
+    "Lrl",
+    "runtime_",
+    "rec_",
+    "closure_",
+    "__lrl",
+    MANGLE_PREFIX,
+];
+
+/// Whether a (character-escaped) identifier must be mangled because it collides with a Rust
+/// keyword, primitive, standard name, or a name of the generated code (including the typed
+/// backend's generic parameters `T0`, `T1`, ...).
+fn is_reserved_rust_name(name: &str) -> bool {
+    RUST_KEYWORDS.contains(&name)
+        || RUST_PRIMITIVES.contains(&name)
+        || RUST_STD_NAMES.contains(&name)
+        || GENERATED_NAMES.contains(&name)
+        || GENERATED_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+        || name
+            .strip_prefix('T')
+            .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The Rust identifier of an LRL name (definition, inductive type or constructor) in generated
+/// code. Characters that cannot appear in a Rust identifier are escaped as `uXX_` (hex code
+/// point); `main` becomes `__lrl_main` (the generated `fn main` calls it); a name that
+/// collides with a Rust keyword, primitive type, standard name, or a name of the generated code
+/// (see [`is_reserved_rust_name`]) gets the prefix [`MANGLE_PREFIX`]. Names that already start
+/// with the prefix are prefixed again, so two different identifiers never mangle to the same
+/// name.
 pub fn sanitize_name(name: &str) -> String {
     let mut sanitized = String::new();
 
@@ -1187,14 +1321,10 @@ pub fn sanitize_name(name: &str) -> String {
         return "__lrl_main".to_string();
     }
 
-    match sanitized.as_str() {
-        "true" | "false" | "if" | "else" | "match" | "let" | "fn" | "struct" | "enum" | "type"
-        | "return" | "loop" | "while" | "for" | "in" | "use" | "mod" | "crate" | "pub" | "impl"
-        | "trait" | "where" | "as" | "break" | "continue" | "unsafe" | "async" | "await"
-        | "move" | "ref" | "mut" | "static" | "const" => {
-            format!("r#{}", sanitized)
-        }
-        _ => sanitized,
+    if is_reserved_rust_name(&sanitized) {
+        format!("{}{}", MANGLE_PREFIX, sanitized)
+    } else {
+        sanitized
     }
 }
 
@@ -1219,5 +1349,58 @@ mod tests {
     #[test]
     fn sanitize_name_reserves_main_entrypoint() {
         assert_eq!(sanitize_name("main"), "__lrl_main");
+        assert_eq!(sanitize_name("__lrl_main"), "lrl___lrl_main");
+    }
+
+    #[test]
+    fn sanitize_name_mangles_rust_keywords_and_primitives() {
+        // `crate`, `self`, `Self`, `super` cannot be raw identifiers (`r#crate` is invalid).
+        for keyword in [
+            "crate", "self", "Self", "super", "box", "match", "true", "fn", "_",
+        ] {
+            assert_eq!(sanitize_name(keyword), format!("lrl_{}", keyword));
+        }
+        for primitive in ["u64", "bool", "usize", "str", "char", "i32", "f64"] {
+            assert_eq!(sanitize_name(primitive), format!("lrl_{}", primitive));
+        }
+    }
+
+    #[test]
+    fn sanitize_name_mangles_std_and_generated_names() {
+        for name in [
+            "Box",
+            "Rc",
+            "String",
+            "Clone",
+            "Fn",
+            "Some",
+            "Ok",
+            "Option",
+            "Vec",
+            "Value",
+            "LrlCallable",
+            "LrlRefMut",
+            "runtime_index",
+            "runtime_bounds_check",
+            "rec_Nat_entry_0",
+            "rec_list_impl",
+            "closure_3",
+            "T0",
+            "T12",
+        ] {
+            assert_eq!(sanitize_name(name), format!("lrl_{}", name));
+        }
+        // Not reserved: ordinary names, and look-alikes outside the families.
+        for name in ["Nat", "List", "add", "T", "Tx", "record", "closure", "Lr"] {
+            assert_eq!(sanitize_name(name), name);
+        }
+    }
+
+    #[test]
+    fn sanitize_name_keeps_mangled_names_distinct() {
+        // A name that already carries the prefix is prefixed again.
+        assert_eq!(sanitize_name("lrl_Box"), "lrl_lrl_Box");
+        assert_ne!(sanitize_name("Box"), sanitize_name("lrl_Box"));
+        assert_ne!(sanitize_name("crate"), sanitize_name("lrl_crate"));
     }
 }

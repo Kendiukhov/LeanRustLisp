@@ -1,0 +1,9 @@
+;; Class 14 - a reference that escapes its referent. `esc` returns a shared
+;; borrow of its own parameter `t`, which is dropped when `esc` returns.
+;; The kernel types the program (references are ordinary types there); MIR's
+;; borrow check rejects the dangling reference.
+;; Expected: MIR M203 (DanglingReference).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def esc (pi t Tok (Ref #[r] Shared Tok))
+  (lam t Tok (& t)))

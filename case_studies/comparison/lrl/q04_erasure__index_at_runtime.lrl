@@ -1,0 +1,22 @@
+;; Q4 (negative): reading the length index of a Vec at run time. Identical to q04_erasure.lrl
+;; except for the lines marked CHANGED. In Rust (type-level length) and Idris 2 (quantity-0
+;; index) this is rejected; in LRL an implicit index is an ordinary run-time argument, so we
+;; expect the program to be accepted (the index is not erased).
+(def safe_div (pi a Nat (pi b Nat (pi p (Eq Bool (nat_is_zero b) false) Nat)))
+  (lam a Nat (lam b Nat (lam p (Eq Bool (nat_is_zero b) false) (nat_div a b)))))
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+(def vsum (pi {n Nat} (pi v (Vec Nat n) Nat))
+  (lam {n} Nat (lam v (Vec Nat n)
+    (match v Nat (case (vnil) zero) (case (vcons h t ih) (add h ih))))))
+
+;; CHANGED: the length index of a vector, an implicit argument, read as a run-time value
+(def vlen (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) Nat)))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n) n))))
+
+(def main Nat
+  (add (print_nat (safe_div 10 2 (refl Bool false)))
+       (print_nat (vlen (vcons 1 (vcons 2 (vcons 3 vnil)))))))   ;; CHANGED: vsum -> vlen

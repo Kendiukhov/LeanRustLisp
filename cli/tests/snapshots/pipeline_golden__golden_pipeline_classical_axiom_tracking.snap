@@ -22,10 +22,10 @@ ElaboratedDef uses_postulate
   val: Const("postulate", [])
 
 MirBody uses_classical
-  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: GlobalDef("classical_choice"), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Unit, name: Some("_0"), is_prop: true, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {} } }
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Unit, ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Unit, name: Some("_0"), is_prop: true, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {} } }
 
 MirBody uses_postulate
-  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: GlobalDef("postulate"), ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Unit, name: Some("_0"), is_prop: true, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {} } }
+  Body { basic_blocks: [BasicBlockData { statements: [Assign(Place { local: Local(0), projection: [] }, Use(Constant(Constant { literal: Unit, ty: Unit })))], terminator: Some(Goto { target: BasicBlock(1) }) }, BasicBlockData { statements: [], terminator: Some(Return) }], local_decls: [LocalDecl { ty: Unit, name: Some("_0"), is_prop: true, is_copy: true }], arg_count: 0, adt_layouts: AdtLayoutRegistry { layouts: {} } }
 
 BorrowCheck uses_classical
   ok

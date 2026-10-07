@@ -1,0 +1,18 @@
+;; Q9 (negative): a second mutable borrow of x is created while the first one is still live
+;; (both are used afterwards, in one call). Identical to q09_two_mut_refs.lrl except for the
+;; lines marked CHANGED. Expected: rejected before running.
+(def touch2 (pi a (Ref #[r] Mut Nat) (pi b (Ref #[r] Mut Nat) Nat))
+  (lam a (Ref #[r] Mut Nat) (lam b (Ref #[r] Mut Nat) zero)))
+
+(def touch (pi a (Ref #[r] Mut Nat) Nat) (lam a (Ref #[r] Mut Nat) zero))
+
+(def demo (pi x Nat (pi y Nat Nat))
+  (lam x Nat (lam y Nat
+    (let n1 Nat (touch2 (&mut x) (&mut y))            ;; distinct variables
+      (let r1 (Ref #[r] Mut Nat) (&mut x)
+        (let n2 Nat zero                              ;; CHANGED: was (touch r1)
+          (let r2 (Ref #[r] Mut Nat) (&mut x)
+            (let n3 Nat (touch2 r1 r2)                ;; CHANGED: r1 used while r2 is live
+              (add (print_nat x) (print_nat y))))))))))
+
+(def main Nat (demo 1 10))

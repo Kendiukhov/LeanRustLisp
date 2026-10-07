@@ -3,14 +3,14 @@
 ## Ownership
 
 LRL adopts Rust's ownership model:
--   **Linear/Affine**: Non-copy types must be used exactly once (or moved).
+-   **Affine**: a non-Copy value is used at most once (moved at most once); it may be dropped unused. There is no linearity check.
 -   **Copy**: Determined by kernel Copy instances; primitive types (Nat, Bool), shared references, and raw pointers are Copy. Function values are non-Copy.
 -   **Move Semantics**: Assigning a non-copy value moves ownership, invalidating the source.
 
 The `OwnershipAnalysis` pass verifies these properties:
 -   Use-after-move detection.
 -   Double-move detection.
--   Linear type consumption (must not be dropped implicitly).
+-   Borrows and calls of moved values (use after move).
 
 ## Borrows
 

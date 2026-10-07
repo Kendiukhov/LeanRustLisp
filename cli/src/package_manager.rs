@@ -261,28 +261,49 @@ pub fn run_workspace_package(cwd: &Path, package_name: Option<&str>) -> Result<(
     Ok(())
 }
 
-pub fn run_workspace_file(file: &Path) -> Result<()> {
+/// `run <file.lrl>` with the default dynamic backend: loads the dynamic prelude stack and
+/// processes the file through the driver (definitions are admitted, top-level expressions are
+/// evaluated). Honours the global CLI flags carried by `options` (`--trace-macros`,
+/// `--panic-free`, `--macro-boundary-warn`, `--require-axiom-tags`, `--allow-redefine`,
+/// `--allow-axioms`) exactly like the legacy `cli <file.lrl>` mode; `options.backend` is not
+/// used. Returns an error (so the CLI exits with a non-zero status) if any top-level form of
+/// the file was rejected.
+pub fn run_workspace_file(file: &Path, options: compiler::CompileOptions) -> Result<()> {
     let mut env = Env::new();
     let mut expander = Expander::new();
+    expander.trace_verbose = options.trace_macros;
     expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
     load_prelude(&mut env, &mut expander)?;
+    expander.set_macro_boundary_policy(if options.macro_boundary_warn {
+        MacroBoundaryPolicy::Warn
+    } else {
+        MacroBoundaryPolicy::Deny
+    });
+    env.set_allow_redefinition(options.allow_redefine);
 
     let path = file
         .to_str()
         .ok_or_else(|| anyhow!("file path '{}' is not valid UTF-8", file.display()))?;
-    let _ = repl::run_file(
+    let report = repl::run_file(
         path,
         &mut env,
         &mut expander,
         repl::RunFileOptions {
             verbose: false,
-            panic_free: false,
-            require_axiom_tags: false,
-            allow_axioms: true,
+            panic_free: options.panic_free,
+            require_axiom_tags: options.require_axiom_tags,
+            allow_axioms: options.allow_axioms,
             prelude_frozen: true,
-            allow_redefine: false,
+            allow_redefine: options.allow_redefine,
         },
     );
+    if !report.succeeded() {
+        bail!(
+            "run failed: {} error(s) reported for '{}'",
+            report.error_count,
+            file.display()
+        );
+    }
     Ok(())
 }
 
@@ -311,8 +332,8 @@ pub fn run_workspace_file_codegen(
     let binary_path = build_dir.join(binary_name);
     let binary_path_str = binary_path.to_string_lossy().to_string();
 
-    compiler::compile_file(path, Some(binary_path_str.clone()), compile_options);
-    if !binary_path.exists() {
+    let compiled = compiler::compile_file(path, Some(binary_path_str.clone()), compile_options);
+    if compiled.is_err() || !binary_path.exists() {
         bail!(
             "failed to compile '{}' for native execution",
             file.display()

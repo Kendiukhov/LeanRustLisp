@@ -1,0 +1,12 @@
+;; Positive control P16 (macro twin) - `len-plus` expands to
+;; `(add (length t) ih)` in the cons case.
+;; Expected: accepted; main = 3.
+(defmacro len-plus (tail rec) `(add (length ,tail) ,rec))
+
+(def tails_len (pi #[once] l (List Nat) Nat)
+  (lam #[once] l (List Nat)
+    (match l Nat
+      (case (nil) zero)
+      (case (cons h t ih) (len-plus t ih)))))
+
+(def main Nat (tails_len (cons 1 (cons 2 (cons 3 nil)))))

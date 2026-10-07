@@ -30,7 +30,8 @@ Delimiters:
 - Indexing uses brackets: `expr[expr]` (see below).
 
 Literals:
-- Integers: non-negative decimal digits only (`[0-9]+`). No sign prefix. Parsed as `usize`.
+- Integers: decimal digits with an optional leading `-` (`-?[0-9]+`), parsed as `i64` (`F0004` invalid literal, `F0005` out of range). A non-negative literal desugars to a `Nat` (`succ`/`zero` chain), a negative one to `int_neg` applied to its magnitude (`Int`).
+- Decimals: `-?[0-9]+.[0-9]+` is a float literal (`F0006` if it does not parse as `f32`); it desugars to `float16` applied to the literal's IEEE half-precision bits (`Float`).
 - Strings: double-quoted. Supports escapes `\n`, `\r`, `\t`, `\"`, `\\`. Unknown escapes keep the backslash.
 - Symbols: any run of non-whitespace characters excluding `(){}[]`.
 - Hole: `_` is a dedicated token, not a symbol.
@@ -68,8 +69,9 @@ Hygiene model:
 - Spans of macro-introduced nodes are remapped to the call-site span; substituted arguments keep their original spans.
 
 Identifier resolution in desugaring:
-- Desugaring normalizes scope sets (sort + dedup) and resolves references by exact scope-set match.
+- Desugaring normalizes scope sets (sort + dedup) and resolves a reference to a local binder whose scope set is a **subset** of the reference's scope set (a reference with scopes never resolves to an unscoped binder).
 - The most specific (largest) matching scope set wins.
+- This covers local binders only: macro names and global names are resolved by name at the use site (see `docs/spec/macros/hygiene.md`).
 
 Quote/quasiquote model:
 - `quote` prevents macro expansion under it.
@@ -79,7 +81,7 @@ Quote/quasiquote model:
 
 Reserved macro names:
 - Macros cannot use these names, and forms with these heads are not macro-expandable (only their arguments are expanded):
-`axiom`, `def`, `defmacro`, `eval`, `import`, `import-macros`, `inductive`, `instance`, `opaque`, `partial`, `noncomputable`, `structure`, `transparent`, `unsafe`.
+`axiom`, `def`, `defmacro`, `eval`, `import`, `import-macros`, `inductive`, `instance`, `module`, `open`, `opaque`, `partial`, `noncomputable`, `structure`, `transparent`, `unsafe`.
 
 ---
 
@@ -344,20 +346,66 @@ Errors:
 **(match ...)**
 
 Syntax:
-- `(match scrutinee ret_type case+ )`
+- `(match scrutinee ret_type case+ )` — constant motive: every case, and the whole `match`, has
+  type `ret_type`.
+- `(match scrutinee (motive M) case+ )` — explicit (dependent) motive. A list whose head is the
+  symbol `motive` in the return position is always read as this form.
 - `case` form: `(case (Ctor arg1 arg2 ...) body)`
 
-Example:
+Patterns: the names bind, in order, the constructor's explicit fields (binders after the
+inductive's parameters; implicit `{...}` fields are not named), each recursive field being
+followed by its induction hypothesis (`(case (succ k ih) ...)`, `(case (vcons h t ih) ...)`).
+The parameters are the leading binders that every constructor passes unchanged to the result
+type; the kernel infers them from the constructor types, also for binders the arity writes as
+indices and the constructor writes explicitly. In
+`(inductive T (pi n Nat (sort 1)) (ctor mk (pi n Nat (T n))))`, `n` is a parameter and `mk` has
+no field, so its case is `(case (mk) ...)` (the value of `n` is the scrutinee type's argument).
+Surplus pattern names are ignored; a case body that uses one is rejected with `F0223`
+(`Case mk in match on T binds 1 variable(s), but the constructor provides 0 ...; 'n' is not
+bound`).
+Every constructor needs exactly one case, impossible ones included. A `match` elaborates to the
+inductive's recursor applied to the parameters, the motive, one minor premise per case, the
+scrutinee's indices and the scrutinee.
+
+Explicit motive: `M` is a function over the scrutinee type's indices and the scrutinee itself,
+returning a sort. For a scrutinee of type `I params i_1 ... i_k`, `M` must have type
+`(pi j_1 J_1 ... (pi j_k J_k (pi x (I params j_1 ... j_k) (sort u))))`, e.g.
+`(lam k Nat (lam w (Vec A k) T))` for `Vec A n` (one index), or `(lam k Nat T)` for `Nat` (no
+index). Each case body is checked against `M` applied to the constructor's indices and to the
+constructor applied to the pattern variables; an induction hypothesis for a recursive field `t`
+has type `M` applied to `t`'s indices and `t`; the type of the whole `match` is `M` applied to the
+scrutinee's indices and the scrutinee. There is no index unification: a case that is impossible
+for the scrutinee's indices is still written, against the motive's value at that constructor
+(for instance returning a unit value). The kernel re-checks the elaborated recursor application.
+
+Examples:
 ```lrl
-(match xs (sort 0)
-  (case (Nil) (sort 0))
-  (case (Cons x xs) x))
+;; constant motive
+(match n Nat
+  (case (zero) zero)
+  (case (succ k ih) (succ ih)))
+
+;; dependent motive: a total head on a non-empty vector
+(match v (motive (lam k Nat (lam w (Vec A k)
+                   (match k (sort 1) (case (zero) Unit) (case (succ k1 ih) A)))))
+  (case (vnil) unit)
+  (case (vcons h t ih) h))
+
+;; dependent motive over Nat: a proof by induction of (Eq Nat (add n zero) n), where
+;; cong : (f : A -> B) -> Eq A x y -> Eq B (f x) (f y) (x, y implicit) is itself a match on the
+;; equality proof with the motive (lam b A (lam w (Eq A x b) (Eq B (f x) (f b))))
+(match n (motive (lam k Nat (Eq Nat (add k zero) k)))
+  (case (zero) (refl Nat zero))
+  (case (succ k ih) (cong succ ih)))
 ```
 
 Errors:
 - At least one case required.
 - Each case must be `(case (Ctor ...) body)`.
 - Constructor name must be a symbol.
+- `(motive ...)` must contain exactly one term.
+- Elaboration: unknown, duplicate or missing constructor cases (`F0213`/`F0212`/`F0211`); a motive
+  whose type is not of the required shape is a type mismatch (`F0205`).
 
 **(match_list ...)**
 
@@ -398,7 +446,7 @@ Desugaring behavior:
 - Other syntax nodes become `_`.
 
 String literals in term position:
-- `"abc"` desugars to a `List Nat` of character codes (same as `quote` on strings).
+- `"abc"` desugars to a `Text` value: the `text` constructor applied to the character codes as `List Nat` (built in chunks joined with `append`; codes up to 99 use the prelude constants `__nat_ascii_<code>`). `quote` on a string still yields a plain `List Nat` of character codes.
 
 **(sort ...)**
 
@@ -477,9 +525,10 @@ Example:
 ```
 
 Inductive type markers (attributes):
-- Recognized markers: `interior_mutable`, `may_panic_on_borrow_violation`, `concurrency_primitive`, `atomic_primitive`, `indexable`.
+- Recognized markers: `interior_mutable`, `may_panic_on_borrow_violation`, `concurrency_primitive`, `atomic_primitive`, `indexable`, `affine`.
 - `interior_mutable` is only valid together with one of `may_panic_on_borrow_violation`, `concurrency_primitive`, `atomic_primitive`.
-- The marker names are validated against environment definitions.
+- The marker names are validated against environment definitions, except `affine`, which is built into the kernel.
+- `affine` makes the type non-Copy (no derived Copy instance; explicit Copy instances and `copy` + `affine` are rejected with `K0052`); see `docs/spec/ownership_model.md` §1.2.
 
 No other general attribute syntax is currently supported.
 
@@ -535,7 +584,7 @@ Items below remain intentionally minimal after freezing module/import/open behav
 
 3) Term-level string literal semantics
 - Proposed spelling: existing string literal `"..."` in term position
-- Desugars to: `List Nat` character-code lists (bootstrap choice for 0.1).
+- Desugars to: a `Text` value wrapping a `List Nat` of character codes (see "String literals in term position").
 - Why freeze early: strings already parse; without a contract, future changes are breaking.
 - Status: core frozen.
 

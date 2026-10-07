@@ -1,0 +1,7 @@
+;; Class 18 (macro twin) - `defchan` generates the inductive declaration with
+;; both markers.
+;; Expected: kernel K0052 (AffineCopyConflict).
+(defmacro defchan (name ctor)
+  `(inductive copy (affine) ,name (sort 1) (ctor ,ctor (pi id Nat ,name))))
+
+(defchan Chan mk_chan)

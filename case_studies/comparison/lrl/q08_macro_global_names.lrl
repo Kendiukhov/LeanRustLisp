@@ -1,0 +1,13 @@
+;; Q8 (positive, probe): where is a global name in a macro template resolved? The macro
+;; `call_helper` (imported from q08_macro_global_names_lib.lrl, whose `helper` is 1) expands to
+;; the free name `helper`. This client defines its own global `helper` (= 2) and also calls the
+;; macro under a local binder `helper` (= 3). Printed: the value at the plain call, then the
+;; value under the local binder. 1 = definition-site global, 2 = use-site global,
+;; 3 = captured by the local binder.
+(import-macros "q08_macro_global_names_lib.lrl")
+
+(def helper Nat 2)
+
+(def main Nat
+  (add (print_nat (call_helper))
+       (print_nat (let helper Nat 3 (call_helper)))))

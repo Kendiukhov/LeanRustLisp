@@ -1,0 +1,15 @@
+;; Class 08 - a partially applied recursor. `r` is the Nat recursor applied to
+;; its motive and base case only; the step case (which consumes the captured
+;; token `k`) is supplied later through `r`, where the recursor rule cannot
+;; see that it runs once per `succ`.
+;; Expected: kernel K0021 [RecursorWithoutMinorPremises].
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def eat (pi t Tok (pi #[once] n Nat Nat))
+  (lam t Tok (lam #[once] n Nat (succ n))))
+
+(def bad (pi k Tok (pi #[once] n Nat Nat))
+  (lam k Tok (lam #[once] n Nat
+    (let r (pi s (pi #[once] m Nat (pi #[once] ih Nat Nat)) (pi n Nat Nat))
+           ((rec Nat) (lam z Nat Nat) zero)
+      (r (lam #[once] m Nat (lam #[once] ih Nat (eat k ih))) n)))))

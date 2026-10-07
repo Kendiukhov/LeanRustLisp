@@ -1,0 +1,17 @@
+;; Class 32 - two base cases of a RECURSIVE type consume the same captured
+;; token. Unlike the branches of a match on a non-recursive type (positive
+;; control P01), the minor premises of a recursive type are not alternatives:
+;; they are all evaluated before the dispatch (docs/spec/mir/index.md,
+;; "Recursor Lowering and Its Limits"), so both base cases would consume `t`.
+;; Expected: kernel K0021 [UseAfterMove] naming `t`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok n) n))))
+
+(inductive Ch (sort 1) (ctor enda Ch) (ctor endb Ch) (ctor step (pi r Ch Ch)))
+
+(def f (pi t Tok (pi #[once] c Ch Nat))
+  (lam t Tok (lam #[once] c Ch
+    (match c Nat
+      (case (enda) (burn t))
+      (case (endb) (add (burn t) 1))
+      (case (step r ih) (succ ih))))))

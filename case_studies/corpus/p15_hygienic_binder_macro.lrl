@@ -1,0 +1,16 @@
+;; Positive control P15 (macro twin) - hygiene in an ownership context. The
+;; template binds its OWN `t` and consumes it; the caller passes ITS `t`,
+;; which the template consumes through `,v`. Because template binders are
+;; hygienic, the two `t`s are different variables and each is consumed once.
+;; (Without hygiene, `(burn t)` would refer to the template's `t` twice and
+;; the kernel would report K0021 UseAfterMove.)
+;; Expected: accepted; main = 5.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok i) i))))
+
+(defmacro with-fresh (v) `(let t Tok (mk_tok 1) (add (burn t) (burn ,v))))
+
+(def with_fresh (pi t Tok Nat)
+  (lam t Tok (with-fresh t)))
+
+(def main Nat (with_fresh (mk_tok 4)))

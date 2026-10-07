@@ -1,0 +1,6 @@
+;; Paper, subsection "The phase barrier" (sec:macros:barrier, paper/jot_r1/sections/macros.tex): the call (lam x Nat (with-zero x)) expands
+;; to the text (lam x Nat (let x Nat zero x)), which, written by hand, returns zero, while the macro
+;; call returns its argument (with_zero_macro.lrl).
+;; Expected: accepted; the dynamic binary prints `Result: Nat(0)`.
+(def f (pi x Nat Nat) (lam x Nat (let x Nat zero x)))
+(def main Nat (f (succ (succ (succ zero)))))

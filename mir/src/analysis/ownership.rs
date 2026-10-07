@@ -227,6 +227,21 @@ impl<'a> OwnershipAnalysis<'a> {
     }
 
     fn check_operand_moves(&self, operand: &Operand, state: &mut OwnershipState) {
+        self.check_operand_moves_in(operand, state, false);
+    }
+
+    /// Marks the locals moved by `operand`. A move of a function value (`Fn`/`FnMut` closure
+    /// or function item) out of a local consumes it when the move is an assignment or an
+    /// argument, as in the kernel (function types are not Copy). Inside the capture list of a
+    /// closure literal (`in_capture`) it does not: lowering moves function values that the
+    /// closure body only READS into the closure environment instead of borrowing them
+    /// (`collect_captures` in lower.rs), which the kernel counts as a read.
+    fn check_operand_moves_in(
+        &self,
+        operand: &Operand,
+        state: &mut OwnershipState,
+        in_capture: bool,
+    ) {
         match operand {
             Operand::Move(place) => {
                 if !place.projection.is_empty() {
@@ -236,11 +251,13 @@ impl<'a> OwnershipAnalysis<'a> {
                     return;
                 }
                 let decl = &self.body.local_decls[place.local.index()];
-                if let MirType::Fn(kind, _, _, _) | MirType::Closure(kind, _, _, _, _) = &decl.ty {
-                    if matches!(kind, FunctionKind::Fn | FunctionKind::FnMut) {
-                        // Function values are duplicable in the source semantics; do not
-                        // treat moves as consuming the local for ownership tracking.
-                        return;
+                if in_capture {
+                    if let MirType::Fn(kind, _, _, _) | MirType::Closure(kind, _, _, _, _) =
+                        &decl.ty
+                    {
+                        if matches!(kind, FunctionKind::Fn | FunctionKind::FnMut) {
+                            return;
+                        }
                     }
                 }
                 if matches!(decl.ty, MirType::FnItem(_, _, _, _, _)) {
@@ -252,7 +269,7 @@ impl<'a> OwnershipAnalysis<'a> {
             Operand::Constant(c) => {
                 if let Some(captures) = c.literal.capture_operands() {
                     for cap in captures {
-                        self.check_operand_moves(cap, state);
+                        self.check_operand_moves_in(cap, state, true);
                     }
                 }
             }
@@ -371,8 +388,13 @@ impl<'a> OwnershipAnalysis<'a> {
         location: Option<MirSpan>,
         errors: &mut Vec<OwnershipError>,
     ) {
-        if let Rvalue::Use(op) = rvalue {
-            self.check_operand_structured(op, state, location, errors);
+        match rvalue {
+            Rvalue::Use(op) => self.check_operand_structured(op, state, location, errors),
+            // Borrowing or inspecting a place reads it: the place must not have been moved
+            // (Rust's E0382 "borrow of moved value"; the kernel's K0021 for `(& x)` after a move).
+            Rvalue::Ref(_, place) | Rvalue::Discriminant(place) => {
+                self.check_place_read(place, state, location, errors);
+            }
         }
     }
 
@@ -413,7 +435,7 @@ impl<'a> OwnershipAnalysis<'a> {
                     true
                 } else {
                     let place_ty = self.place_type(place);
-                    place_ty.is_copy()
+                    self.body.adt_layouts.type_is_copy(&place_ty)
                 };
                 if !is_copy {
                     errors.push(OwnershipError::CopyOfNonCopy {
@@ -1036,12 +1058,161 @@ mod tests {
         );
     }
 
+    fn nat_fn_ty() -> MirType {
+        MirType::Fn(
+            FunctionKind::Fn,
+            Vec::new(),
+            vec![MirType::Nat],
+            Box::new(MirType::Nat),
+        )
+    }
+
+    fn assign(dest: usize, rvalue: Rvalue) -> Statement {
+        Statement::Assign(Place::from(Local(dest as u32)), rvalue)
+    }
+
+    fn ownership_errors(body: &Body) -> Vec<OwnershipError> {
+        let mut analysis = OwnershipAnalysis::new(body);
+        analysis.analyze();
+        analysis.check_structured()
+    }
+
+    /// Borrowing a moved local is a use after move (Rust E0382; stage-matrix probe g1, corpus
+    /// class 25). Before, only `Rvalue::Use` operands were checked.
+    #[test]
+    fn test_borrow_of_moved_local_rejected() {
+        let tok = MirType::Adt(AdtId::new("Tok"), vec![]);
+        let mut body = Body::new(1);
+        body.local_decls.push(LocalDecl::new(MirType::Nat, None));
+        body.local_decls
+            .push(LocalDecl::new(tok.clone(), Some("t".to_string())));
+        body.local_decls.push(LocalDecl::new(tok.clone(), None));
+        body.local_decls.push(LocalDecl::new(
+            MirType::Ref(Region(1), Box::new(tok), Mutability::Not),
+            None,
+        ));
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![
+                assign(2, Rvalue::Use(Operand::Move(Place::from(Local(1))))),
+                assign(3, Rvalue::Ref(BorrowKind::Shared, Place::from(Local(1)))),
+                assign(
+                    0,
+                    Rvalue::Use(Operand::Constant(Box::new(Constant {
+                        literal: Literal::Nat(0),
+                        ty: MirType::Nat,
+                    }))),
+                ),
+            ],
+            terminator: Some(Terminator::Return),
+        });
+        let errors = ownership_errors(&body);
+        assert!(
+            errors.iter().any(
+                |e| matches!(e, OwnershipError::UseAfterMove { local, .. } if *local == Local(1))
+            ),
+            "expected a use after move of _1, got {:?}",
+            errors
+        );
+    }
+
+    /// A function value moved out of a local (assigned or passed as an argument) cannot be
+    /// called afterwards: function types are not Copy (kernel), and MIR now tracks such moves
+    /// (stage-matrix probe g2, corpus class 03). Before, moves of `Fn`/`FnMut` values were
+    /// ignored.
+    #[test]
+    fn test_moved_function_value_cannot_be_called() {
+        let mut body = Body::new(1);
+        body.local_decls.push(LocalDecl::new(MirType::Nat, None));
+        body.local_decls
+            .push(LocalDecl::new(nat_fn_ty(), Some("f".to_string())));
+        body.local_decls
+            .push(LocalDecl::new(nat_fn_ty(), Some("g".to_string())));
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![assign(2, Rvalue::Use(Operand::Move(Place::from(Local(1)))))],
+            terminator: Some(Terminator::Call {
+                func: CallOperand::Borrow(BorrowKind::Shared, Place::from(Local(1))),
+                args: vec![Operand::Constant(Box::new(Constant {
+                    literal: Literal::Nat(0),
+                    ty: MirType::Nat,
+                }))],
+                destination: Place::from(Local(0)),
+                target: Some(BasicBlock(1)),
+            }),
+        });
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Return),
+        });
+        let errors = ownership_errors(&body);
+        assert!(
+            errors.iter().any(
+                |e| matches!(e, OwnershipError::UseAfterMove { local, .. } if *local == Local(1))
+            ),
+            "expected a use after move of f, got {:?}",
+            errors
+        );
+    }
+
+    /// A function value moved into a closure's environment because the closure only calls it
+    /// (lowering's convention for read captures of function values) stays usable.
+    #[test]
+    fn test_function_value_captured_for_reading_stays_usable() {
+        let mut body = Body::new(1);
+        body.local_decls.push(LocalDecl::new(MirType::Nat, None));
+        body.local_decls
+            .push(LocalDecl::new(nat_fn_ty(), Some("f".to_string())));
+        body.local_decls.push(LocalDecl::new(nat_fn_ty(), None));
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![assign(
+                2,
+                Rvalue::Use(Operand::Constant(Box::new(Constant {
+                    literal: Literal::Closure(0, vec![Operand::Move(Place::from(Local(1)))]),
+                    ty: nat_fn_ty(),
+                }))),
+            )],
+            terminator: Some(Terminator::Call {
+                func: CallOperand::Borrow(BorrowKind::Shared, Place::from(Local(1))),
+                args: vec![Operand::Constant(Box::new(Constant {
+                    literal: Literal::Nat(0),
+                    ty: MirType::Nat,
+                }))],
+                destination: Place::from(Local(0)),
+                target: Some(BasicBlock(1)),
+            }),
+        });
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Some(Terminator::Return),
+        });
+        let errors = ownership_errors(&body);
+        assert!(errors.is_empty(), "expected no errors, got {:?}", errors);
+    }
+
     #[test]
     fn test_copy_of_noncopy_param_field_rejected() {
         let mut env = Env::new();
         let sort1 = Term::sort(Level::Succ(Box::new(Level::Zero)));
+        // `Token` must be genuinely non-Copy: the kernel derives Copy for an unmarked
+        // field-free inductive, and MIR follows the kernel's Copy instances.
+        env.set_allow_reserved_primitives(true);
+        for marker in [
+            kernel::ast::TypeMarker::InteriorMutable,
+            kernel::ast::TypeMarker::MayPanicOnBorrowViolation,
+            kernel::ast::TypeMarker::ConcurrencyPrimitive,
+            kernel::ast::TypeMarker::AtomicPrimitive,
+            kernel::ast::TypeMarker::Indexable,
+        ] {
+            env.add_definition(kernel::ast::Definition::axiom_with_tags(
+                kernel::ast::marker_name(marker).to_string(),
+                sort1.clone(),
+                vec![kernel::ast::AxiomTag::Unsafe],
+            ))
+            .expect("marker definition");
+        }
+        env.set_allow_reserved_primitives(false);
+        env.init_marker_registry().expect("marker registry");
 
-        let token_decl = InductiveDecl::new(
+        let mut token_decl = InductiveDecl::new(
             "Token".to_string(),
             sort1.clone(),
             vec![Constructor {
@@ -1049,6 +1220,7 @@ mod tests {
                 ty: Term::ind("Token".to_string()),
             }],
         );
+        token_decl.markers = vec![kernel::ast::marker_def_id(kernel::ast::TypeMarker::Affine)];
         env.add_inductive(token_decl).expect("add Token");
 
         let box_ty = Term::pi(sort1.clone(), sort1.clone(), BinderInfo::Default);

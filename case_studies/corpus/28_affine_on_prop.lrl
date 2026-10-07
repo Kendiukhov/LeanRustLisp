@@ -1,0 +1,5 @@
+;; Class 28 - the `affine` marker on a proposition. Proofs are erased and
+;; always duplicable, so an affine proposition would be silently ignored;
+;; the kernel rejects the declaration instead (T4 finding F4).
+;; Expected: kernel K0052 (AffineCopyConflict).
+(inductive (affine) Perm (sort 0) (ctor grant Perm))

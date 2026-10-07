@@ -1,0 +1,8 @@
+;; Q8 (positive, probe): the client of q08_macro_global_names_lib.lrl defines no `helper` of its
+;; own. With definition-site resolution of template names (Racket, Lean 4) the macro would use
+;; the library's `helper` (= 1) and print 1. In LRL, `import-macros` imports the macros of a
+;; file but not its definitions, and a global name in a template is resolved at the use site, so
+;; we expect the program to be rejected ("Unbound variable: helper").
+(import-macros "q08_macro_global_names_lib.lrl")
+
+(def main Nat (print_nat (call_helper)))

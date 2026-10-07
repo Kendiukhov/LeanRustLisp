@@ -1,0 +1,26 @@
+;; Q11 (negative): the old list is used after `rev` consumed it (if the reverse were done in
+;; place, this would observe the mutated cells). Identical to q11_inplace_reverse.lrl except for
+;; `main` (marked CHANGED). Expected: rejected before running (use after move).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def rev_onto (pi l (List Tok) (pi #[once] acc (List Tok) (List Tok)))
+  (lam l (List Tok)
+    (match l (pi #[once] acc (List Tok) (List Tok))
+      (case (nil) (lam #[once] acc (List Tok) acc))
+      (case (cons h t ih) (lam #[once] acc (List Tok) (ih (cons h acc)))))))
+
+(def rev (pi l (List Tok) (List Tok)) (lam l (List Tok) (rev_onto l nil)))
+
+;; prints the ids in order and returns their number
+(def ids (pi l (List Tok) Nat)
+  (lam l (List Tok)
+    ((match l (pi #[once] c Nat Nat)
+       (case (nil) (lam #[once] c Nat c))
+       (case (cons h t ih)
+         (lam #[once] c Nat (match h Nat (case (mk_tok id) (let p Nat (print_nat id) (ih (succ c))))))))
+     zero)))
+
+(def main Nat
+  (let l (List Tok) (cons (mk_tok 0) (cons (mk_tok 1) (cons (mk_tok 2) (cons (mk_tok 3) nil))))
+    (let r (List Tok) (rev l)
+      (add (ids r) (ids l)))))   ;; CHANGED: was (ids (rev l)); l is used after rev consumed it

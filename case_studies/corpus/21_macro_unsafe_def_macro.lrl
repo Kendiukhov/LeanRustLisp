@@ -1,0 +1,6 @@
+;; Class 21 (macro twin) - the `unsafe` definition is produced by the macro
+;; `defunsafe`; macro output may not introduce `unsafe` definitions.
+;; Expected: macro boundary F0104 (MacroBoundaryDenied).
+(defmacro defunsafe (name ty val) `(unsafe ,name ,ty ,val))
+
+(defunsafe raw_peek (pi n Nat Nat) (lam n Nat n))

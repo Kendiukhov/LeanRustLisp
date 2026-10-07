@@ -1,0 +1,5 @@
+;; Class 28 (macro twin) - `defperm` generates the affine proposition.
+;; Expected: kernel K0052 (AffineCopyConflict).
+(defmacro defperm (name c) `(inductive (affine) ,name (sort 0) (ctor ,c ,name)))
+
+(defperm Perm grant)

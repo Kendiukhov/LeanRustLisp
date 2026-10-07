@@ -1,0 +1,8 @@
+;; Benchmark baseline size_only: computes n = @SIZE@ (as in every workload) and returns it.
+;; It measures process start-up plus the computation of the size itself. In the typed backend
+;; `nat_mul A B` performs A*B unary `add` steps (stdlib/std/core/nat.lrl, stdlib/prelude_api.lrl);
+;; in the dynamic backend `add` is a native addition.
+
+(def size Nat @SIZE@)
+
+(def main Nat size)

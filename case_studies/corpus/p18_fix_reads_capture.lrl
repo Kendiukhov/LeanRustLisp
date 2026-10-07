@@ -1,0 +1,19 @@
+;; Positive control P18 (nearest legal variant of class 09) - the body of a
+;; fixpoint (general recursion in a `partial` definition) CALLS a captured
+;; Fn function on every iteration; reading a capture inside a repeated body
+;; is legal. (`Comp` is value-erased, so the result is shown by printing.)
+;; Expected: accepted; the binary prints 2, 1, 0.
+(def is_zero (pi n Nat Bool)
+  (lam n Nat (match n Bool (case (zero) true) (case (succ m ih) false))))
+(def pred (pi n Nat Nat)
+  (lam n Nat (match n Nat (case (zero) zero) (case (succ m ih) m))))
+
+(partial count_print (pi f (pi x Nat Nat) (pi n Nat (Comp Nat)))
+  (lam f (pi x Nat Nat)
+    (fix go (pi n Nat (Comp Nat))
+      (lam n Nat
+        (match (is_zero n) (Comp Nat)
+          (case (true) (ret Nat))
+          (case (false) (let r Nat (f (pred n)) (go (pred n)))))))))
+
+(partial main (Comp Nat) (count_print (lam x Nat (print_nat x)) 3))

@@ -1,0 +1,17 @@
+;; Q4 (negative): calling safe_div with divisor 0 and the proof `refl`. Identical to
+;; q04_erasure.lrl except for the divisor in `main` (marked CHANGED). (nat_is_zero 0) computes
+;; to true, so (refl Bool false) does not have the required type. Expected: a type error.
+(def safe_div (pi a Nat (pi b Nat (pi p (Eq Bool (nat_is_zero b) false) Nat)))
+  (lam a Nat (lam b Nat (lam p (Eq Bool (nat_is_zero b) false) (nat_div a b)))))
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+(def vsum (pi {n Nat} (pi v (Vec Nat n) Nat))
+  (lam {n} Nat (lam v (Vec Nat n)
+    (match v Nat (case (vnil) zero) (case (vcons h t ih) (add h ih))))))
+
+(def main Nat
+  (add (print_nat (safe_div 10 0 (refl Bool false)))   ;; CHANGED: divisor 2 -> 0
+       (print_nat (vsum (vcons 1 (vcons 2 (vcons 3 vnil)))))))

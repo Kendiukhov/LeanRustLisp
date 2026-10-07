@@ -1,0 +1,5 @@
+;; Macro library for q08_macro_global_names.lrl (not a test case by itself).
+;; The template of `call_helper` refers to a global name `helper`. This file also defines a
+;; `helper` (= 1) next to the macro, as a library author would.
+(def helper Nat 1)
+(defmacro call_helper () helper)

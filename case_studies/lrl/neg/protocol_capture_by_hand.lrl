@@ -1,0 +1,19 @@
+;; Hygiene check for case study B (../protocol.lrl), rejected on purpose.  The declarations up to
+;; the marked line are copied from protocol.lrl (comments and unused definitions omitted).  The
+;; new code is the expansion of `(defsend send Nat log)` as printed by
+;;   lrl --expand-full case_studies/lrl/protocol.lrl
+;; (only re-indented), pasted in as ordinary source text.  Printed text carries no hygiene
+;; scopes, so here the argument `log` (the user's logging function) IS captured by the
+;; template's pattern variable `log : List Nat`, and `(log x)` applies a List Nat to a Nat.
+;; Expected: type error in `send`.  In protocol.lrl, where the macro produces this text, the
+;; two `log`s are different names and `send` is accepted.
+
+(inductive (affine) Chan (pi n Nat (sort 1))
+  (ctor mk_chan (pi {n Nat} (pi log (List Nat) (Chan n)))))
+(def log (pi m Nat Nat) (lam m Nat (print_nat m)))
+
+;; ---- new code ----
+(def send (pi {n Nat} (pi c (Chan (succ n)) (pi #[once] x Nat (Chan n))))
+  (lam {n} Nat (lam c (Chan (succ n)) (lam #[once] x Nat
+    (match c (Chan n)
+      (case (mk_chan log) (mk_chan (cons (log x) log))))))))

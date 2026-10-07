@@ -1,0 +1,12 @@
+;; Class 10 (macro twin) - `burn-it` expands to `(burn t)` inside the lambda
+;; with the implicit binder.
+;; Expected: elaborator F0209 (ImplicitNonCopyUse).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def burn (pi t Tok Nat)
+  (lam t Tok (match t Nat (case (mk_tok i) i))))
+
+(defmacro burn-it (x) `(burn ,x))
+
+(def burn_implicit (pi {t Tok} Nat)
+  (lam {t} Tok (burn-it t)))

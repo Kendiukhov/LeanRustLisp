@@ -221,6 +221,135 @@ fn borrow_error_reports_source_span() {
     );
 }
 
+/// A reference that outlives the local it borrows is reported at a compiler-inserted
+/// `StorageDead` (no source position); the diagnostic falls back to the span of the loan. Here
+/// the loan comes from a macro template, so its span is the macro call site, and the diagnostic
+/// names the macro.
+#[test]
+fn dangling_reference_from_macro_reports_loan_span_and_macro() {
+    let source = r#"(noncomputable id_ref (pi r (Ref #[r] Shared Nat) (Ref #[r] Shared Nat))
+  (lam r (Ref #[r] Shared Nat) r))
+(defmacro leak-ref (v)
+  `(let r (Ref #[r] Shared Nat) (& ,v)
+     (id_ref r)))
+(noncomputable bad_escape (pi x Nat (Ref #[r] Shared Nat))
+  (lam x Nat
+    (leak-ref x)))
+"#;
+
+    let mut env = Env::new();
+    let mut expander = Expander::new();
+    expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
+    let mut diagnostics = DiagnosticCollector::new();
+    let options = PipelineOptions::default();
+    load_borrow_prelude(&mut env, &mut expander, &options);
+    let result = process_code(
+        source,
+        "dangling_macro_span_test",
+        &mut env,
+        &mut expander,
+        &options,
+        &mut diagnostics,
+    );
+
+    assert!(result.is_ok(), "expected source to parse");
+    let diag = first_error_with_code_prefix(&diagnostics, "M203").unwrap_or_else(|| {
+        panic!(
+            "expected an M203 diagnostic:\n{}",
+            diagnostic_summary(&diagnostics)
+        )
+    });
+    let span = diag.span.unwrap_or_else(|| {
+        panic!(
+            "M203 should have a span:\n{}",
+            diagnostic_summary(&diagnostics)
+        )
+    });
+    let (line, col) = line_col_for(source, "(leak-ref x)");
+    assert_eq!(
+        (span.line, span.col),
+        (line, col),
+        "span should be the macro call"
+    );
+    assert!(
+        diag.labels
+            .iter()
+            .any(|(_, label)| label == "in code produced by macro 'leak-ref'"),
+        "expected a macro label, got {:?}",
+        diag.labels
+    );
+}
+
+/// A kernel ownership error in a definition that contains a macro call names the macro call
+/// (the kernel reports the whole definition body); the hand-written equivalent gets no label.
+/// (`Tok` holds a function, so it is not Copy.)
+#[test]
+fn kernel_error_in_macro_produced_code_names_the_macro_call() {
+    let with_macro = r#"(inductive copy N (sort 1) (ctor nz N))
+(inductive Tok (sort 1) (ctor mk_tok (pi f (pi x N N) Tok)))
+(def consume (pi t Tok N) (lam t Tok nz))
+(def both (pi a N (pi b N N)) (lam a N (lam b N a)))
+(defmacro double-use (v) (both (consume v) (consume v)))
+(def client (pi t Tok N)
+  (lam t Tok
+    (double-use t)))
+"#;
+    let by_hand = r#"(inductive copy N (sort 1) (ctor nz N))
+(inductive Tok (sort 1) (ctor mk_tok (pi f (pi x N N) Tok)))
+(def consume (pi t Tok N) (lam t Tok nz))
+(def both (pi a N (pi b N N)) (lam a N (lam b N a)))
+(def client (pi t Tok N)
+  (lam t Tok
+    (both (consume t) (consume t))))
+"#;
+
+    let run = |source: &str| {
+        let mut env = Env::new();
+        let mut expander = Expander::new();
+        expander.set_macro_boundary_policy(MacroBoundaryPolicy::Deny);
+        let mut diagnostics = DiagnosticCollector::new();
+        let options = PipelineOptions::default();
+        let _ = process_code(
+            source,
+            "kernel_macro_label_test",
+            &mut env,
+            &mut expander,
+            &options,
+            &mut diagnostics,
+        );
+        diagnostics
+    };
+
+    let diagnostics = run(with_macro);
+    let diag = first_error_with_code_prefix(&diagnostics, "K0021").unwrap_or_else(|| {
+        panic!(
+            "expected a K0021 diagnostic:\n{}",
+            diagnostic_summary(&diagnostics)
+        )
+    });
+    let (line, col) = line_col_for(with_macro, "(double-use t)");
+    assert!(
+        diag.labels.iter().any(|(span, label)| {
+            label == "macro 'double-use' expanded here" && (span.line, span.col) == (line, col)
+        }),
+        "expected a macro label at the call, got {:?}",
+        diag.labels
+    );
+
+    let diagnostics = run(by_hand);
+    let diag = first_error_with_code_prefix(&diagnostics, "K0021").unwrap_or_else(|| {
+        panic!(
+            "expected a K0021 diagnostic:\n{}",
+            diagnostic_summary(&diagnostics)
+        )
+    });
+    assert!(
+        diag.labels.is_empty(),
+        "hand-written code has no macro labels, got {:?}",
+        diag.labels
+    );
+}
+
 #[test]
 fn ambiguous_constructor_reports_deterministic_candidates_with_span() {
     let source = r#"

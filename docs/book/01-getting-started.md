@@ -13,8 +13,8 @@ If you don't have these, install them via [rustup.rs](https://rustup.rs).
 Clone the repository and build the workspace:
 
 ```bash
-git clone https://github.com/leanrustlisp/leanrustlisp
-cd leanrustlisp
+git clone https://github.com/Kendiukhov/LeanRustLisp
+cd LeanRustLisp
 cargo build
 ```
 

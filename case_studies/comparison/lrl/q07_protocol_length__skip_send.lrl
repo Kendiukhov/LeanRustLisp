@@ -1,0 +1,35 @@
+;; Q7 (negative): send_all forgets to send the head (the vcons case passes the channel on
+;; unchanged). Identical to q07_protocol_length.lrl except for that case (marked CHANGED).
+;; Expected: a type error before running.
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+(inductive (affine) Chan (pi n Nat (sort 1)) (ctor mk_chan (pi {n Nat} (pi log (List Nat) (Chan n)))))
+
+(def open_chan (pi n Nat (Chan n)) (lam n Nat (mk_chan nil)))
+
+(def send (pi {n Nat} (pi x Nat (pi c (Chan (succ n)) (Chan n))))
+  (lam {n} Nat (lam x Nat (lam c (Chan (succ n))
+    (match c (Chan n) (case (mk_chan log) (mk_chan (cons x log))))))))
+
+(def close (pi c (Chan zero) (List Nat))
+  (lam c (Chan zero) (match c (List Nat) (case (mk_chan log) log))))
+
+(def send_all (pi {n Nat} (pi v (Vec Nat n) (pi #[once] c (Chan n) (List Nat))))
+  (lam {n} Nat (lam v (Vec Nat n)
+    (match v (motive (lam k Nat (lam w (Vec Nat k) (pi #[once] c (Chan k) (List Nat)))))
+      (case (vnil) (lam #[once] c (Chan zero) (close c)))
+      (case (vcons h t ih) (lam #[once] c (Chan _) (ih c)))))))   ;; CHANGED: was (ih (send h c))
+
+;; prints the elements of a list (the log, newest first) and returns their number
+(def lprint (pi l (List Nat) Nat)
+  (lam l (List Nat)
+    ((match l (pi c Nat Nat)
+       (case (nil) (lam c Nat c))
+       (case (cons h t ih) (lam c Nat (let p Nat (print_nat h) (ih (succ c))))))
+     zero)))
+
+(def main Nat
+  (add (lprint (send_all (vcons 10 (vcons 20 (vcons 30 vnil))) (open_chan 3)))   ;; log 30 20 10
+       (lprint (close (send 2 (send 1 (open_chan 2)))))))                      ;; log 2 1

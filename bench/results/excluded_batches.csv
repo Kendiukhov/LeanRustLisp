@@ -1,0 +1,2 @@
+batch,reason
+"indexcost:vec_build_sum_closed_index:2000@2026-10-05T18:48:29","incomplete and disturbed: the machine went to sleep at 18:53:12 during the third measured run (pmset -g log: Entering Sleep state due to Clamshell Sleep; full wake 19:39:36); that run measured 129.7 s (the two before it 77.6 and 79.3 s) and that driver invocation wrote no further rows; re-measured in batch indexcost:vec_build_sum_closed_index:2000@2026-10-05T19:43:26"

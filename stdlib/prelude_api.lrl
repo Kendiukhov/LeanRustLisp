@@ -146,7 +146,12 @@
   (ctor mk_atomic (pi {T (sort 1)} (pi x T (Atomic T))))
 )
 
-(inductive Comp (pi A (sort 1) (sort 1))
+;; Comp A lives in (sort 2), not (sort 1): `ret` stores the type A and `bind` stores the
+;; types A and B (neither is a uniform parameter: bind's result is Comp B), and a field of
+;; type (sort 1) has universe level 2, which only fits in an inductive in (sort 2) (the
+;; kernel's universe rule for inductive declarations, docs/spec/core_calculus.md section 4).
+;; Comp is value-erased: partial definitions return it and only its constructors are used.
+(inductive Comp (pi A (sort 1) (sort 2))
   ;; Stage-1 control wrapper constructors (type-directed, first-order).
   (ctor ret (pi A (sort 1) (Comp A)))
   ;; Sequencing constructor for stage-1 control flow in both backends.

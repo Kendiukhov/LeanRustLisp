@@ -1,0 +1,17 @@
+;; Class 32 (macro twin) - `count-ch` expands to the match; both base cases
+;; are given by the caller and both consume `t`.
+;; Expected: kernel K0021 [UseAfterMove] naming `t`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok n) n))))
+
+(inductive Ch (sort 1) (ctor enda Ch) (ctor endb Ch) (ctor step (pi r Ch Ch)))
+
+(defmacro count-ch (scrut on-a on-b)
+  `(match ,scrut Nat
+     (case (enda) ,on-a)
+     (case (endb) ,on-b)
+     (case (step r ih) (succ ih))))
+
+(def f (pi t Tok (pi #[once] c Ch Nat))
+  (lam t Tok (lam #[once] c Ch
+    (count-ch c (burn t) (add (burn t) 1)))))

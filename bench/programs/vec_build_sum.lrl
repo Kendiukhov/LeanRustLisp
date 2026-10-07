@@ -1,0 +1,36 @@
+;; Benchmark workload vec_build_sum: build a Vec Nat of n elements at run time and sum it with the
+;; case study's vsum (no reversal). It is the linear part of vec_rev_sum, measured on its own.
+;; Every element is 1, so the result is n.
+;; @SIZE@ is replaced by the driver (bench/run_bench.py) with `(nat_mul A B)` for small literals
+;; A and B, so that n is computed at run time instead of being written as one large unary literal.
+;;
+;; The workload is a function of n and `main` applies it to `size`: the vector length is then the
+;; variable n inside `workload`. (When a closed size expression appears in a type index, e.g.
+;; `(def main Nat (vsum (vbuild size)))`, the compiler evaluates it in unary while lowering to
+;; MIR; see bench/README.md, "Compile-time evaluation of indices".)
+;;
+;; The forms named on the @copied-from line are copied verbatim from the case study;
+;; `python3 bench/run_bench.py check` verifies that they are still identical to it.
+;; @copied-from case_studies/lrl/vectors.lrl: Vec vsum
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+(def vsum (pi {n Nat} (pi v (Vec Nat n) Nat))
+  (lam {n} Nat (lam v (Vec Nat n)
+    (match v Nat (case (vnil) zero) (case (vcons h t ih) (add h ih))))))
+
+;; ---- workload ----
+(def vbuild (pi n Nat (Vec Nat n))
+  (lam n Nat
+    (match n (motive (lam k Nat (Vec Nat k)))
+      (case (zero) vnil)
+      (case (succ k ih) (vcons 1 ih)))))
+
+(def size Nat @SIZE@)
+
+(def workload (pi n Nat Nat)
+  (lam n Nat (vsum (vbuild n))))
+
+(def main Nat (workload size))

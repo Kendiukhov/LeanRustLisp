@@ -1,0 +1,16 @@
+# Paper examples (see README.md). Tab-separated; lines starting with '#' are comments.
+# outcome: accepted | rejected. code: first diagnostic code of `cli run <file>` (`-` if accepted).
+# fragment: for rejected files, text that must occur in the `run` output; for accepted files, text that must occur in the
+# output of the binary built with `cli compile <file> --backend dynamic`. paper: label of the paper subsection showing it.
+file	outcome	code	fragment	paper
+pair_with.lrl	accepted	-	Result: Nat(1)	sec:core:kinds
+pair_with_inner_pi_unannotated.lrl	rejected	F0206	Function kind mismatch: expected Fn, got FnOnce	sec:core:kinds
+pair_with_inner_pi_fn.lrl	rejected	F0206	Function kind mismatch: expected Fn, got FnOnce	sec:core:kinds
+spend_succ.lrl	rejected	K0021	[ConsumedInRepeatedScope]: non-Copy variable 'k' is consumed inside a minor premise or fixpoint body that may run more than once	sec:own:rec
+spend_zero.lrl	accepted	-	Result: Cons(Tok, Nil)	sec:own:rec
+with_zero_macro.lrl	accepted	-	Result: Nat(3)	sec:macros:hygiene, sec:macros:barrier
+with_zero_by_hand.lrl	accepted	-	Result: Nat(0)	sec:macros:barrier
+widen_fnmut_reborrow.lrl	accepted	-	Result: Nat(2)	sec:own:meta (after lem:widening)
+widen_fnonce_moves.lrl	rejected	K0021	[UseAfterMove]: variable 'r' is used after it was moved	sec:own:meta (after lem:widening)
+read_after_move_through_closure.lrl	rejected	M201	because it is borrowed as Shared	sec:own:trust, sec:own:meta
+minor_reads_scrutinee_moves.lrl	rejected	M201	because it is borrowed as Shared	sec:own:meta

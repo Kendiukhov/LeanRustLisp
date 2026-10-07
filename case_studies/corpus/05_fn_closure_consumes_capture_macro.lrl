@@ -1,0 +1,10 @@
+;; Class 05 (macro twin) - `const-fn` expands to `(lam #[fn] u Nat t)`; the
+;; binder `u` is introduced by the template (hygienic), the body `t` is the
+;; caller's token.
+;; Expected: elaborator F0207 (FunctionKindAnnotationTooSmall).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(defmacro const-fn (v) `(lam #[fn] u Nat ,v))
+
+(def keep_forever (pi t Tok (pi #[fn] u Nat Tok))
+  (lam t Tok (const-fn t)))

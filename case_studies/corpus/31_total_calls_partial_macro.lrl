@@ -1,0 +1,9 @@
+;; Class 31 (macro twin) - `run-spin` expands to `(spin n)`, a call of the
+;; user's partial definition.
+;; Expected: kernel K0022 (EffectError).
+(partial spin (pi n Nat (Comp Nat)) (lam n Nat (ret Nat)))
+
+(defmacro run-spin (x) `(spin ,x))
+
+(def total_spin (pi n Nat (Comp Nat))
+  (lam n Nat (run-spin n)))

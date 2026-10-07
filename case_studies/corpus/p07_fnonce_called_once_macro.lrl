@@ -1,0 +1,15 @@
+;; Positive control P07 (macro twin) - `once-with` builds the FnOnce closure
+;; and applies it once; its binder `x` is hygienic.
+;; Expected: accepted; main = 8.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok i) i))))
+
+(def apply_once (pi f (pi #[once] x Nat Nat) (pi #[once] v Nat Nat))
+  (lam f (pi #[once] x Nat Nat) (lam #[once] v Nat (f v))))
+
+(defmacro once-with (tok arg) `(apply_once (lam #[once] x Nat (add x (burn ,tok))) ,arg))
+
+(def use_tok (pi t Tok Nat)
+  (lam t Tok (once-with t 3)))
+
+(def main Nat (use_tok (mk_tok 5)))

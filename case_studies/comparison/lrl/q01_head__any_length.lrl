@@ -1,0 +1,16 @@
+;; Q1 (negative): a `head` on `Vec A n` for EVERY length n. With the constant motive `A`, the
+;; `vnil` case must produce an `A`, and there is none; returning `unit` (as the total head does)
+;; is a type error. Expected: a type error before running.
+(inductive Unit (sort 1) (ctor unit Unit))
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+(def head_any (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A n) A)))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A n)
+    (match v A
+      (case (vnil) unit)
+      (case (vcons h t ih) h))))))
+
+(def main Nat (print_nat (head_any (vcons 1 (vcons 2 vnil)))))

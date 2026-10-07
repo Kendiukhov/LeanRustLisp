@@ -1,0 +1,17 @@
+;; Class 15 - a reference stored in a constructor outlives the owner's
+;; validity. `b` holds a shared borrow of `t`; `t` is then moved into `burn`
+;; while `b` is still used afterwards (by `lookb`). The loan is carried by the
+;; constructed value `b`.
+;; Expected: MIR M201 (UseWhileBorrowed).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok n) n))))
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+
+(inductive RB (sort 1) (ctor rb (pi r (Ref #[r] Shared Tok) RB)))
+(def lookb (pi b RB Nat) (lam b RB (match b Nat (case (rb r) (look r)))))
+
+(def f (pi t Tok Nat)
+  (lam t Tok
+    (let b RB (rb (& t))
+      (let n Nat (burn t)
+        (add n (lookb b))))))

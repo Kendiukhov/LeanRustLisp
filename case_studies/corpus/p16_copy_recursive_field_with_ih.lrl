@@ -1,0 +1,11 @@
+;; Positive control P16 (nearest legal variant of class 07) - a COPY
+;; recursive field (`List Nat` is Copy) may be used together with its
+;; induction hypothesis.
+;; Expected: accepted; main = 3 (length [2,3] + length [3] + length [] = 2 + 1 + 0).
+(def tails_len (pi #[once] l (List Nat) Nat)
+  (lam #[once] l (List Nat)
+    (match l Nat
+      (case (nil) zero)
+      (case (cons h t ih) (add (length t) ih)))))
+
+(def main Nat (tails_len (cons 1 (cons 2 (cons 3 nil)))))

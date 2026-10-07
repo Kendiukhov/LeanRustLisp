@@ -1,0 +1,25 @@
+;; Q5 (positive): a single-use channel. `Chan` is declared `affine`, so a channel value is never
+;; Copy: `send` takes it by value (consumes it) and returns a receipt holding the channel's log
+;; of sent messages (a `List Nat`). `main` opens a channel, sends 7 on it and prints the log.
+(inductive (affine) Chan (sort 1) (ctor mk_chan (pi log (List Nat) Chan)))
+(inductive Receipt (sort 1) (ctor receipt (pi log (List Nat) Receipt)))
+
+(def open_chan Chan (mk_chan nil))
+
+(def send (pi x Nat (pi c Chan Receipt))
+  (lam x Nat (lam c Chan
+    (match c Receipt (case (mk_chan log) (receipt (cons x log)))))))
+
+(def receipt_log (pi r Receipt (List Nat)) (lam r Receipt (match r (List Nat) (case (receipt log) log))))
+
+;; prints the elements of a list (the log, newest first) and returns their number
+(def lprint (pi l (List Nat) Nat)
+  (lam l (List Nat)
+    ((match l (pi c Nat Nat)
+       (case (nil) (lam c Nat c))
+       (case (cons h t ih) (lam c Nat (let p Nat (print_nat h) (ih (succ c))))))
+     zero)))
+
+(def main Nat
+  (let c Chan open_chan
+    (lprint (receipt_log (send 7 c)))))

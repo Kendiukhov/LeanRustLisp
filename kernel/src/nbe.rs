@@ -1,4 +1,6 @@
-use crate::ast::{level_eq, levels_eq, BinderInfo, FunctionKind, Level, Term, Transparency};
+use crate::ast::{
+    level_eq, levels_eq, BinderInfo, Definition, FunctionKind, Level, Term, Totality, Transparency,
+};
 use crate::checker::Env;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -1051,19 +1053,30 @@ pub enum Neutral {
     Meta(usize),               // Unsolved metavariable (stuck during elaboration)
 }
 
+/// A term with the values of its free variables. The environment is shared (`Rc`): copying a
+/// closure, or a value containing closures, is O(1) instead of a deep copy of every value it
+/// captured, so the cost of a reduction step does not grow with the size of the values around it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Closure {
-    pub env: Vec<Value>,
+    pub env: Rc<Vec<Value>>,
     pub term: Rc<Term>,
 }
 
 const MAX_FUEL_TRACE: usize = 4;
 
+/// One unit of work charged to a fuel budget. Every reduction step is charged (δ, fixpoint
+/// unfolding, ι, β and ζ), and so is every instantiation of a closure with a fresh variable
+/// when a value is read back (quoted) or compared under a binder. Together with the depth
+/// limit ([`MAX_EVAL_DEPTH`]) this makes a fuelled normalisation or conversion check stop with
+/// an error instead of looping or overflowing the stack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FuelEvent {
     UnfoldConst(String),
     UnfoldFix,
     ReduceRecursor(String),
+    Beta,
+    Zeta,
+    OpenBinder,
 }
 
 impl std::fmt::Display for FuelEvent {
@@ -1072,6 +1085,9 @@ impl std::fmt::Display for FuelEvent {
             FuelEvent::UnfoldConst(name) => write!(f, "unfold const {}", name),
             FuelEvent::UnfoldFix => write!(f, "unfold fix"),
             FuelEvent::ReduceRecursor(ind_name) => write!(f, "reduce recursor {}", ind_name),
+            FuelEvent::Beta => write!(f, "beta"),
+            FuelEvent::Zeta => write!(f, "zeta (let)"),
+            FuelEvent::OpenBinder => write!(f, "open binder"),
         }
     }
 }
@@ -1114,9 +1130,21 @@ pub enum NbeError {
     FuelExhausted(FuelExhaustion),
     FixUnfoldDisallowed,
     NonFunctionApplication,
+    /// A fuelled evaluation, read-back or comparison nested deeper than [`MAX_EVAL_DEPTH`].
+    DepthLimitExceeded {
+        limit: usize,
+    },
 }
 
 const DEFAULT_DEF_EQ_FUEL: usize = 100_000;
+
+/// Maximum nesting of evaluation, application, read-back and comparison steps in a fuelled
+/// computation (type checking, conversion). The fuel bounds the total work; this bounds the
+/// recursion depth, which a deep (but fuel-affordable) computation could otherwise push past the
+/// native stack before the fuel runs out. It is sized for the CLI, which runs the compiler on a
+/// 1 GiB stack (`COMPILER_STACK_SIZE` in cli/src/main.rs); a kernel client must likewise run the
+/// checker on a large stack. Unfuelled evaluation ([`eval`], [`quote`]) has no depth limit.
+pub const MAX_EVAL_DEPTH: usize = 20_000;
 #[cfg(any(test, feature = "test-support"))]
 static DEF_EQ_FUEL_OVERRIDE: OnceLock<Mutex<Option<DefEqFuelPolicy>>> = OnceLock::new();
 #[cfg(not(any(test, feature = "test-support")))]
@@ -1228,11 +1256,16 @@ pub fn default_eval_fuel() -> usize {
     default_def_eq_fuel()
 }
 
+/// Evaluation settings shared by ONE evaluation / read-back / comparison: the remaining fuel
+/// (one budget for the whole computation, including every closure re-entered while reading back
+/// or comparing under binders), whether fixpoints may be unfolded, and the current nesting depth.
 #[derive(Debug, Clone)]
 struct EvalConfig {
     fuel: Option<usize>,
     allow_fix_unfold: bool,
     fuel_exhaustion: FuelExhaustion,
+    depth: usize,
+    max_depth: Option<usize>,
 }
 
 impl EvalConfig {
@@ -1241,6 +1274,8 @@ impl EvalConfig {
             fuel: None,
             allow_fix_unfold: true,
             fuel_exhaustion: FuelExhaustion::default(),
+            depth: 0,
+            max_depth: None,
         }
     }
 
@@ -1249,15 +1284,36 @@ impl EvalConfig {
             fuel: Some(fuel),
             allow_fix_unfold: true,
             fuel_exhaustion: FuelExhaustion::default(),
+            depth: 0,
+            max_depth: Some(MAX_EVAL_DEPTH),
         }
     }
 
+    /// Type checking and conversion: fuelled, depth-limited, and fixpoints are never unfolded
+    /// (applying a `fix` reports `FixUnfoldDisallowed`).
     fn with_fuel_for_defeq(fuel: usize) -> Self {
         Self {
             fuel: Some(fuel),
             allow_fix_unfold: false,
             fuel_exhaustion: FuelExhaustion::default(),
+            depth: 0,
+            max_depth: Some(MAX_EVAL_DEPTH),
         }
+    }
+
+    /// Enter one nested evaluation / application / read-back / comparison step.
+    fn enter(&mut self) -> Result<(), NbeError> {
+        if let Some(limit) = self.max_depth {
+            if self.depth >= limit {
+                return Err(NbeError::DepthLimitExceeded { limit });
+            }
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
+    fn leave(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
     }
 
     fn tick(&mut self, event: FuelEvent) -> Result<(), NbeError> {
@@ -1317,6 +1373,21 @@ impl Value {
 /// Evaluation Environment (Values for bound variables)
 pub type EvalEnv = Vec<Value>;
 
+/// The evaluator's own environment: shared, so that capturing it in a closure is O(1).
+type SharedEnv = Rc<Vec<Value>>;
+
+fn empty_env() -> SharedEnv {
+    Rc::new(Vec::new())
+}
+
+/// `env` extended with `v` (de Bruijn index 0).
+fn extend_env(env: &[Value], v: Value) -> SharedEnv {
+    let mut new_env = Vec::with_capacity(env.len() + 1);
+    new_env.extend_from_slice(env);
+    new_env.push(v);
+    Rc::new(new_env)
+}
+
 /// Evaluate a term to a value
 pub fn eval(
     t: &Rc<Term>,
@@ -1325,7 +1396,13 @@ pub fn eval(
     transparency: Transparency,
 ) -> Result<Value, NbeError> {
     let mut config = EvalConfig::unlimited();
-    eval_with_config(t, env, global_env, transparency, &mut config)
+    eval_with_config(
+        t,
+        &Rc::new(env.clone()),
+        global_env,
+        transparency,
+        &mut config,
+    )
 }
 
 pub fn eval_with_fuel(
@@ -1336,12 +1413,31 @@ pub fn eval_with_fuel(
     fuel: usize,
 ) -> Result<Value, NbeError> {
     let mut config = EvalConfig::with_fuel(fuel);
-    eval_with_config(t, env, global_env, transparency, &mut config)
+    eval_with_config(
+        t,
+        &Rc::new(env.clone()),
+        global_env,
+        transparency,
+        &mut config,
+    )
 }
 
 fn eval_with_config(
     t: &Rc<Term>,
-    env: &EvalEnv,
+    env: &SharedEnv,
+    global_env: &Env,
+    transparency: Transparency,
+    config: &mut EvalConfig,
+) -> Result<Value, NbeError> {
+    config.enter()?;
+    let result = eval_with_config_inner(t, env, global_env, transparency, config);
+    config.leave();
+    result
+}
+
+fn eval_with_config_inner(
+    t: &Rc<Term>,
+    env: &SharedEnv,
     global_env: &Env,
     transparency: Transparency,
     config: &mut EvalConfig,
@@ -1367,19 +1463,12 @@ fn eval_with_config(
                 ));
             }
             if let Some(def) = global_env.get_definition(n) {
-                // Check transparency
-                let should_unfold = match transparency {
-                    Transparency::All => true,
-                    Transparency::Reducible => def.transparency != Transparency::None,
-                    Transparency::Instances => def.transparency == Transparency::Instances, // Strict match or >=? Usually >=
-                    Transparency::None => false,
-                };
-
-                if def.is_total() && def.value.is_some() && should_unfold {
+                if const_unfoldable(def, transparency) && guarded_rec_arg(def, global_env).is_none()
+                {
                     config.tick(FuelEvent::UnfoldConst(n.clone()))?;
                     eval_with_config(
                         def.value.as_ref().unwrap(),
-                        &vec![],
+                        &empty_env(),
                         global_env,
                         transparency,
                         config,
@@ -1436,9 +1525,9 @@ fn eval_with_config(
             ))
         }
         Term::LetE(_, val, body) => {
+            config.tick(FuelEvent::Zeta)?;
             let v = eval_with_config(val, env, global_env, transparency, config)?;
-            let mut new_env = env.clone();
-            new_env.push(v);
+            let new_env = extend_env(env, v);
             eval_with_config(body, &new_env, global_env, transparency, config)
         }
         Term::Ind(n, ls) => Ok(Value::Ind(n.clone(), ls.clone(), vec![])),
@@ -1479,10 +1568,24 @@ fn apply_with_config(
     transparency: Transparency,
     config: &mut EvalConfig,
 ) -> Result<Value, NbeError> {
+    config.enter()?;
+    let result = apply_with_config_inner(f, a, label, global_env, transparency, config);
+    config.leave();
+    result
+}
+
+fn apply_with_config_inner(
+    f: Value,
+    a: Value,
+    label: Option<String>,
+    global_env: &Env,
+    transparency: Transparency,
+    config: &mut EvalConfig,
+) -> Result<Value, NbeError> {
     match f {
         Value::Lam(_, _, _, _, closure) => {
-            let mut new_env = closure.env.clone();
-            new_env.push(a);
+            config.tick(FuelEvent::Beta)?;
+            let new_env = extend_env(&closure.env, a);
             eval_with_config(&closure.term, &new_env, global_env, transparency, config)
         }
         Value::Fix(ty, closure) => {
@@ -1491,9 +1594,8 @@ fn apply_with_config(
             }
             // Unfold: body[f := fix]
             config.tick(FuelEvent::UnfoldFix)?;
-            let mut new_env = closure.env.clone();
             let fix_val = Value::Fix(ty, closure.clone());
-            new_env.push(fix_val); // Push the Fix value itself
+            let new_env = extend_env(&closure.env, fix_val); // Push the Fix value itself
             let body_val =
                 eval_with_config(&closure.term, &new_env, global_env, transparency, config)?;
             apply_with_config(body_val, a, None, global_env, transparency, config)
@@ -1506,6 +1608,15 @@ fn apply_with_config(
                 // Try to reduce
                 if let Some(reduced) =
                     try_reduce_rec(ind_name, levels, &spine, global_env, transparency, config)?
+                {
+                    return Ok(reduced);
+                }
+            }
+            // Guarded δ: a recursive definition unfolds once its decreasing argument arrives
+            // and is a constructor application.
+            if let Neutral::Const(name, _) = &*head {
+                if let Some(reduced) =
+                    try_unfold_guarded_const(name, &spine, global_env, transparency, config)?
                 {
                     return Ok(reduced);
                 }
@@ -1523,6 +1634,86 @@ fn apply_with_config(
         }
         _ => Err(NbeError::NonFunctionApplication),
     }
+}
+
+/// Whether δ may unfold `def` under `transparency`: a total definition with a value whose
+/// transparency the mode admits.
+fn const_unfoldable(def: &Definition, transparency: Transparency) -> bool {
+    let should_unfold = match transparency {
+        Transparency::All => true,
+        Transparency::Reducible => def.transparency != Transparency::None,
+        Transparency::Instances => def.transparency == Transparency::Instances, // Strict match or >=? Usually >=
+        Transparency::None => false,
+    };
+    def.is_total() && def.value.is_some() && should_unfold
+}
+
+/// The decreasing argument of a total definition that refers to itself (`rec_arg`, recorded by
+/// the termination check), whose unfolding is guarded.
+///
+/// Guarded δ (as Coq does for `fix`): such a definition is unfolded only when it is applied to
+/// its decreasing argument and that argument is a constructor application; applied to anything
+/// else (a variable, a stuck term) the application stays stuck. Unfolding it eagerly made the
+/// normal form of a stuck call such as `add x zero` infinite: the body's recursor is stuck on
+/// `x`, and reading back its minor premise unfolds `add` again under a fresh binder, forever.
+/// A definition that does not refer to itself (e.g. one written with `match`, i.e. a recursor)
+/// is unfolded eagerly as before, even if the termination check recorded a `rec_arg` for it.
+fn guarded_rec_arg(def: &Definition, global_env: &Env) -> Option<usize> {
+    if def.totality == Totality::Total && global_env.is_self_recursive(&def.name) {
+        def.rec_arg
+    } else {
+        None
+    }
+}
+
+/// Guarded δ for an application `name a0 .. an` (spine = the arguments so far, the last one
+/// just added): unfold when `name` has a guarded decreasing argument at position `k = n` that is
+/// a constructor value; otherwise `None` (stays stuck).
+fn try_unfold_guarded_const(
+    name: &str,
+    spine: &[SpineItem],
+    global_env: &Env,
+    transparency: Transparency,
+    config: &mut EvalConfig,
+) -> Result<Option<Value>, NbeError> {
+    if crate::checker::reserved_effect_totality(name).is_some() {
+        return Ok(None);
+    }
+    let def = match global_env.get_definition(name) {
+        Some(def) => def,
+        None => return Ok(None),
+    };
+    let k = match guarded_rec_arg(def, global_env) {
+        Some(k) => k,
+        None => return Ok(None),
+    };
+    if !const_unfoldable(def, transparency) || spine.len() != k + 1 {
+        return Ok(None);
+    }
+    if !matches!(spine[k].arg, Value::Ctor(_, _, _, _)) {
+        return Ok(None);
+    }
+    config.tick(FuelEvent::UnfoldConst(name.to_string()))?;
+    let mut value = eval_with_config(
+        def.value
+            .as_ref()
+            .expect("const_unfoldable checked the value"),
+        &empty_env(),
+        global_env,
+        transparency,
+        config,
+    )?;
+    for item in spine {
+        value = apply_with_config(
+            value,
+            item.arg.clone(),
+            item.label.clone(),
+            global_env,
+            transparency,
+            config,
+        )?;
+    }
+    Ok(Some(value))
 }
 
 /// Try to partially reduce a Rec application
@@ -1591,6 +1782,7 @@ fn try_reduce_rec(
             for v in ctor_args.iter().take(i) {
                 env_vals.push(v.clone());
             }
+            let env_vals: SharedEnv = Rc::new(env_vals);
             for term in terms {
                 let idx_val = eval_with_config(term, &env_vals, global_env, transparency, config)?;
                 index_vals.push(idx_val);
@@ -1668,6 +1860,97 @@ pub fn quote(
     global_env: &Env,
     transparency: Transparency,
 ) -> Result<Rc<Term>, NbeError> {
+    let mut config = EvalConfig::unlimited();
+    quote_with_config(v, level, global_env, transparency, &mut config)
+}
+
+/// Read back a value with a fuel budget. ONE budget covers the whole read-back, including the
+/// evaluation of every closure body it re-enters under a binder (each such opening is itself
+/// charged), and the nesting depth is limited by [`MAX_EVAL_DEPTH`]. (Before, every binder
+/// restarted the evaluation with a fresh budget, so a read-back could run forever.)
+pub fn quote_with_fuel(
+    v: Value,
+    level: usize,
+    global_env: &Env,
+    transparency: Transparency,
+    fuel: usize,
+) -> Result<Rc<Term>, NbeError> {
+    let mut config = EvalConfig::with_fuel(fuel);
+    quote_with_config(v, level, global_env, transparency, &mut config)
+}
+
+/// Normalise a closed term for display (the CLI prints the value of top-level expressions):
+/// fixpoints may be unfolded and there is no step budget, but the nesting depth is limited by
+/// [`MAX_EVAL_DEPTH`], so a runaway evaluation reports [`NbeError::DepthLimitExceeded`] instead
+/// of overflowing the stack.
+pub fn normalize_for_display(
+    t: &Rc<Term>,
+    global_env: &Env,
+    transparency: Transparency,
+) -> Result<Rc<Term>, NbeError> {
+    let mut config = EvalConfig {
+        fuel: None,
+        allow_fix_unfold: true,
+        fuel_exhaustion: FuelExhaustion::default(),
+        depth: 0,
+        max_depth: Some(MAX_EVAL_DEPTH),
+    };
+    let val = eval_with_config(t, &Rc::new(Vec::new()), global_env, transparency, &mut config)?;
+    quote_with_config(val, 0, global_env, transparency, &mut config)
+}
+
+/// Normalise `t` (evaluate, then read back) the way the type checker does (`whnf`,
+/// `whnf_in_ctx`): ONE fuel budget for the evaluation and the read-back together, the depth limit
+/// [`MAX_EVAL_DEPTH`], and fixpoints are never unfolded (applying a `fix` reports
+/// [`NbeError::FixUnfoldDisallowed`]), exactly as in conversion. `env` holds the values of the
+/// free variables (fresh variables for a typing context); read-back starts at level `env.len()`.
+pub fn normalize_for_typing(
+    t: &Rc<Term>,
+    env: &EvalEnv,
+    global_env: &Env,
+    transparency: Transparency,
+    fuel: usize,
+) -> Result<Rc<Term>, NbeError> {
+    let mut config = EvalConfig::with_fuel_for_defeq(fuel);
+    let shared = Rc::new(env.clone());
+    let val = eval_with_config(t, &shared, global_env, transparency, &mut config)?;
+    quote_with_config(val, env.len(), global_env, transparency, &mut config)
+}
+
+/// Evaluate the body of `closure` with a fresh variable at `level`, to read back or compare
+/// under its binder. Charged as one `OpenBinder` step.
+fn open_closure(
+    closure: &Closure,
+    level: usize,
+    global_env: &Env,
+    transparency: Transparency,
+    config: &mut EvalConfig,
+) -> Result<Value, NbeError> {
+    config.tick(FuelEvent::OpenBinder)?;
+    let new_env = extend_env(&closure.env, Value::var(level));
+    eval_with_config(&closure.term, &new_env, global_env, transparency, config)
+}
+
+fn quote_with_config(
+    v: Value,
+    level: usize,
+    global_env: &Env,
+    transparency: Transparency,
+    config: &mut EvalConfig,
+) -> Result<Rc<Term>, NbeError> {
+    config.enter()?;
+    let result = quote_with_config_inner(v, level, global_env, transparency, config);
+    config.leave();
+    result
+}
+
+fn quote_with_config_inner(
+    v: Value,
+    level: usize,
+    global_env: &Env,
+    transparency: Transparency,
+    config: &mut EvalConfig,
+) -> Result<Rc<Term>, NbeError> {
     match v {
         Value::Neutral(head, spine) => {
             let mut t = match *head {
@@ -1680,115 +1963,28 @@ pub fn quote(
             for item in spine {
                 t = Term::app_with_label(
                     t,
-                    quote(item.arg, level, global_env, transparency)?,
+                    quote_with_config(item.arg, level, global_env, transparency, config)?,
                     item.label,
                 );
             }
             Ok(t)
         }
         Value::Lam(_, info, kind, dom, closure) => {
-            let dom_t = quote(*dom, level, global_env, transparency)?;
-            let var = Value::var(level);
-            let mut new_env = closure.env.clone();
-            new_env.push(var);
-            let body_val = eval(&closure.term, &new_env, global_env, transparency)?;
+            let dom_t = quote_with_config(*dom, level, global_env, transparency, config)?;
+            let body_val = open_closure(&closure, level, global_env, transparency, config)?;
             Ok(Term::lam_with_kind(
                 dom_t,
-                quote(body_val, level + 1, global_env, transparency)?,
+                quote_with_config(body_val, level + 1, global_env, transparency, config)?,
                 info,
                 kind,
             ))
         }
         Value::Pi(_, info, kind, dom, closure) => {
-            let dom_t = quote(*dom, level, global_env, transparency)?;
-            let var = Value::var(level);
-            let mut new_env = closure.env.clone();
-            new_env.push(var);
-            let body_val = eval(&closure.term, &new_env, global_env, transparency)?;
+            let dom_t = quote_with_config(*dom, level, global_env, transparency, config)?;
+            let body_val = open_closure(&closure, level, global_env, transparency, config)?;
             Ok(Term::pi_with_kind(
                 dom_t,
-                quote(body_val, level + 1, global_env, transparency)?,
-                info,
-                kind,
-            ))
-        }
-        Value::Sort(l) => Ok(Rc::new(Term::Sort(l))),
-        Value::Ind(n, ls, args) => {
-            let mut t = Rc::new(Term::Ind(n, ls));
-            for arg in args {
-                t = Term::app(t, quote(arg, level, global_env, transparency)?);
-            }
-            Ok(t)
-        }
-        Value::Ctor(n, idx, ls, args) => {
-            let mut t = Rc::new(Term::Ctor(n, idx, ls));
-            for arg in args {
-                t = Term::app(t, quote(arg, level, global_env, transparency)?);
-            }
-            Ok(t)
-        }
-        Value::Rec(n, ls) => Ok(Rc::new(Term::Rec(n, ls))),
-        Value::Fix(ty, closure) => {
-            let ty_t = quote(*ty, level, global_env, transparency)?;
-            let var = Value::var(level);
-            let mut new_env = closure.env.clone();
-            new_env.push(var);
-            let body_val = eval(&closure.term, &new_env, global_env, transparency)?;
-            Ok(Rc::new(Term::Fix(
-                ty_t,
-                quote(body_val, level + 1, global_env, transparency)?,
-            )))
-        }
-    }
-}
-
-pub fn quote_with_fuel(
-    v: Value,
-    level: usize,
-    global_env: &Env,
-    transparency: Transparency,
-    fuel: usize,
-) -> Result<Rc<Term>, NbeError> {
-    match v {
-        Value::Neutral(head, spine) => {
-            let mut t = match *head {
-                Neutral::Var(l) => Rc::new(Term::Var(level - 1 - l)),
-                Neutral::FreeVar(idx) => Rc::new(Term::Var(idx)),
-                Neutral::Const(n, ls) => Rc::new(Term::Const(n, ls)),
-                Neutral::Rec(n, ls) => Rc::new(Term::Rec(n, ls)),
-                Neutral::Meta(id) => Rc::new(Term::Meta(id)),
-            };
-            for item in spine {
-                t = Term::app_with_label(
-                    t,
-                    quote_with_fuel(item.arg, level, global_env, transparency, fuel)?,
-                    item.label,
-                );
-            }
-            Ok(t)
-        }
-        Value::Lam(_, info, kind, dom, closure) => {
-            let dom_t = quote_with_fuel(*dom, level, global_env, transparency, fuel)?;
-            let var = Value::var(level);
-            let mut new_env = closure.env.clone();
-            new_env.push(var);
-            let body_val = eval_with_fuel(&closure.term, &new_env, global_env, transparency, fuel)?;
-            Ok(Term::lam_with_kind(
-                dom_t,
-                quote_with_fuel(body_val, level + 1, global_env, transparency, fuel)?,
-                info,
-                kind,
-            ))
-        }
-        Value::Pi(_, info, kind, dom, closure) => {
-            let dom_t = quote_with_fuel(*dom, level, global_env, transparency, fuel)?;
-            let var = Value::var(level);
-            let mut new_env = closure.env.clone();
-            new_env.push(var);
-            let body_val = eval_with_fuel(&closure.term, &new_env, global_env, transparency, fuel)?;
-            Ok(Term::pi_with_kind(
-                dom_t,
-                quote_with_fuel(body_val, level + 1, global_env, transparency, fuel)?,
+                quote_with_config(body_val, level + 1, global_env, transparency, config)?,
                 info,
                 kind,
             ))
@@ -1799,7 +1995,7 @@ pub fn quote_with_fuel(
             for arg in args {
                 t = Term::app(
                     t,
-                    quote_with_fuel(arg, level, global_env, transparency, fuel)?,
+                    quote_with_config(arg, level, global_env, transparency, config)?,
                 );
             }
             Ok(t)
@@ -1809,21 +2005,18 @@ pub fn quote_with_fuel(
             for arg in args {
                 t = Term::app(
                     t,
-                    quote_with_fuel(arg, level, global_env, transparency, fuel)?,
+                    quote_with_config(arg, level, global_env, transparency, config)?,
                 );
             }
             Ok(t)
         }
         Value::Rec(n, ls) => Ok(Rc::new(Term::Rec(n, ls))),
         Value::Fix(ty, closure) => {
-            let ty_t = quote_with_fuel(*ty, level, global_env, transparency, fuel)?;
-            let var = Value::var(level);
-            let mut new_env = closure.env.clone();
-            new_env.push(var);
-            let body_val = eval_with_fuel(&closure.term, &new_env, global_env, transparency, fuel)?;
+            let ty_t = quote_with_config(*ty, level, global_env, transparency, config)?;
+            let body_val = open_closure(&closure, level, global_env, transparency, config)?;
             Ok(Rc::new(Term::Fix(
                 ty_t,
-                quote_with_fuel(body_val, level + 1, global_env, transparency, fuel)?,
+                quote_with_config(body_val, level + 1, global_env, transparency, config)?,
             )))
         }
     }
@@ -1871,7 +2064,7 @@ pub fn is_def_eq_in_ctx_result(
 
 fn eval_with_cache(
     t: &Rc<Term>,
-    env: &EvalEnv,
+    env: &SharedEnv,
     global_env: &Env,
     config: &mut DefEqConfig,
 ) -> Result<Value, NbeError> {
@@ -1898,8 +2091,9 @@ fn is_def_eq_with_config(
     config: &mut DefEqConfig,
 ) -> Result<bool, NbeError> {
     let level = env.len();
-    let v1 = eval_with_cache(t1, env, global_env, config)?;
-    let v2 = eval_with_cache(t2, env, global_env, config)?;
+    let shared = Rc::new(env.clone());
+    let v1 = eval_with_cache(t1, &shared, global_env, config)?;
+    let v2 = eval_with_cache(t2, &shared, global_env, config)?;
     check_eq(
         v1,
         v2,
@@ -1918,6 +2112,20 @@ fn check_eq(
     transparency: Transparency,
     config: &mut EvalConfig,
 ) -> Result<bool, NbeError> {
+    config.enter()?;
+    let result = check_eq_inner(v1, v2, level, global_env, transparency, config);
+    config.leave();
+    result
+}
+
+fn check_eq_inner(
+    v1: Value,
+    v2: Value,
+    level: usize,
+    global_env: &Env,
+    transparency: Transparency,
+    config: &mut EvalConfig,
+) -> Result<bool, NbeError> {
     match (v1, v2) {
         (Value::Lam(_, _, kind1, dom1, cls1), Value::Lam(_, _, kind2, dom2, cls2)) => {
             if kind1 != kind2 {
@@ -1927,13 +2135,8 @@ fn check_eq(
                 return Ok(false);
             }
             // Recurse with fresh var
-            let var = Value::var(level);
-            let mut env1 = cls1.env.clone();
-            env1.push(var.clone());
-            let mut env2 = cls2.env.clone();
-            env2.push(var);
-            let body1 = eval_with_config(&cls1.term, &env1, global_env, transparency, config)?;
-            let body2 = eval_with_config(&cls2.term, &env2, global_env, transparency, config)?;
+            let body1 = open_closure(&cls1, level, global_env, transparency, config)?;
+            let body2 = open_closure(&cls2, level, global_env, transparency, config)?;
             check_eq(body1, body2, level + 1, global_env, transparency, config)
         }
         (Value::Lam(_, _, kind, _, cls), other) | (other, Value::Lam(_, _, kind, _, cls)) => {
@@ -1942,9 +2145,7 @@ fn check_eq(
                 return Ok(false);
             }
             let var = Value::var(level);
-            let mut env = cls.env.clone();
-            env.push(var.clone());
-            let body = eval_with_config(&cls.term, &env, global_env, transparency, config)?;
+            let body = open_closure(&cls, level, global_env, transparency, config)?;
             let app = apply_with_config(other, var, None, global_env, transparency, config)?;
             check_eq(body, app, level + 1, global_env, transparency, config)
         }
@@ -1955,13 +2156,8 @@ fn check_eq(
             if !check_eq(*d1, *d2, level, global_env, transparency, config)? {
                 return Ok(false);
             }
-            let var = Value::var(level);
-            let mut env1 = cls1.env.clone();
-            env1.push(var.clone());
-            let mut env2 = cls2.env.clone();
-            env2.push(var);
-            let body1 = eval_with_config(&cls1.term, &env1, global_env, transparency, config)?;
-            let body2 = eval_with_config(&cls2.term, &env2, global_env, transparency, config)?;
+            let body1 = open_closure(&cls1, level, global_env, transparency, config)?;
+            let body2 = open_closure(&cls2, level, global_env, transparency, config)?;
             check_eq(body1, body2, level + 1, global_env, transparency, config)
         }
         (Value::Sort(l1), Value::Sort(l2)) => Ok(level_eq(&l1, &l2)),
@@ -1977,13 +2173,8 @@ fn check_eq(
             if !check_eq(*ty1, *ty2, level, global_env, transparency, config)? {
                 return Ok(false);
             }
-            let var = Value::var(level);
-            let mut env1 = cls1.env.clone();
-            env1.push(var.clone());
-            let mut env2 = cls2.env.clone();
-            env2.push(var);
-            let body1 = eval_with_config(&cls1.term, &env1, global_env, transparency, config)?;
-            let body2 = eval_with_config(&cls2.term, &env2, global_env, transparency, config)?;
+            let body1 = open_closure(&cls1, level, global_env, transparency, config)?;
+            let body2 = open_closure(&cls2, level, global_env, transparency, config)?;
             check_eq(body1, body2, level + 1, global_env, transparency, config)
         }
         (Value::Neutral(h1, s1), Value::Neutral(h2, s2)) => Ok(check_neutral_head(&*h1, &*h2)

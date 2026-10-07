@@ -161,6 +161,7 @@ impl SurfaceTerm {
                 }
                 None
             }
+            SurfaceTermKind::MatchMotive(motive) => motive.find_fix_span(),
             SurfaceTermKind::Eval(code, cap) => {
                 code.find_fix_span().or_else(|| cap.find_fix_span())
             }
@@ -203,7 +204,11 @@ pub enum SurfaceTermKind {
         Box<SurfaceTerm>,
         Vec<(String, Vec<String>, SurfaceTerm)>,
     ), // Scrutinee, RetType, Cases
-    Eval(Box<SurfaceTerm>, Box<SurfaceTerm>),        // (eval <dyn-code> <EvalCap>)
+    /// `(motive M)` in the return position of `match`: an explicit (dependent) motive, a
+    /// function over the scrutinee type's indices and the scrutinee. Only valid as the
+    /// `RetType` of a `Match`; a plain `RetType` is a constant motive.
+    MatchMotive(Box<SurfaceTerm>),
+    Eval(Box<SurfaceTerm>, Box<SurfaceTerm>), // (eval <dyn-code> <EvalCap>)
     Hole,
 }
 

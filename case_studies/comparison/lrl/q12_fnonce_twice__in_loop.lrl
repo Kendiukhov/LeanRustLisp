@@ -1,0 +1,25 @@
+;; Q12 (negative): a loop body that moves a value from outside the loop: the succ case of a
+;; match on Nat (the body of the recursion, run once per iteration) consumes the captured token.
+;; Identical to q12_fnonce_twice.lrl except for the lines marked CHANGED.
+;; Expected: rejected before running.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def burn (pi u Nat (pi t Tok Nat))
+  (lam u Nat (lam t Tok (match t Nat (case (mk_tok id) (add id u))))))
+
+(def apply_once (pi #[once] f (pi #[once] u Nat Nat) Nat)
+  (lam #[once] f (pi #[once] u Nat Nat) (f 2)))
+
+;; CHANGED: the succ case of a recursion (run once per iteration) consumes the token t
+(def loop_burn (pi n Nat (pi t Tok Nat))
+  (lam n Nat (lam t Tok
+    (match n Nat
+      (case (zero) zero)
+      (case (succ k ih) (add ih (burn k t)))))))
+
+(def main Nat
+  (let t Tok (mk_tok 5)
+    (let consume (pi #[once] u Nat Nat) (lam #[once] u Nat (burn u t))
+      (add (print_nat (add (consume 1) (loop_burn 3 (mk_tok 1))))   ;; CHANGED: uses loop_burn
+           (let t2 Tok (mk_tok 5)
+             (print_nat (apply_once (lam #[once] u Nat (burn u t2)))))))))  ;; 7

@@ -1,0 +1,12 @@
+;; Paper, subsection "Where kinds meet dependent elimination" (label sec:own:rec,
+;; paper/jot_r1/sections/ownership.tex): the succ case runs
+;; n times and consumes the captured token k each time.
+;; Expected: K0021 Ownership violation [ConsumedInRepeatedScope]: non-Copy variable 'k' is consumed
+;; inside a minor premise or fixpoint body that may run more than once.
+(inductive (affine) Tok (sort 1) (ctor mk_tok Tok))
+;; rejected: the succ case runs n times and consumes the captured token k each time
+(def spend (pi k Tok (pi #[once] n Nat (List Tok)))
+  (lam k Tok (lam #[once] n Nat
+    (match n (List Tok)
+      (case (zero) nil)
+      (case (succ m ih) (cons k ih))))))

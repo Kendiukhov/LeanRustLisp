@@ -1,0 +1,13 @@
+;; Class 07 - a non-Copy recursive field used although its induction
+;; hypothesis consumed it. The recursor computes `ih` from the tail `rest`
+;; (moving it), so the case body may not use `rest` again.
+;; Expected: kernel K0021 [RecursiveFieldConsumedByIh] naming `rest`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive TL (sort 1) (ctor tnil TL) (ctor tcons (pi h Tok (pi t TL TL))))
+(inductive TQ (sort 1) (ctor qnil TQ) (ctor qcons (pi a TL (pi b TQ TQ))))
+
+(def suffixes (pi l TL TQ)
+  (lam l TL
+    (match l TQ
+      (case (tnil) qnil)
+      (case (tcons h rest ih) (qcons rest ih)))))

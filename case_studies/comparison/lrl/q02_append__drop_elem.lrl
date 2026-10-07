@@ -1,0 +1,28 @@
+;; Q2 (negative): an append whose cons case forgets the element (returns the induction
+;; hypothesis instead of (vcons h ih)). Identical to q02_append.lrl except for that case
+;; (marked CHANGED). Expected: a type error before running.
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+(def vappend (pi {A (sort 1)} (pi {n Nat} (pi {m Nat}
+               (pi xs (Vec A n) (pi #[once] ys (Vec A m) (Vec A (add n m)))))))
+  (lam {A} (sort 1) (lam {n} Nat (lam {m} Nat (lam xs (Vec A n) (lam #[once] ys (Vec A m)
+    (match xs (motive (lam k Nat (lam w (Vec A k) (Vec A (add k m)))))
+      (case (vnil) ys)
+      (case (vcons h t ih) ih))))))))   ;; CHANGED: was (vcons h ih)
+
+;; prints the elements in order (print_nat) and returns their number. The match builds a
+;; function of a counter so that each element is printed before the rest of the vector.
+(def vprint (pi {n Nat} (pi v (Vec Nat n) Nat))
+  (lam {n} Nat (lam v (Vec Nat n)
+    ((match v (pi c Nat Nat)
+       (case (vnil) (lam c Nat c))
+       (case (vcons h t ih) (lam c Nat (let p Nat (print_nat h) (ih (succ c))))))
+     zero))))
+
+(def two (Vec Nat 2) (vcons 1 (vcons 2 vnil)))
+(def three (Vec Nat 3) (vcons 3 (vcons 4 (vcons 5 vnil))))
+(def five (Vec Nat 5) (vappend two three))
+
+(def main Nat (vprint five))

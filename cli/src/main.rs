@@ -119,7 +119,32 @@ enum Commands {
     },
 }
 
+/// Stack size of the thread that runs the compiler. Elaboration, kernel checking and MIR
+/// lowering recurse over terms; unary `Nat` literals (`300` is `succ` applied 300 times) make
+/// deep terms out of small programs, and the default main-thread stack overflowed on a literal
+/// of 300 (the process aborted with "thread 'main' has overflowed its stack"). The memory is
+/// reserved, not committed, so a large value costs nothing for small programs.
+const COMPILER_STACK_SIZE: usize = 1 << 30;
+
 fn main() {
+    let worker = std::thread::Builder::new()
+        .name("lrl".to_string())
+        .stack_size(COMPILER_STACK_SIZE)
+        .spawn(run_cli);
+    match worker {
+        Ok(handle) => {
+            if handle.join().is_err() {
+                // The panic message has already been printed by the panic hook; use the
+                // exit status of a panicking Rust program.
+                std::process::exit(101);
+            }
+        }
+        // Spawning a thread can only fail if the OS refuses the stack; run on this thread.
+        Err(_) => run_cli(),
+    }
+}
+
+fn run_cli() {
     let cli = Cli::parse();
 
     if let Err(err) = cli::configure_defeq_fuel(cli.defeq_fuel) {
@@ -193,9 +218,11 @@ fn main() {
                 backend: *backend,
             };
             let result = match target {
-                Some(value) if value.ends_with(".lrl") || Path::new(value).exists() => {
+                // A file target (not a directory: `run app` inside a workspace names the package
+                // `app`, whose directory also exists).
+                Some(value) if value.ends_with(".lrl") || Path::new(value).is_file() => {
                     if *backend == compiler::BackendMode::Dynamic {
-                        package_manager::run_workspace_file(Path::new(value))
+                        package_manager::run_workspace_file(Path::new(value), run_compile_options)
                     } else {
                         package_manager::run_workspace_file_codegen(
                             Path::new(value),
@@ -247,7 +274,11 @@ fn main() {
                 allow_axioms: cli.allow_axioms,
                 backend: *backend,
             };
-            compiler::compile_file(file, output.clone(), options);
+            // Diagnostics are printed by the compiler; a failed compilation (rejected
+            // program, backend refusal, rustc failure) only needs the exit status.
+            if compiler::compile_file(file, output.clone(), options).is_err() {
+                std::process::exit(1);
+            }
         }
         Some(Commands::CompileTyped { file, output }) => {
             let options = compiler::CompileOptions {
@@ -259,7 +290,9 @@ fn main() {
                 allow_axioms: cli.allow_axioms,
                 backend: compiler::BackendMode::Typed,
             };
-            compiler::compile_file(file, output.clone(), options);
+            if compiler::compile_file(file, output.clone(), options).is_err() {
+                std::process::exit(1);
+            }
         }
         Some(Commands::CompileMir { file, backend }) => {
             let options = compiler::CompileOptions {
@@ -271,7 +304,9 @@ fn main() {
                 allow_axioms: cli.allow_axioms,
                 backend: *backend,
             };
-            compiler::compile_file_to_mir(file, options);
+            if compiler::compile_file_to_mir(file, options).is_err() {
+                std::process::exit(1);
+            }
         }
         None => {
             if let Some(file) = cli.file {
@@ -300,6 +335,9 @@ fn main() {
                 };
                 expander.set_macro_boundary_policy(user_policy);
 
+                // Legacy file mode: same pipeline as `run` (dynamic). Exits with status 1 if
+                // any prelude layer or any top-level form of the file was rejected.
+                let mut failed = false;
                 let mut prelude_modules = Vec::new();
                 let allow_reserved = env.allows_reserved_primitives();
                 env.set_allow_reserved_primitives(true);
@@ -315,7 +353,7 @@ fn main() {
                     if !prelude_modules.is_empty() {
                         expander.set_default_imports(prelude_modules.clone());
                     }
-                    let _ = repl::run_file(
+                    let prelude_report = repl::run_file(
                         prelude_path,
                         &mut env,
                         &mut expander,
@@ -328,6 +366,7 @@ fn main() {
                             allow_redefine: false,
                         },
                     );
+                    failed |= !prelude_report.succeeded();
                     expander.clear_macro_boundary_allowlist();
                     prelude_modules.push(prelude_module);
                 }
@@ -338,7 +377,7 @@ fn main() {
                 expander.set_macro_boundary_policy(user_policy);
 
                 env.set_allow_redefinition(cli.allow_redefine);
-                let _ = repl::run_file(
+                let report = repl::run_file(
                     &file,
                     &mut env,
                     &mut expander,
@@ -351,6 +390,10 @@ fn main() {
                         allow_redefine: cli.allow_redefine,
                     },
                 );
+                failed |= !report.succeeded();
+                if failed {
+                    std::process::exit(1);
+                }
                 return;
             }
             repl::start(

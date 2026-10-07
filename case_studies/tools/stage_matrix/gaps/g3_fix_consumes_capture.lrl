@@ -1,0 +1,12 @@
+;; MIR-independence probe for the stage matrix (case_studies/tools/run_stage_matrix.sh, set `mir_gaps`).
+;; MIR lowers a fixpoint body's captures as `copy _1.k` from an env local typed `()` [copy], so a
+;; non-Copy capture consumed by the body (once per recursive call) is not rejected by MIR (open: MIR
+;; does not re-check closure kinds; see README.md, mechanism (c)).
+;; The kernel rejects `loop_eat` (K0021 ConsumedInRepeatedScope 'k').
+;; (prelude: `(ctor ret (pi A (sort 1) (Comp A)))`, `(ctor bind (pi A .. (pi B .. (pi m (Comp A) (pi n (Comp B) (Comp B))))))`)
+(inductive (affine) Tok (sort 1) (ctor mk_tok Tok))
+(partial eat (pi k Tok (Comp Nat)) (lam k Tok (ret Nat)))
+(partial loop_eat (pi k Tok (pi #[once] n Nat (Comp Nat)))
+  (lam k Tok
+    (fix go (pi #[once] n Nat (Comp Nat))
+      (lam #[once] n Nat (bind Nat Nat (eat k) (go n))))))

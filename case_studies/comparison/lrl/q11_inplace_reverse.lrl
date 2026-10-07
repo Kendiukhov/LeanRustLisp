@@ -1,0 +1,27 @@
+;; Q11 (positive): "in-place" reverse. LRL has no mutation: no operation writes through a
+;; reference and there are no mutable arrays, so a reverse can only build a new list. Here the
+;; list holds affine tokens, so `rev` takes its argument by value and the caller cannot observe
+;; the old list afterwards (as with Rust's `fn(Vec<T>) -> Vec<T>`); the run script inspects the
+;; generated Rust to see whether the cells of the old list are reused. `ids` prints the token ids.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def rev_onto (pi l (List Tok) (pi #[once] acc (List Tok) (List Tok)))
+  (lam l (List Tok)
+    (match l (pi #[once] acc (List Tok) (List Tok))
+      (case (nil) (lam #[once] acc (List Tok) acc))
+      (case (cons h t ih) (lam #[once] acc (List Tok) (ih (cons h acc)))))))
+
+(def rev (pi l (List Tok) (List Tok)) (lam l (List Tok) (rev_onto l nil)))
+
+;; prints the ids in order and returns their number
+(def ids (pi l (List Tok) Nat)
+  (lam l (List Tok)
+    ((match l (pi #[once] c Nat Nat)
+       (case (nil) (lam #[once] c Nat c))
+       (case (cons h t ih)
+         (lam #[once] c Nat (match h Nat (case (mk_tok id) (let p Nat (print_nat id) (ih (succ c))))))))
+     zero)))
+
+(def main Nat
+  (let l (List Tok) (cons (mk_tok 0) (cons (mk_tok 1) (cons (mk_tok 2) (cons (mk_tok 3) nil))))
+    (ids (rev l))))   ;; 3 2 1 0

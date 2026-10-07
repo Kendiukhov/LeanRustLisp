@@ -1,0 +1,8 @@
+;; Class 17 (hand-written version) - an axiom written directly by the user.
+;; This is ACCEPTED: user code may declare axioms. The CLI prints a warning
+;; ("Axiom 'zero_is_one' declared"), and the axiom is tracked: definitions
+;; that depend on it are reported, and `--require-axiom-tags` / `--allow-axioms`
+;; gate their use. The violation class is the macro twin, where the same
+;; axiom is produced by a macro expansion.
+;; Expected: accepted (exit status 0) with an axiom warning.
+(axiom zero_is_one (Eq Nat zero (succ zero)))

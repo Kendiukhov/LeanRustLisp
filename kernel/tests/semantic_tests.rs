@@ -1486,7 +1486,7 @@ fn test_conditional_copy_instance_resolution() {
         "Option Nat should be Copy"
     );
 
-    let list_nat = Term::app(list_ref.clone(), nat_ref);
+    let list_nat = Term::app(list_ref.clone(), nat_ref.clone());
     assert!(
         is_copy_type_in_env(&env, &list_nat),
         "List Nat should be Copy when element type is Copy"
@@ -1498,17 +1498,30 @@ fn test_conditional_copy_instance_resolution() {
         "Option (List Nat) should be Copy when List Nat is Copy"
     );
 
-    let non_copy_elem = Term::pi(type0.clone(), type0.clone(), BinderInfo::Default);
-    let list_non_copy = Term::app(list_ref, non_copy_elem);
+    // A function type is not Copy. (The element type used to be `Type -> Type`; a type
+    // family is erased at run time and therefore Copy, so it no longer exercises this case.)
+    let non_copy_elem = Term::pi(nat_ref.clone(), nat_ref.clone(), BinderInfo::Default);
+    let list_non_copy = Term::app(list_ref.clone(), non_copy_elem);
     assert!(
         !is_copy_type_in_env(&env, &list_non_copy),
-        "List (Type -> Type) should not be Copy"
+        "List (Nat -> Nat) should not be Copy"
     );
 
     let option_list_non_copy = Term::app(option_ref, list_non_copy);
     assert!(
         !is_copy_type_in_env(&env, &option_list_non_copy),
-        "Option (List (Type -> Type)) should not be Copy"
+        "Option (List (Nat -> Nat)) should not be Copy"
+    );
+
+    let type_family = Term::pi(type0.clone(), type0.clone(), BinderInfo::Default);
+    assert!(
+        is_copy_type_in_env(&env, &type_family),
+        "Type -> Type (a type family, erased at run time) should be Copy"
+    );
+    let list_type_family = Term::app(list_ref, type_family);
+    assert!(
+        is_copy_type_in_env(&env, &list_type_family),
+        "List (Type -> Type) should be Copy (its elements are erased)"
     );
 }
 

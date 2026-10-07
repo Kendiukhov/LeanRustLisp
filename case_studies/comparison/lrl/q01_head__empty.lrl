@@ -1,0 +1,18 @@
+;; Q1 (negative): `vhead` applied to the empty vector `vnil`. Identical to q01_head.lrl except
+;; for the argument in `main` (marked CHANGED). Expected: a type error before running.
+(inductive Unit (sort 1) (ctor unit Unit))
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+(def vhead (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A (succ n)) A)))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A (succ n))
+    (match v (motive (lam k Nat (lam w (Vec A k)
+                       (match k (sort 1) (case (zero) Unit) (case (succ k1 ih) A)))))
+      (case (vnil) unit)
+      (case (vcons h t ih) h))))))
+
+(def empty (Vec Nat zero) vnil)
+
+(def main Nat (print_nat (vhead empty)))   ;; CHANGED: was (vhead (vcons 1 (vcons 2 vnil)))

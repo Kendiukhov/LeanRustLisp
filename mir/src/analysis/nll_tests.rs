@@ -1223,4 +1223,148 @@ mod tests {
         assert!(!checker.errors.is_empty(),
             "MirType::Ref (named 'not_a_ref') should still cause borrow error, proving type-based not name-based checking");
     }
+
+    // -------------------------------------------------------------------------
+    // MOVES WHILE BORROWED (p11)
+    // -------------------------------------------------------------------------
+
+    /// `r = &t; u = move t; use(r)` with `t` non-Copy: the move happens while the shared loan
+    /// is live and must be rejected.
+    fn move_while_shared_body(use_ref_after_move: bool) -> Body {
+        let tok = MirType::Adt(AdtId::new("Tok"), vec![]);
+        let mut body = Body::new(0);
+        body.local_decls.push(LocalDecl::new(MirType::Nat, None)); // _0
+        body.local_decls.push(LocalDecl::new(tok.clone(), None)); // _1: t
+        let l_r = add_ref_local(&mut body, tok.clone(), Mutability::Not); // _2: r
+        body.local_decls.push(LocalDecl::new(tok, None)); // _3: u
+        let l_r2 = add_ref_local(
+            &mut body,
+            MirType::Adt(AdtId::new("Tok"), vec![]),
+            Mutability::Not,
+        ); // _4
+        assert!(!body.local_decls[1].is_copy, "Tok must be non-Copy");
+        let mut statements = vec![
+            Statement::Assign(
+                Place::from(l_r),
+                Rvalue::Ref(BorrowKind::Shared, Place::from(Local(1))),
+            ),
+            Statement::Assign(
+                Place::from(Local(3)),
+                Rvalue::Use(Operand::Move(Place::from(Local(1)))),
+            ),
+        ];
+        if use_ref_after_move {
+            statements.push(Statement::Assign(
+                Place::from(l_r2),
+                Rvalue::Use(Operand::Copy(Place::from(l_r))),
+            ));
+        }
+        body.basic_blocks.push(BasicBlockData {
+            statements,
+            terminator: Some(Terminator::Return),
+        });
+        body
+    }
+
+    #[test]
+    fn test_nll_reject_move_while_shared_borrowed() {
+        let body = move_while_shared_body(true);
+        let mut checker = NllChecker::new(&body);
+        checker.check();
+        assert!(
+            checker
+                .errors
+                .iter()
+                .any(|e| matches!(e, crate::errors::BorrowError::UseWhileBorrowed { .. })),
+            "moving a value while a shared borrow of it is live must be rejected, got {:?}",
+            checker.errors
+        );
+    }
+
+    #[test]
+    fn test_nll_accept_move_after_shared_borrow_dead() {
+        let body = move_while_shared_body(false);
+        let mut checker = NllChecker::new(&body);
+        checker.check();
+        assert!(
+            checker.errors.is_empty(),
+            "moving a value after its shared borrow is dead is fine, got {:?}",
+            checker.errors
+        );
+    }
+    /// `t: Tok; r = &t; b = rb(r); u = move t; [use b]` where `rb : fn(&Tok) -> RB` builds a
+    /// value of an inductive type (no layout registered, so it may hold the reference): the call
+    /// result keeps the loan of `t`, so moving `t` while `b` is still used is rejected.
+    fn reference_stored_in_adt_body(use_adt_after_move: bool) -> Body {
+        let tok = MirType::Adt(AdtId::new("Tok"), vec![]);
+        let rb = MirType::Adt(AdtId::new("RB"), vec![]);
+        let mut body = Body::new(0);
+        body.local_decls.push(LocalDecl::new(MirType::Nat, None)); // _0
+        body.local_decls.push(LocalDecl::new(tok.clone(), None)); // _1: t
+        let l_r = add_ref_local(&mut body, tok.clone(), Mutability::Not); // _2: r
+        let ctor_ty = MirType::Fn(
+            FunctionKind::Fn,
+            vec![],
+            vec![MirType::Ref(Region(9), Box::new(tok.clone()), Mutability::Not)],
+            Box::new(rb.clone()),
+        );
+        body.local_decls.push(LocalDecl::new(ctor_ty, None)); // _3: rb
+        body.local_decls.push(LocalDecl::new(rb.clone(), None)); // _4: b
+        body.local_decls.push(LocalDecl::new(tok, None)); // _5: u
+        body.local_decls.push(LocalDecl::new(rb, None)); // _6
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![Statement::Assign(
+                Place::from(l_r),
+                Rvalue::Ref(BorrowKind::Shared, Place::from(Local(1))),
+            )],
+            terminator: Some(Terminator::Call {
+                func: CallOperand::Operand(Operand::Copy(Place::from(Local(3)))),
+                args: vec![Operand::Copy(Place::from(l_r))],
+                destination: Place::from(Local(4)),
+                target: Some(BasicBlock(1)),
+            }),
+        });
+        let mut statements = vec![Statement::Assign(
+            Place::from(Local(5)),
+            Rvalue::Use(Operand::Move(Place::from(Local(1)))),
+        )];
+        if use_adt_after_move {
+            statements.push(Statement::Assign(
+                Place::from(Local(6)),
+                Rvalue::Use(Operand::Move(Place::from(Local(4)))),
+            ));
+        }
+        body.basic_blocks.push(BasicBlockData {
+            statements,
+            terminator: Some(Terminator::Return),
+        });
+        body
+    }
+
+    #[test]
+    fn test_nll_reject_move_while_adt_holds_borrow() {
+        let body = reference_stored_in_adt_body(true);
+        let mut checker = NllChecker::new(&body);
+        checker.check();
+        assert!(
+            checker
+                .errors
+                .iter()
+                .any(|e| matches!(e, crate::errors::BorrowError::UseWhileBorrowed { .. })),
+            "a value built from a reference keeps the loan alive, got {:?}",
+            checker.errors
+        );
+    }
+
+    #[test]
+    fn test_nll_accept_move_after_adt_holding_borrow_is_dead() {
+        let body = reference_stored_in_adt_body(false);
+        let mut checker = NllChecker::new(&body);
+        checker.check();
+        assert!(
+            checker.errors.is_empty(),
+            "the loan ends with the last use of the value holding it, got {:?}",
+            checker.errors
+        );
+    }
 }

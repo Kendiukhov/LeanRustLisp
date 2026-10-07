@@ -1,4 +1,12 @@
 import LRL.Syntax
 import LRL.Reduction
 import LRL.Typing
-import LRL.SanityCheck
+import LRL.Metatheory
+import LRL.Affine.Syntax
+import LRL.Affine.Typing
+import LRL.Affine.Ownership
+import LRL.Affine.Substitution
+import LRL.Affine.Coercion
+import LRL.Affine.Semantics
+import LRL.Affine.Examples
+import LRL.Mechanized

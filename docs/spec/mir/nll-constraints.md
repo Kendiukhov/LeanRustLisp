@@ -72,6 +72,13 @@ derived from per-capture modes during lowering. NLL treats these capture types
 as active borrows for as long as the closure value is live, preserving the same
 aliasing rules as direct borrows.
 
+A call whose destination has a function type (a partial application of a curried
+function, or a function returning a closure) is treated the same way: the destination
+may hold the call's arguments, and whatever the callee captured, so their types are added
+to the destination's capture types. A loan passed as an earlier argument of a curried call
+therefore stays live while the partially applied function is live, and
+`(f (&mut x) (&mut x))` is rejected (`M200`) like two let-bound `&mut x`.
+
 ## Constraint Solving
 
 The solver computes the transitive closure of the `outlives` constraints.
@@ -92,7 +99,10 @@ For every statement at `Location L`:
     - `Use(op)` -> Reads from `op`.
 3.  Check for **Conflicts**:
     - **Mutation** of a place conflicts with *any* active loan of that place (Shared or Mut).
-    - **Reading** a place conflicts with an active *Mutable* loan of that place.
+    - **Moving** a non-Copy, non-function value out of a place (`Operand::Move`) conflicts with
+      *any* active loan of that place (`M201`): the loan would outlive the value.
+    - **Reading** a place (a `Copy` operand, or a `Move` of a Copy value) conflicts with an
+      active *Mutable* loan of that place.
 
 ## Interior Mutability
 

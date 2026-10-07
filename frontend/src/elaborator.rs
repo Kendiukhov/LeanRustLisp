@@ -36,6 +36,7 @@ const CODE_ELAB_UNKNOWN_TYPE_MARKER: &str = "F0219";
 const CODE_ELAB_CONFLICTING_TYPE_MARKERS: &str = "F0220";
 const CODE_ELAB_MISSING_IM_KIND: &str = "F0221";
 const CODE_ELAB_AMBIGUOUS_NAME: &str = "F0222";
+const CODE_ELAB_CASE_BINDS_TOO_MANY: &str = "F0223";
 
 #[derive(Error, Debug)]
 pub enum ElabError {
@@ -79,8 +80,18 @@ pub enum ElabError {
     },
     #[error("Ambiguous lifetime in return type; add explicit Ref #[label] annotations")]
     AmbiguousRefLifetime { span: Span },
-    #[error("Implicit binder of non-Copy type used in {mode} position at de Bruijn index {index}")]
-    ImplicitNonCopyUse { index: usize, mode: &'static str },
+    #[error(
+        "Implicit binder of non-Copy type used in {mode} position: {}",
+        implicit_binder_label(.name, *.index)
+    )]
+    ImplicitNonCopyUse {
+        index: usize,
+        mode: &'static str,
+        /// Source name of the binder and span of its lambda, filled in by the caller that
+        /// elaborated the lambda (`locate_implicit_non_copy_use`).
+        name: Option<String>,
+        span: Option<Span>,
+    },
     #[error("eval is not allowed in type position")]
     EvalInType(Span),
     #[error("Non-exhaustive match on {ind}: missing cases {missing:?}")]
@@ -101,8 +112,24 @@ pub enum ElabError {
         ctor: String,
         span: Span,
     },
+    #[error(
+        "Case {ctor} in match on {ind} binds {bound} variable(s), but the constructor provides \
+         {fields} (its fields and induction hypotheses); '{name}' is not bound. Leading \
+         constructor binders that are uniform parameters of {ind} (inferred from the constructor \
+         result types) are not fields and are not bound by a case"
+    )]
+    CaseBindsTooManyVariables {
+        ind: String,
+        ctor: String,
+        bound: usize,
+        fields: usize,
+        name: String,
+        span: Span,
+    },
     #[error("Unification failed: {0} vs {1}")]
-    UnificationError(String, String),
+    /// The two terms that failed to unify, and the span of the term whose type was checked
+    /// (a zero span when none is available).
+    UnificationError(String, String, Span),
     #[error("Occurs check failed: tried to solve {0} with {1}")]
     OccursCheck(usize, String),
     #[error("Metavariable solution {0} contains free variables")]
@@ -137,7 +164,8 @@ impl ElabError {
             ElabError::NonExhaustiveMatch { .. } => CODE_ELAB_NONEXHAUSTIVE_MATCH,
             ElabError::DuplicateMatchCase { .. } => CODE_ELAB_DUPLICATE_MATCH_CASE,
             ElabError::UnknownMatchCase { .. } => CODE_ELAB_UNKNOWN_MATCH_CASE,
-            ElabError::UnificationError(_, _) => CODE_ELAB_UNIFICATION_ERROR,
+            ElabError::CaseBindsTooManyVariables { .. } => CODE_ELAB_CASE_BINDS_TOO_MANY,
+            ElabError::UnificationError(_, _, _) => CODE_ELAB_UNIFICATION_ERROR,
             ElabError::OccursCheck(_, _) => CODE_ELAB_OCCURS_CHECK,
             ElabError::SolutionContainsFreeVariables(_) => CODE_ELAB_SOLUTION_FREE_VARS,
             ElabError::UnsolvedConstraints(_) => CODE_ELAB_UNSOLVED_CONSTRAINTS,
@@ -164,13 +192,14 @@ impl ElabError {
             | ElabError::NonExhaustiveMatch { span, .. }
             | ElabError::DuplicateMatchCase { span, .. }
             | ElabError::UnknownMatchCase { span, .. }
+            | ElabError::CaseBindsTooManyVariables { span, .. }
             | ElabError::RecursorNeedsMotive(span)
             | ElabError::UnknownTypeMarker(_, span)
             | ElabError::ConflictingTypeMarkers(_, span)
-            | ElabError::MissingInteriorMutabilityKind(_, span) => Some(*span),
-            ElabError::ImplicitNonCopyUse { .. }
-            | ElabError::UnificationError(_, _)
-            | ElabError::OccursCheck(_, _)
+            | ElabError::MissingInteriorMutabilityKind(_, span)
+            | ElabError::UnificationError(_, _, span) => Some(*span),
+            ElabError::ImplicitNonCopyUse { span, .. } => *span,
+            ElabError::OccursCheck(_, _)
             | ElabError::SolutionContainsFreeVariables(_)
             | ElabError::UnsolvedConstraints(_) => None,
         }?;
@@ -224,42 +253,11 @@ fn function_kind_max(lhs: FunctionKind, rhs: FunctionKind) -> FunctionKind {
     }
 }
 
-#[derive(Clone, Copy)]
-struct CaptureContext {
-    mode: UsageMode,
-    depth: usize,
-}
-
-#[derive(Clone, Copy)]
-struct RequiredKindQuery<'a> {
-    captures: &'a [CaptureContext],
-    implicit_noncopy: &'a [bool],
-    outer_param_idx: Option<usize>,
-}
-
-fn bump_captures(captures: &[CaptureContext]) -> Vec<CaptureContext> {
-    captures
-        .iter()
-        .map(|capture| CaptureContext {
-            mode: capture.mode,
-            depth: capture.depth + 1,
-        })
-        .collect()
-}
-
 fn usage_mode_rank(mode: UsageMode) -> u8 {
     match mode {
         UsageMode::Observational => 0,
         UsageMode::MutBorrow => 1,
         UsageMode::Consuming => 2,
-    }
-}
-
-fn usage_mode_min(a: UsageMode, b: UsageMode) -> UsageMode {
-    if usage_mode_rank(a) <= usage_mode_rank(b) {
-        a
-    } else {
-        b
     }
 }
 
@@ -279,12 +277,64 @@ fn usage_mode_for_kind(kind: FunctionKind) -> UsageMode {
     }
 }
 
+/// `name` without the `_g<N>` suffix that the desugarer adds to binders (`m_g4` -> `m`).
+fn strip_gensym_suffix(name: &str) -> &str {
+    match name.rfind("_g") {
+        Some(pos)
+            if pos > 0
+                && name.len() > pos + 2
+                && name[pos + 2..].chars().all(|c| c.is_ascii_digit()) =>
+        {
+            &name[..pos]
+        }
+        _ => name,
+    }
+}
+
+fn implicit_binder_label(name: &Option<String>, index: usize) -> String {
+    match name {
+        Some(name) => format!("variable '{}'", name),
+        None => format!("de Bruijn index {}", index),
+    }
+}
+
+/// Names the lambda binder `name` (at `span`) in an `ImplicitNonCopyUse` error about the
+/// lambda's own binder (index 0) raised while analysing its body.
+fn locate_implicit_non_copy_use(err: ElabError, name: &str, span: Span) -> ElabError {
+    match err {
+        ElabError::ImplicitNonCopyUse {
+            index: 0,
+            mode,
+            name: None,
+            span: None,
+        } => ElabError::ImplicitNonCopyUse {
+            index: 0,
+            mode,
+            name: Some(source_binder_name(name).to_string()),
+            span: Some(span),
+        },
+        other => other,
+    }
+}
+
 fn usage_mode_label(mode: UsageMode) -> &'static str {
     match mode {
         UsageMode::Observational => "observational",
         UsageMode::MutBorrow => "mutable borrow",
         UsageMode::Consuming => "consuming",
     }
+}
+
+/// The source name of a binder: desugaring renames every binder `x` to `x_g<N>` (hygiene),
+/// so one such suffix is removed.
+fn source_binder_name(name: &str) -> &str {
+    if let Some(pos) = name.rfind("_g") {
+        let digits = &name[pos + 2..];
+        if pos > 0 && !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+            return &name[..pos];
+        }
+    }
+    name
 }
 
 fn implicit_noncopy_at(implicit_noncopy: &[bool], idx: usize) -> bool {
@@ -339,6 +389,7 @@ struct MarkerRegistry {
     concurrency: DefId,
     atomic: DefId,
     indexable: DefId,
+    affine: DefId,
 }
 
 impl MarkerRegistry {
@@ -349,6 +400,7 @@ impl MarkerRegistry {
             concurrency: DefId::new(MARKER_CONCURRENCY),
             atomic: DefId::new(MARKER_ATOMIC),
             indexable: DefId::new(MARKER_INDEXABLE),
+            affine: kernel::ast::marker_def_id(TypeMarker::Affine),
         }
     }
 
@@ -359,6 +411,7 @@ impl MarkerRegistry {
             TypeMarker::ConcurrencyPrimitive => self.concurrency,
             TypeMarker::AtomicPrimitive => self.atomic,
             TypeMarker::Indexable => self.indexable,
+            TypeMarker::Affine => self.affine,
         }
     }
 }
@@ -402,9 +455,21 @@ pub struct Elaborator<'a> {
     term_ids: HashMap<usize, TermId>,
     span_map: HashMap<TermId, Span>,
     capture_mode_map: HashMap<usize, CaptureModes>,
+    /// Source names of binder terms (`Lam`/`LetE`/`Fix`), keyed by term address, so kernel
+    /// ownership errors (which carry the binder's address) can name the variable.
+    binder_names: HashMap<usize, String>,
+    /// Every term whose address is a key of `term_ids`, `capture_mode_map` or `binder_names`.
+    /// Keeping them alive guarantees that no other term gets the same address while these maps
+    /// are in use (a freed term's address can be reused by a later allocation, which would then
+    /// inherit the stale span, capture modes or name).
+    pinned_terms: Vec<Rc<Term>>,
     elided_label_counter: usize,
     elided_labels: HashSet<String>,
     label_subst: HashMap<String, String>,
+    /// Set while elaborating the codomain of a `pi` when that codomain is itself a `pi`: the
+    /// inner `pi` continues the same signature, whose lifetime elision rule (`F0208`) was
+    /// already checked once for the whole chain by the outermost `pi`.
+    in_pi_chain_codomain: bool,
     current_module: Option<String>,
     opened_modules: Vec<String>,
     import_aliases: Vec<(String, String)>,
@@ -424,9 +489,12 @@ impl<'a> Elaborator<'a> {
             term_ids: HashMap::new(),
             span_map: HashMap::new(),
             capture_mode_map: HashMap::new(),
+            binder_names: HashMap::new(),
+            pinned_terms: Vec::new(),
             elided_label_counter: 0,
             elided_labels: HashSet::new(),
             label_subst: HashMap::new(),
+            in_pi_chain_codomain: false,
             current_module: None,
             opened_modules: Vec::new(),
             import_aliases: Vec::new(),
@@ -498,6 +566,31 @@ impl<'a> Elaborator<'a> {
     /// Clear it between independent elaboration phases to avoid stale pointer-key collisions.
     pub fn clear_capture_mode_map(&mut self) {
         self.capture_mode_map.clear();
+        self.binder_names.clear();
+    }
+
+    /// Source names of the binder terms elaborated since the last
+    /// [`Elaborator::clear_capture_mode_map`], keyed by term address (see
+    /// `kernel::ownership::OwnershipError::resolve_names`).
+    pub fn binder_name_map(&self) -> &HashMap<usize, String> {
+        &self.binder_names
+    }
+
+    fn record_binder_name(&mut self, term: &Rc<Term>, name: &str) {
+        self.pin_term(term);
+        self.binder_names
+            .insert(Self::term_key(term), source_binder_name(name).to_string());
+    }
+
+    /// Keeps `term` alive while this elaborator (or a span map built from it) is in use, so that
+    /// its address keeps identifying it (see `pinned_terms`).
+    fn pin_term(&mut self, term: &Rc<Term>) {
+        self.pinned_terms.push(term.clone());
+    }
+
+    /// The terms whose addresses key the metadata maps (see `pinned_terms`).
+    pub fn pinned_terms(&self) -> &[Rc<Term>] {
+        &self.pinned_terms
     }
 
     fn extract_lifetime_label(term: &SurfaceTerm) -> Option<String> {
@@ -682,6 +775,9 @@ impl<'a> Elaborator<'a> {
                     Self::collect_ref_label_stats(body, explicit_labels, unlabeled_count);
                 }
             }
+            SurfaceTermKind::MatchMotive(motive) => {
+                Self::collect_ref_label_stats(motive, explicit_labels, unlabeled_count);
+            }
             SurfaceTermKind::Eval(code, cap) => {
                 Self::collect_ref_label_stats(code, explicit_labels, unlabeled_count);
                 Self::collect_ref_label_stats(cap, explicit_labels, unlabeled_count);
@@ -733,6 +829,9 @@ impl<'a> Elaborator<'a> {
                     Self::ensure_return_refs_labeled(body, distinct_arg_labels)?;
                 }
                 Ok(())
+            }
+            SurfaceTermKind::MatchMotive(motive) => {
+                Self::ensure_return_refs_labeled(motive, distinct_arg_labels)
             }
             SurfaceTermKind::Eval(code, cap) => {
                 Self::ensure_return_refs_labeled(code, distinct_arg_labels)?;
@@ -803,6 +902,7 @@ impl<'a> Elaborator<'a> {
         }
         let id = TermId(self.next_term_id);
         self.next_term_id += 1;
+        self.pin_term(term);
         self.term_ids.insert(key, id);
         id
     }
@@ -818,12 +918,14 @@ impl<'a> Elaborator<'a> {
     }
 
     fn record_capture_modes(&mut self, term: &Rc<Term>, modes: CaptureModes) {
+        self.pin_term(term);
         self.capture_mode_map.insert(Self::term_key(term), modes);
     }
 
     fn copy_span_if_any(&mut self, from: &Rc<Term>, to: &Rc<Term>) {
         if let Some(id) = self.term_id_for(from) {
             if self.span_map.contains_key(&id) {
+                self.pin_term(to);
                 self.term_ids.entry(Self::term_key(to)).or_insert(id);
             }
         }
@@ -831,6 +933,7 @@ impl<'a> Elaborator<'a> {
 
     fn copy_capture_modes_if_any(&mut self, from: &Rc<Term>, to: &Rc<Term>) {
         if let Some(modes) = self.capture_mode_map.get(&Self::term_key(from)).cloned() {
+            self.pin_term(to);
             self.capture_mode_map
                 .entry(Self::term_key(to))
                 .or_insert(modes);
@@ -840,6 +943,19 @@ impl<'a> Elaborator<'a> {
     fn copy_metadata_if_any(&mut self, from: &Rc<Term>, to: &Rc<Term>) {
         self.copy_span_if_any(from, to);
         self.copy_capture_modes_if_any(from, to);
+        // Overwrite (or clear) the entry of `to`: its address may have been recorded for a term
+        // that has since been freed.
+        if Self::term_key(from) != Self::term_key(to) {
+            match self.binder_names.get(&Self::term_key(from)).cloned() {
+                Some(name) => {
+                    self.pin_term(to);
+                    self.binder_names.insert(Self::term_key(to), name);
+                }
+                None => {
+                    self.binder_names.remove(&Self::term_key(to));
+                }
+            }
+        }
     }
 
     fn attach_ref_label(&mut self, term: &Rc<Term>, label: String) -> Rc<Term> {
@@ -1002,18 +1118,15 @@ impl<'a> Elaborator<'a> {
             ));
         }
 
-        if let Some(def) = self.env.get_definition(&qualified) {
-            let is_constructor_alias = def
-                .value
-                .as_ref()
-                .is_some_and(|value| matches!(&**value, Term::Ctor(_, _, _)));
-            if !is_constructor_alias {
-                candidates.push((
-                    qualified.clone(),
-                    Rc::new(Term::Const(qualified.clone(), vec![])),
-                    false,
-                ));
-            }
+        // Every definition is a candidate, including one whose body is a bare
+        // constructor (`(def z Nat zero)`): constructors are resolved from inductive
+        // metadata and are never registered as definitions themselves.
+        if self.env.get_definition(&qualified).is_some() {
+            candidates.push((
+                qualified.clone(),
+                Rc::new(Term::Const(qualified.clone(), vec![])),
+                false,
+            ));
         }
 
         for ctor in self.constructor_candidates_in_scope(name, module) {
@@ -1087,18 +1200,12 @@ impl<'a> Elaborator<'a> {
                 false,
             ));
         }
-        if let Some(def) = self.env.get_definition(name) {
-            let is_constructor_alias = def
-                .value
-                .as_ref()
-                .is_some_and(|value| matches!(&**value, Term::Ctor(_, _, _)));
-            if !is_constructor_alias {
-                candidates.push((
-                    name.to_string(),
-                    Rc::new(Term::Const(name.to_string(), vec![])),
-                    false,
-                ));
-            }
+        if self.env.get_definition(name).is_some() {
+            candidates.push((
+                name.to_string(),
+                Rc::new(Term::Const(name.to_string(), vec![])),
+                false,
+            ));
         }
         for ctor in self.env.constructor_candidates(name).iter() {
             if ctor.ind_name.contains('.') {
@@ -1180,6 +1287,11 @@ impl<'a> Elaborator<'a> {
         let mut explicit_atomic = false;
 
         for attr in attrs {
+            if attr == kernel::ast::marker_name(TypeMarker::Affine) {
+                // Built into the kernel (no prelude marker definition): blocks Copy.
+                push_marker_id(&mut markers, registry.id_for(TypeMarker::Affine));
+                continue;
+            }
             let attr_id = marker_def_id(self.env, attr, span)?;
             if attr_id == registry.interior_mutable {
                 explicit_interior_mutable = true;
@@ -1336,12 +1448,46 @@ impl<'a> Elaborator<'a> {
         self.collect_capture_modes_in_term(body, ctx, 1, UsageMode::Consuming, &implicit_noncopy)
     }
 
+    /// Capture modes and required kind of the closure `λx. body` (`ctx` includes `x`).
+    ///
+    /// This is the kernel's analysis (`kernel::checker::term_variable_uses`), so the elaborator
+    /// stamps exactly the kind the kernel re-check requires (erased positions — types, proofs,
+    /// motives, indices, parameters — have no ownership effect; borrows read or mutably use their
+    /// argument; uses inside nested closures are bounded by those closures' kinds). Terms the
+    /// kernel cannot type yet (e.g. with unsolved metavariables) fall back to a conservative
+    /// syntactic analysis.
     fn analyze_closure_captures(
-        &self,
+        &mut self,
         body: &Rc<Term>,
         ctx: &Context,
         outer_param_implicit_noncopy: bool,
     ) -> Result<(FunctionKind, CaptureModes), ElabError> {
+        // Implicit arguments already solved are substituted first, so that the kernel's
+        // analysis applies (with an unsolved metavariable it fails, and the syntactic fallback
+        // treats a capture used only inside a proof such as `refl A (idn x)` as moved).
+        let zonked = self.zonk_if_needed(body, ctx.len());
+        let body = &zonked;
+        if let Ok(uses) = kernel::checker::term_variable_uses(self.env, ctx, body) {
+            if let Ok(capture_modes) =
+                kernel::checker::capture_modes_from_uses(self.env, ctx, &uses)
+            {
+                if outer_param_implicit_noncopy {
+                    if let Some(mode) = uses.get(&0) {
+                        if *mode != UsageMode::Observational {
+                            return Err(ElabError::ImplicitNonCopyUse {
+                                index: 0,
+                                mode: usage_mode_label(*mode),
+                                name: None,
+                                span: None,
+                            });
+                        }
+                    }
+                }
+                let required_kind =
+                    kernel::checker::required_kind_from_capture_modes(&capture_modes);
+                return Ok((required_kind, capture_modes));
+            }
+        }
         let capture_modes =
             self.capture_modes_for_closure_body(body, ctx, outer_param_implicit_noncopy)?;
         let required_kind = required_kind_from_capture_modes(&capture_modes);
@@ -1362,6 +1508,8 @@ impl<'a> Elaborator<'a> {
                     return Err(ElabError::ImplicitNonCopyUse {
                         index: *idx,
                         mode: usage_mode_label(mode),
+                        name: None,
+                        span: None,
                     });
                 }
                 let mut modes = HashMap::new();
@@ -1583,304 +1731,6 @@ impl<'a> Elaborator<'a> {
             | Term::Rec(_, _)
             | Term::Meta(_) => Ok(HashMap::new()),
         }
-    }
-
-    #[allow(dead_code)]
-    fn infer_required_function_kind_in_term(
-        &self,
-        term: &Rc<Term>,
-        ctx: &Context,
-        capture_depth: usize,
-        mode: UsageMode,
-        query: RequiredKindQuery<'_>,
-    ) -> Result<FunctionKind, ElabError> {
-        match &**term {
-            Term::Var(idx) => {
-                let mut capture_mode = None;
-                for capture in query.captures {
-                    if *idx >= capture.depth {
-                        capture_mode = Some(match capture_mode {
-                            Some(existing) => usage_mode_min(existing, capture.mode),
-                            None => capture.mode,
-                        });
-                    }
-                }
-                let effective_mode = capture_mode.unwrap_or(mode);
-                if implicit_noncopy_at(query.implicit_noncopy, *idx)
-                    && effective_mode != UsageMode::Observational
-                {
-                    return Err(ElabError::ImplicitNonCopyUse {
-                        index: *idx,
-                        mode: usage_mode_label(effective_mode),
-                    });
-                }
-                if query.outer_param_idx == Some(*idx) {
-                    return Ok(FunctionKind::Fn);
-                }
-                if *idx >= capture_depth {
-                    match effective_mode {
-                        UsageMode::Observational => {}
-                        UsageMode::MutBorrow => return Ok(FunctionKind::FnMut),
-                        UsageMode::Consuming => {
-                            if let Some(ty) = ctx.get(*idx) {
-                                if self.is_mut_ref_type(ctx, &ty) {
-                                    return Ok(FunctionKind::FnMut);
-                                }
-                                if !self.is_copy_type_in_ctx(ctx, &ty) {
-                                    return Ok(FunctionKind::FnOnce);
-                                }
-                            } else {
-                                return Ok(FunctionKind::FnOnce);
-                            }
-                        }
-                    }
-                }
-                Ok(FunctionKind::Fn)
-            }
-            Term::App(f, a, _) => {
-                if mode != UsageMode::Observational {
-                    let (head, args) = Self::collect_core_app_spine(term);
-                    if let Term::Rec(ind_name, _levels) = &*head {
-                        if let Some(decl) = self.env.get_inductive(ind_name) {
-                            let num_params = decl.num_params;
-                            let num_indices =
-                                Self::count_pi_args(&decl.ty).saturating_sub(num_params);
-                            let num_ctors = decl.ctors.len();
-                            let motive_pos = num_params;
-                            let indices_start = motive_pos + 1 + num_ctors;
-                            let indices_end = indices_start + num_indices;
-                            let mut required_kind = FunctionKind::Fn;
-                            for (idx, arg) in args.iter().enumerate() {
-                                let arg_mode = if idx < num_params
-                                    || idx == motive_pos
-                                    || (idx >= indices_start && idx < indices_end)
-                                {
-                                    UsageMode::Observational
-                                } else {
-                                    UsageMode::Consuming
-                                };
-                                let arg_kind = self.infer_required_function_kind_in_term(
-                                    arg,
-                                    ctx,
-                                    capture_depth,
-                                    arg_mode,
-                                    query,
-                                )?;
-                                required_kind = function_kind_max(required_kind, arg_kind);
-                                if required_kind == FunctionKind::FnOnce {
-                                    return Ok(required_kind);
-                                }
-                            }
-                            return Ok(required_kind);
-                        }
-                    }
-                }
-                if mode == UsageMode::Observational {
-                    let needs_f = self.infer_required_function_kind_in_term(
-                        f,
-                        ctx,
-                        capture_depth,
-                        mode,
-                        query,
-                    )?;
-                    let needs_a = self.infer_required_function_kind_in_term(
-                        a,
-                        ctx,
-                        capture_depth,
-                        mode,
-                        query,
-                    )?;
-                    Ok(function_kind_max(needs_f, needs_a))
-                } else {
-                    let (arg_mode, f_mode) = match self.function_pi_info_from_term(f, ctx) {
-                        Some((arg_ty, info, kind)) => {
-                            let arg_mode = match info {
-                                kernel::ast::BinderInfo::Implicit
-                                | kernel::ast::BinderInfo::StrictImplicit => {
-                                    if self.is_copy_type_in_ctx(ctx, &arg_ty) {
-                                        UsageMode::Observational
-                                    } else {
-                                        UsageMode::Consuming
-                                    }
-                                }
-                                kernel::ast::BinderInfo::Default => UsageMode::Consuming,
-                            };
-                            let f_mode = usage_mode_for_kind(kind);
-                            (arg_mode, f_mode)
-                        }
-                        None => (UsageMode::Consuming, UsageMode::Consuming),
-                    };
-                    let f_eval_mode = match (&**f, f_mode) {
-                        (Term::Var(_), UsageMode::Observational) => UsageMode::Observational,
-                        (Term::Var(_), UsageMode::MutBorrow) => UsageMode::MutBorrow,
-                        _ => UsageMode::Consuming,
-                    };
-                    let needs_f = self.infer_required_function_kind_in_term(
-                        f,
-                        ctx,
-                        capture_depth,
-                        f_eval_mode,
-                        query,
-                    )?;
-                    let needs_a = self.infer_required_function_kind_in_term(
-                        a,
-                        ctx,
-                        capture_depth,
-                        arg_mode,
-                        query,
-                    )?;
-                    Ok(function_kind_max(needs_f, needs_a))
-                }
-            }
-            Term::Lam(ty, body, info, kind) => {
-                let needs_ty = self.infer_required_function_kind_in_term(
-                    ty,
-                    ctx,
-                    capture_depth,
-                    UsageMode::Observational,
-                    query,
-                )?;
-                let new_ctx = ctx.push(ty.clone());
-                let is_implicit_noncopy = matches!(
-                    info,
-                    kernel::ast::BinderInfo::Implicit | kernel::ast::BinderInfo::StrictImplicit
-                ) && !self.is_copy_type_in_ctx(ctx, ty);
-                let mut body_captures = bump_captures(query.captures);
-                body_captures.push(CaptureContext {
-                    mode: usage_mode_for_kind(*kind),
-                    depth: 1,
-                });
-                let mut body_implicit_noncopy = query.implicit_noncopy.to_vec();
-                body_implicit_noncopy.push(is_implicit_noncopy);
-                let body_outer_param_idx = query.outer_param_idx.map(|idx| idx + 1);
-                let body_query = RequiredKindQuery {
-                    captures: &body_captures,
-                    implicit_noncopy: &body_implicit_noncopy,
-                    outer_param_idx: body_outer_param_idx,
-                };
-                let needs_body = self.infer_required_function_kind_in_term(
-                    body,
-                    &new_ctx,
-                    capture_depth + 1,
-                    mode,
-                    body_query,
-                )?;
-                Ok(function_kind_max(needs_ty, needs_body))
-            }
-            Term::Pi(ty, body, info, _) => {
-                let needs_ty = self.infer_required_function_kind_in_term(
-                    ty,
-                    ctx,
-                    capture_depth,
-                    UsageMode::Observational,
-                    query,
-                )?;
-                let new_ctx = ctx.push(ty.clone());
-                let is_implicit_noncopy = matches!(
-                    info,
-                    kernel::ast::BinderInfo::Implicit | kernel::ast::BinderInfo::StrictImplicit
-                ) && !self.is_copy_type_in_ctx(ctx, ty);
-                let body_captures = bump_captures(query.captures);
-                let mut body_implicit_noncopy = query.implicit_noncopy.to_vec();
-                body_implicit_noncopy.push(is_implicit_noncopy);
-                let body_outer_param_idx = query.outer_param_idx.map(|idx| idx + 1);
-                let body_query = RequiredKindQuery {
-                    captures: &body_captures,
-                    implicit_noncopy: &body_implicit_noncopy,
-                    outer_param_idx: body_outer_param_idx,
-                };
-                let needs_body = self.infer_required_function_kind_in_term(
-                    body,
-                    &new_ctx,
-                    capture_depth + 1,
-                    UsageMode::Observational,
-                    body_query,
-                )?;
-                Ok(function_kind_max(needs_ty, needs_body))
-            }
-            Term::LetE(ty, val, body) => {
-                let needs_ty = self.infer_required_function_kind_in_term(
-                    ty,
-                    ctx,
-                    capture_depth,
-                    UsageMode::Observational,
-                    query,
-                )?;
-                let needs_val = self.infer_required_function_kind_in_term(
-                    val,
-                    ctx,
-                    capture_depth,
-                    mode,
-                    query,
-                )?;
-                let new_ctx = ctx.push(ty.clone());
-                let body_captures = bump_captures(query.captures);
-                let mut body_implicit_noncopy = query.implicit_noncopy.to_vec();
-                body_implicit_noncopy.push(false);
-                let body_outer_param_idx = query.outer_param_idx.map(|idx| idx + 1);
-                let body_query = RequiredKindQuery {
-                    captures: &body_captures,
-                    implicit_noncopy: &body_implicit_noncopy,
-                    outer_param_idx: body_outer_param_idx,
-                };
-                let needs_body = self.infer_required_function_kind_in_term(
-                    body,
-                    &new_ctx,
-                    capture_depth + 1,
-                    mode,
-                    body_query,
-                )?;
-                Ok(function_kind_max(
-                    needs_ty,
-                    function_kind_max(needs_val, needs_body),
-                ))
-            }
-            Term::Fix(ty, body) => {
-                let needs_ty = self.infer_required_function_kind_in_term(
-                    ty,
-                    ctx,
-                    capture_depth,
-                    UsageMode::Observational,
-                    query,
-                )?;
-                let new_ctx = ctx.push(ty.clone());
-                let body_captures = bump_captures(query.captures);
-                let mut body_implicit_noncopy = query.implicit_noncopy.to_vec();
-                body_implicit_noncopy.push(false);
-                let body_outer_param_idx = query.outer_param_idx.map(|idx| idx + 1);
-                let body_query = RequiredKindQuery {
-                    captures: &body_captures,
-                    implicit_noncopy: &body_implicit_noncopy,
-                    outer_param_idx: body_outer_param_idx,
-                };
-                let needs_body = self.infer_required_function_kind_in_term(
-                    body,
-                    &new_ctx,
-                    capture_depth + 1,
-                    mode,
-                    body_query,
-                )?;
-                Ok(function_kind_max(needs_ty, needs_body))
-            }
-            Term::Const(_, _)
-            | Term::Sort(_)
-            | Term::Ind(_, _)
-            | Term::Ctor(_, _, _)
-            | Term::Rec(_, _)
-            | Term::Meta(_) => Ok(FunctionKind::Fn),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn infer_required_function_kind(
-        &self,
-        body: &Rc<Term>,
-        ctx: &Context,
-        outer_param_implicit_noncopy: bool,
-    ) -> Result<FunctionKind, ElabError> {
-        let (required_kind, _) =
-            self.analyze_closure_captures(body, ctx, outer_param_implicit_noncopy)?;
-        Ok(required_kind)
     }
 
     fn coerce_fn_to_kind(
@@ -2166,7 +2016,12 @@ impl<'a> Elaborator<'a> {
                 self.infer_app_spine(head, args, span)
             }
             SurfaceTermKind::Pi(name, binder_info, kind_opt, ty, body) => {
-                self.validate_ref_lifetime_elision_for_pi(&ty, &body)?;
+                // The elision rule applies once per complete signature (the maximal chain of
+                // `pi`s), not to each curried suffix: `(pi a (Ref Shared Nat) (pi n Nat (Ref
+                // Shared Nat)))` has exactly one input lifetime.
+                if !std::mem::replace(&mut self.in_pi_chain_codomain, false) {
+                    self.validate_ref_lifetime_elision_for_pi(&ty, &body)?;
+                }
                 // Infer the domain type and check it's a Sort
                 let (ty_elab, ty_ty) = self.infer_type(*ty)?;
                 let ty_ty_whnf = self.whnf(ty_ty)?;
@@ -2179,11 +2034,18 @@ impl<'a> Elaborator<'a> {
                 }
 
                 self.locals.push((name, ty_elab.clone()));
-                let (body_elab, _body_ty) = self.infer_type(*body)?;
+                self.in_pi_chain_codomain = matches!(body.kind, SurfaceTermKind::Pi(..));
+                let body_result = self.infer_type(*body);
+                self.in_pi_chain_codomain = false;
+                let (body_elab, _body_ty) = body_result?;
                 self.locals.pop();
 
                 let pi_kind = kind_opt.unwrap_or(FunctionKind::Fn);
                 let pi_term = Rc::new(Term::Pi(ty_elab, body_elab, binder_info, pi_kind));
+                // Implicit arguments solved while elaborating the domain and the body (e.g.
+                // `{A}` of `idn` in `(pi n Nat (Eq Nat (idn n) n))`) are substituted before the
+                // kernel computes the sort: the kernel does not know metavariables.
+                let pi_term = self.instantiate_metas(&pi_term);
                 let ty_ty = infer_type(self.env, &self.build_context(), pi_term.clone())
                     .map_err(|e| ElabError::InferenceError(e, span))?;
 
@@ -2207,8 +2069,9 @@ impl<'a> Elaborator<'a> {
                     binder_info,
                     kernel::ast::BinderInfo::Implicit | kernel::ast::BinderInfo::StrictImplicit
                 ) && !self.is_copy_type_in_ctx(&ctx, &ty_elab);
-                let (required_kind, capture_modes) =
-                    self.analyze_closure_captures(&body_elab, &ctx, outer_param_implicit_noncopy)?;
+                let (required_kind, capture_modes) = self
+                    .analyze_closure_captures(&body_elab, &ctx, outer_param_implicit_noncopy)
+                    .map_err(|err| locate_implicit_non_copy_use(err, &name, span))?;
                 self.locals.pop();
 
                 if let Some(annotated) = kind_opt {
@@ -2225,6 +2088,7 @@ impl<'a> Elaborator<'a> {
                 let lam_term =
                     Rc::new(Term::Lam(ty_elab.clone(), body_elab, binder_info, lam_kind));
                 self.record_capture_modes(&lam_term, capture_modes);
+                self.record_binder_name(&lam_term, &name);
                 let lam_ty = Rc::new(Term::Pi(ty_elab, body_ty, binder_info, lam_kind));
                 Ok((lam_term, lam_ty))
             }
@@ -2241,11 +2105,12 @@ impl<'a> Elaborator<'a> {
                 }
                 let val_elab = self.check(*val, &ty_elab)?;
 
-                self.locals.push((name, ty_elab.clone()));
+                self.locals.push((name.clone(), ty_elab.clone()));
                 let (body_elab, body_ty) = self.infer(*body)?;
                 self.locals.pop();
 
                 let let_term = Rc::new(Term::LetE(ty_elab, val_elab, body_elab));
+                self.record_binder_name(&let_term, &name);
                 Ok((let_term, body_ty))
             }
             SurfaceTermKind::Hole => {
@@ -2303,6 +2168,12 @@ impl<'a> Elaborator<'a> {
             SurfaceTermKind::Match(scrutinee, ret_type, cases) => {
                 self.elaborate_match(*scrutinee, *ret_type, cases, span)
             }
+            SurfaceTermKind::MatchMotive(_) => Err(ElabError::TypeMismatch {
+                expected: "a term".to_string(),
+                got: "(motive ...), which is only allowed as the return clause of match"
+                    .to_string(),
+                span,
+            }),
             SurfaceTermKind::Eval(code, cap) => {
                 if self.in_type_context {
                     return Err(ElabError::EvalInType(span));
@@ -2333,15 +2204,18 @@ impl<'a> Elaborator<'a> {
                     });
                 }
 
-                // Fix f:T. body. body should have type T under f:T.
-                self.locals.push((name, ty_elab.clone()));
-                let body_elab = self.check(*body, &ty_elab)?;
+                // Fix f:T. body. body should have type T under f:T, i.e. T lifted over the new
+                // binder `f` (T was elaborated outside it; checking against the unlifted T read
+                // its free variables one binder off, as in the kernel's T-Fix).
+                self.locals.push((name.clone(), ty_elab.clone()));
+                let body_elab = self.check(*body, &ty_elab.shift(0, 1))?;
                 let ctx = self.build_context();
                 let (_, capture_modes) = self.analyze_closure_captures(&body_elab, &ctx, false)?;
                 self.locals.pop();
 
                 let fix_term = Rc::new(Term::Fix(ty_elab.clone(), body_elab));
                 self.record_capture_modes(&fix_term, capture_modes);
+                self.record_binder_name(&fix_term, &name);
                 Ok((fix_term, ty_elab))
             }
         };
@@ -2502,11 +2376,9 @@ impl<'a> Elaborator<'a> {
                         kernel::ast::BinderInfo::Implicit | kernel::ast::BinderInfo::StrictImplicit
                     ) && !self
                         .is_copy_type_in_ctx(&ctx, expected_arg_ty);
-                    let (required_kind, capture_modes) = self.analyze_closure_captures(
-                        &body_elab,
-                        &ctx,
-                        outer_param_implicit_noncopy,
-                    )?;
+                    let (required_kind, capture_modes) = self
+                        .analyze_closure_captures(&body_elab, &ctx, outer_param_implicit_noncopy)
+                        .map_err(|err| locate_implicit_non_copy_use(err, &name, span))?;
                     self.locals.pop();
 
                     if let Some(annotated) = kind_opt {
@@ -2535,6 +2407,7 @@ impl<'a> Elaborator<'a> {
                         lam_kind,
                     ));
                     self.record_capture_modes(&lam_term, capture_modes);
+                    self.record_binder_name(&lam_term, &name);
 
                     if lam_kind != *expected_kind && function_kind_leq(lam_kind, *expected_kind) {
                         let coerced = self.coerce_fn_to_kind(
@@ -2638,8 +2511,13 @@ impl<'a> Elaborator<'a> {
         cases: Vec<(String, Vec<String>, SurfaceTerm)>,
         span: Span,
     ) -> Result<(Rc<Term>, Rc<Term>), ElabError> {
-        // Infer the scrutinee type to get the inductive name
+        // Infer the scrutinee type to get the inductive name. Implicit arguments of the
+        // scrutinee solved during its elaboration (`A := Nat` in `(cons 1 nil)`) are
+        // substituted now: the parameters taken from its type end up in the recursor
+        // application and its motive, which the kernel types.
         let (scrut_elab, scrut_ty) = self.infer(scrutinee)?;
+        let scrut_elab = self.instantiate_metas(&scrut_elab);
+        let scrut_ty = self.instantiate_metas(&scrut_ty);
 
         // Extract the inductive name and args from the scrutinee type
         let scrut_ty_whnf = self.whnf(scrut_ty.clone())?;
@@ -2693,16 +2571,34 @@ impl<'a> Elaborator<'a> {
             });
         }
 
-        // Elaborate the return type (motive body) and ensure it is a type
-        let (ret_type_elab, ret_type_ty) = self.infer_type(ret_type)?;
-        let ret_type_ty_whnf = self.whnf(ret_type_ty)?;
-        if !matches!(&*ret_type_ty_whnf, Term::Sort(_)) {
-            return Err(ElabError::TypeMismatch {
-                expected: "Sort".to_string(),
-                got: self.pretty_term(&ret_type_ty_whnf),
-                span,
-            });
-        }
+        // `(motive M)`: an explicit, possibly dependent motive. Otherwise the return type is
+        // a constant motive body (elaborated below, once the index binders are known).
+        let (explicit_motive, ret_type) = match ret_type.kind {
+            SurfaceTermKind::MatchMotive(motive) => (Some(*motive), None),
+            kind => (
+                None,
+                Some(SurfaceTerm {
+                    kind,
+                    span: ret_type.span,
+                }),
+            ),
+        };
+        let ret_type_elab = match ret_type {
+            None => None,
+            Some(ret_type) => {
+                // Elaborate the return type (motive body) and ensure it is a type
+                let (ret_type_elab, ret_type_ty) = self.infer_type(ret_type)?;
+                let ret_type_ty_whnf = self.whnf(ret_type_ty)?;
+                if !matches!(&*ret_type_ty_whnf, Term::Sort(_)) {
+                    return Err(ElabError::TypeMismatch {
+                        expected: "Sort".to_string(),
+                        got: self.pretty_term(&ret_type_ty_whnf),
+                        span,
+                    });
+                }
+                Some(ret_type_elab)
+            }
+        };
 
         // Split params/indices from scrutinee type arguments
         let num_params = decl.num_params;
@@ -2737,30 +2633,38 @@ impl<'a> Elaborator<'a> {
             major_ty = Term::app(major_ty, Rc::new(Term::Var(idx)));
         }
 
-        // Build motive as lambdas over indices then major.
-        // We attach capture/span metadata here because this motive is synthesized
-        // and may still capture surrounding locals in dependent matches.
         let index_count = index_types.len();
-        let mut motive_binders = Vec::with_capacity(index_count + 1);
-        for (idx, ty) in index_types.iter().enumerate() {
-            motive_binders.push((
-                format!("_match_idx{}", idx),
-                ty.clone(),
-                kernel::ast::BinderInfo::Default,
-                FunctionKind::Fn,
-            ));
-        }
-        motive_binders.push((
-            "_match_major".to_string(),
-            major_ty.clone(),
-            kernel::ast::BinderInfo::Default,
-            FunctionKind::Fn,
-        ));
-        let motive = self.wrap_synthesized_lambdas(
-            &motive_binders,
-            ret_type_elab.shift(0, index_count + 1),
-            span,
-        )?;
+        let motive = match (explicit_motive, ret_type_elab) {
+            (Some(motive_surface), _) => {
+                self.elaborate_explicit_motive(motive_surface, &index_types, &major_ty)?
+            }
+            (None, Some(ret_type_elab)) => {
+                // Build motive as lambdas over indices then major.
+                // We attach capture/span metadata here because this motive is synthesized
+                // and may still capture surrounding locals in dependent matches.
+                let mut motive_binders = Vec::with_capacity(index_count + 1);
+                for (idx, ty) in index_types.iter().enumerate() {
+                    motive_binders.push((
+                        format!("_match_idx{}", idx),
+                        ty.clone(),
+                        kernel::ast::BinderInfo::Default,
+                        FunctionKind::Fn,
+                    ));
+                }
+                motive_binders.push((
+                    "_match_major".to_string(),
+                    major_ty.clone(),
+                    kernel::ast::BinderInfo::Default,
+                    FunctionKind::Fn,
+                ));
+                self.wrap_synthesized_lambdas(
+                    &motive_binders,
+                    ret_type_elab.shift(0, index_count + 1),
+                    span,
+                )?
+            }
+            (None, None) => unreachable!("constant match return type is always elaborated"),
+        };
 
         // Determine universe level from motive type
         let motive_ty = infer_type(self.env, &self.build_context(), motive.clone())
@@ -2811,7 +2715,29 @@ impl<'a> Elaborator<'a> {
                     let expected_binders = ctor_arg_count + recursive_args.len();
                     let (binders, result_ty) =
                         self.split_minor_premise(&minor_ty, expected_binders);
-                    self.elaborate_case(bindings, body, &binders, &result_ty, span)?
+                    let fields = binders
+                        .iter()
+                        .filter(|(_, info, _)| *info == kernel::ast::BinderInfo::Default)
+                        .count();
+                    // Surplus case binders are dropped (`elaborate_case`); a body that refers to
+                    // one gets a precise error instead of "Unbound variable" on a renamed binder.
+                    self.elaborate_case(bindings, body, &binders, &result_ty, span)
+                        .map_err(|err| match err {
+                            ElabError::UnboundVariable(name, var_span)
+                                if bindings.len() > fields
+                                    && bindings[fields..].contains(&name) =>
+                            {
+                                ElabError::CaseBindsTooManyVariables {
+                                    ind: ind_name.clone(),
+                                    ctor: ctor.name.clone(),
+                                    bound: bindings.len(),
+                                    fields,
+                                    name: strip_gensym_suffix(&name).to_string(),
+                                    span: var_span,
+                                }
+                            }
+                            other => other,
+                        })?
                 }
                 None => {
                     // Missing case - this is an error in a proper implementation
@@ -2847,6 +2773,56 @@ impl<'a> Elaborator<'a> {
         result_ty = Term::app(result_ty, scrut_elab.clone());
 
         Ok((result, result_ty))
+    }
+
+    /// Elaborate the `M` of `(match e (motive M) ...)`. `M` must be a function over the
+    /// scrutinee type's indices and the scrutinee itself, returning a sort:
+    /// `Π (i_1 : I_1) ... (i_k : I_k) (x : T params i_1 ... i_k). Sort u`, where `index_types`
+    /// are the index binder types (each in the context of the previous ones) and `major_ty` is
+    /// `T params i_1 ... i_k` in the context of all index binders.
+    fn elaborate_explicit_motive(
+        &mut self,
+        motive_surface: SurfaceTerm,
+        index_types: &[Rc<Term>],
+        major_ty: &Rc<Term>,
+    ) -> Result<Rc<Term>, ElabError> {
+        let motive_span = motive_surface.span;
+        let (motive, motive_ty) = self.with_type_context(|elab| elab.infer(motive_surface))?;
+        // Implicit arguments solved inside the motive (`(vreverse (vsnoc w x))`) are substituted
+        // now: the motive is instantiated at every constructor to type the cases, with the kernel.
+        let motive = self.instantiate_metas(&motive);
+        let motive_ty = self.instantiate_metas(&motive_ty);
+        let level = self.extract_result_sort_level(motive_ty.clone(), motive_span)?;
+        let mut expected = Rc::new(Term::Sort(level));
+        expected = Rc::new(Term::Pi(
+            major_ty.clone(),
+            expected,
+            kernel::ast::BinderInfo::Default,
+            FunctionKind::Fn,
+        ));
+        for ty in index_types.iter().rev() {
+            expected = Rc::new(Term::Pi(
+                ty.clone(),
+                expected,
+                kernel::ast::BinderInfo::Default,
+                FunctionKind::Fn,
+            ));
+        }
+        if self
+            .unify_with_span(&motive_ty, &expected, motive_span)
+            .is_err()
+        {
+            return Err(ElabError::TypeMismatch {
+                expected: format!(
+                    "a match motive over {} index argument(s) and the scrutinee, of type {}",
+                    index_types.len(),
+                    self.pretty_term(&expected)
+                ),
+                got: self.pretty_term(&motive_ty),
+                span: motive_span,
+            });
+        }
+        Ok(motive)
     }
 
     /// Extract the inductive type name and arguments from a type
@@ -2888,12 +2864,13 @@ impl<'a> Elaborator<'a> {
 
         let wrapped = (|| -> Result<Rc<Term>, ElabError> {
             let mut result = body;
-            for (_name, ty, info, kind) in binders.iter().rev() {
+            for (name, ty, info, kind) in binders.iter().rev() {
                 let ctx = self.build_context();
                 let (_, capture_modes) = self.analyze_closure_captures(&result, &ctx, false)?;
                 self.locals.pop();
                 let lam = Rc::new(Term::Lam(ty.clone(), result, *info, *kind));
                 self.record_capture_modes(&lam, capture_modes);
+                self.record_binder_name(&lam, name);
                 self.record_span(&lam, span);
                 result = lam;
             }
@@ -3089,6 +3066,7 @@ impl<'a> Elaborator<'a> {
             UnifyResult::Failed(t1_fail, t2_fail) => Err(ElabError::UnificationError(
                 self.pretty_term(&t1_fail),
                 self.pretty_term(&t2_fail),
+                span,
             )),
         }
     }
@@ -3112,10 +3090,13 @@ impl<'a> Elaborator<'a> {
     /// - Stuck: unification blocked on unsolved metavariables
     /// - Failed: terms are definitively incompatible
     fn unify_core(&mut self, t1: &Rc<Term>, t2: &Rc<Term>) -> UnifyResult {
-        // First resolve metas, then check definitional equality
+        // First resolve metas, then check definitional equality. Solved metas are substituted
+        // everywhere in the terms, not only at the head: a constraint such as
+        // `Eq Nat (pred ?n) (pred ?n) =?= Eq Nat m m`, postponed before the arguments solved
+        // `?n := succ m`, holds by computation only once `?n` is replaced inside the terms.
         let ctx_len = self.locals.len();
-        let t1 = self.resolve_metas_in_ctx(t1, ctx_len);
-        let t2 = self.resolve_metas_in_ctx(t2, ctx_len);
+        let t1 = self.zonk_if_needed(t1, ctx_len);
+        let t2 = self.zonk_if_needed(t2, ctx_len);
 
         // Align elided Ref labels with explicit ones before defeq
         self.align_ref_labels(&t1, &t2);
@@ -3154,28 +3135,42 @@ impl<'a> Elaborator<'a> {
                 if l1 != l2 {
                     return UnifyResult::Failed(t1.clone(), t2.clone());
                 }
-                match self.unify_core(f1, f2) {
+                let result = match self.unify_core(f1, f2) {
                     UnifyResult::Success => self.unify_core(a1, a2),
                     UnifyResult::Stuck(_, _) => UnifyResult::Stuck(t1.clone(), t2.clone()),
                     UnifyResult::Failed(_, _) => UnifyResult::Failed(t1.clone(), t2.clone()),
+                };
+                match result {
+                    // Decomposing an application is only conclusive when both heads are rigid.
+                    // `min1 ?k =?= succ zero` (a definition or recursor applied to an unsolved
+                    // metavariable) may hold once `?k` is known, so it is postponed instead.
+                    UnifyResult::Failed(_, _) if Self::may_hold_after_solving(&t1, &t2) => {
+                        UnifyResult::Stuck(t1.clone(), t2.clone())
+                    }
+                    other => other,
                 }
             }
-            (Term::Pi(ty1, b1, _, k1), Term::Pi(ty2, b2, _, k2)) => {
+            (Term::Pi(ty1, b1, _, k1), Term::Pi(ty2, b2, _, k2))
+            | (Term::Lam(ty1, b1, _, k1), Term::Lam(ty2, b2, _, k2)) => {
                 if k1 != k2 {
                     return UnifyResult::Failed(t1.clone(), t2.clone());
                 }
                 match self.unify_core(ty1, ty2) {
-                    UnifyResult::Success => self.unify_core(b1, b2),
-                    UnifyResult::Stuck(_, _) => UnifyResult::Stuck(t1.clone(), t2.clone()),
-                    UnifyResult::Failed(_, _) => UnifyResult::Failed(t1.clone(), t2.clone()),
-                }
-            }
-            (Term::Lam(ty1, b1, _, k1), Term::Lam(ty2, b2, _, k2)) => {
-                if k1 != k2 {
-                    return UnifyResult::Failed(t1.clone(), t2.clone());
-                }
-                match self.unify_core(ty1, ty2) {
-                    UnifyResult::Success => self.unify_core(b1, b2),
+                    UnifyResult::Success => {
+                        // The bodies are compared under the binder: it is pushed on the local
+                        // context, so that metavariable solutions found there and the
+                        // definitional-equality checks use the right de Bruijn indices.
+                        self.locals.push(("_".to_string(), ty1.clone()));
+                        let body_result = self.unify_core(b1, b2);
+                        self.locals.pop();
+                        match body_result {
+                            UnifyResult::Success => UnifyResult::Success,
+                            UnifyResult::Stuck(_, _) => UnifyResult::Stuck(t1.clone(), t2.clone()),
+                            UnifyResult::Failed(_, _) => {
+                                UnifyResult::Failed(t1.clone(), t2.clone())
+                            }
+                        }
+                    }
                     UnifyResult::Stuck(_, _) => UnifyResult::Stuck(t1.clone(), t2.clone()),
                     UnifyResult::Failed(_, _) => UnifyResult::Failed(t1.clone(), t2.clone()),
                 }
@@ -3183,7 +3178,11 @@ impl<'a> Elaborator<'a> {
 
             // Check if either side contains unsolved metas - if so, it's stuck
             _ => {
-                if Self::contains_any_meta(&t1) || Self::contains_any_meta(&t2) {
+                if Self::rigid_heads_clash(&t1, &t2) {
+                    // Different constructors (or inductive types) never become equal, whatever
+                    // the metavariables below them are solved to: `zero =?= succ ?n` fails now.
+                    UnifyResult::Failed(t1.clone(), t2.clone())
+                } else if Self::contains_any_meta(&t1) || Self::contains_any_meta(&t2) {
                     UnifyResult::Stuck(t1.clone(), t2.clone())
                 } else {
                     // No metas, types are just incompatible
@@ -3289,6 +3288,7 @@ impl<'a> Elaborator<'a> {
             UnifyResult::Failed(t1_fail, t2_fail) => Err(ElabError::UnificationError(
                 self.pretty_term(&t1_fail),
                 self.pretty_term(&t2_fail),
+                span,
             )),
         }
     }
@@ -3412,18 +3412,55 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    fn resolve_metas_in_ctx(&self, term: &Rc<Term>, ctx_len: usize) -> Rc<Term> {
-        match &**term {
-            Term::Meta(id) => {
-                if let Some(solution) = self.meta_solutions.get(id) {
-                    let meta_ctx_len = self.meta_contexts.get(id).map(|c| c.len()).unwrap_or(0);
-                    self.adapt_term_to_ctx(solution.clone(), meta_ctx_len, ctx_len)
-                        .unwrap_or_else(|_| term.clone())
-                } else {
-                    term.clone()
-                }
+    /// Whether the heads of `t1` and `t2` are different constructors or inductive types (rigid
+    /// heads that no metavariable solution can make equal).
+    fn rigid_heads_clash(t1: &Rc<Term>, t2: &Rc<Term>) -> bool {
+        fn head(term: &Rc<Term>) -> &Rc<Term> {
+            let mut head = term;
+            while let Term::App(f, _, _) = &**head {
+                head = f;
             }
-            _ => term.clone(),
+            head
+        }
+        match (&**head(t1), &**head(t2)) {
+            (Term::Ctor(i1, c1, _), Term::Ctor(i2, c2, _)) => i1 != i2 || c1 != c2,
+            (Term::Ind(i1, _), Term::Ind(i2, _)) => i1 != i2,
+            (Term::Ctor(_, _, _), Term::Ind(_, _)) | (Term::Ind(_, _), Term::Ctor(_, _, _)) => true,
+            _ => false,
+        }
+    }
+
+    /// Whether a failed structural comparison of `t1` and `t2` may still succeed once more
+    /// metavariables are solved: some side contains a metavariable and some side's head can
+    /// compute (a definition, a recursor, a fixpoint, a λ, a `let`, a metavariable), so the
+    /// comparison was not between rigid terms.
+    fn may_hold_after_solving(t1: &Rc<Term>, t2: &Rc<Term>) -> bool {
+        fn head_can_compute(term: &Rc<Term>) -> bool {
+            let mut head = term;
+            while let Term::App(f, _, _) = &**head {
+                head = f;
+            }
+            matches!(
+                &**head,
+                Term::Const(_, _)
+                    | Term::Rec(_, _)
+                    | Term::Fix(_, _)
+                    | Term::Lam(_, _, _, _)
+                    | Term::LetE(_, _, _)
+                    | Term::Meta(_)
+            )
+        }
+        (Self::contains_any_meta(t1) || Self::contains_any_meta(t2))
+            && (head_can_compute(t1) || head_can_compute(t2))
+    }
+
+    /// `term` with every solved metavariable substituted (`zonk_with_ctx`), or `term` itself
+    /// if it contains no metavariable.
+    fn zonk_if_needed(&mut self, term: &Rc<Term>, ctx_len: usize) -> Rc<Term> {
+        if Self::contains_any_meta(term) {
+            self.zonk_with_ctx(term, ctx_len)
+        } else {
+            term.clone()
         }
     }
 

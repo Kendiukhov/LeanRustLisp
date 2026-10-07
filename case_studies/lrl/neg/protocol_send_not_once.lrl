@@ -1,0 +1,27 @@
+;; Negative variant of case study B (../protocol.lrl).  The declarations up to the marked line
+;; are copied from protocol.lrl (comments and unused definitions omitted); only the code after
+;; it is new.
+;; Expected: elaboration error F0206 (function kind mismatch) in `send`, labelled with the
+;; call site of the macro that generated it.
+
+(inductive (affine) Chan (pi n Nat (sort 1))
+  (ctor mk_chan (pi {n Nat} (pi log (List Nat) (Chan n)))))
+(inductive Receipt (sort 1)
+  (ctor receipt (pi log (List Nat) Receipt)))
+(def open_chan (pi n Nat (Chan n))
+  (lam n Nat (mk_chan nil)))
+(def close (pi c (Chan zero) Receipt)
+  (lam c (Chan zero)
+    (match c Receipt (case (mk_chan log) (receipt log)))))
+
+;; ---- new code ----
+;; `defsend` with the #[once] annotations removed: the function returned after the channel
+;; argument captures (owns) the affine channel and consumes it, so it can be called at most
+;; once; declaring it as a plain (Fn) function is a kind error, also in macro-generated code.
+(defmacro defsend (name payload encode)
+  (def name (pi {n Nat} (pi c (Chan (succ n)) (pi x payload (Chan n))))
+    (lam {n} Nat (lam c (Chan (succ n)) (lam x payload
+      (match c (Chan n)
+        (case (mk_chan log) (mk_chan (cons (encode x) log)))))))))
+(def log (pi m Nat Nat) (lam m Nat (print_nat m)))
+(defsend send Nat log)

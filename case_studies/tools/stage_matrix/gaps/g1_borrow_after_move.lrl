@@ -1,0 +1,9 @@
+;; MIR-independence probe for the stage matrix (case_studies/tools/run_stage_matrix.sh, set `mir_gaps`).
+;; Regression probe: MIR ownership used not to reject a shared borrow of a moved local (Rust E0382
+;; "borrow of moved value"): `check_rvalue_structured` (mir/src/analysis/ownership.rs) checked only
+;; `Rvalue::Use` operands. It now checks borrowed places too and reports M100.
+;; The kernel rejects `bam` (K0021 UseAfterMove 't').
+(inductive (affine) Tok (sort 1) (ctor mk_tok Tok))
+(def eat (pi t Tok Nat) (lam t Tok zero))
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) zero))
+(def bam (pi t Tok Nat) (lam t Tok (let n Nat (eat t) (look (& t)))))

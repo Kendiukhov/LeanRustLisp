@@ -1,0 +1,13 @@
+;; Paper, subsection "Where kinds meet dependent elimination" (label sec:own:rec,
+;; paper/jot_r1/sections/ownership.tex): "Consuming k in the
+;; zero case instead is accepted, because that case runs once."
+;; Expected: accepted. `main` (not printed in the paper) applies it to 2; the dynamic binary prints
+;; `Result: Cons(Tok, Nil)` (the token is in the list exactly once).
+(inductive (affine) Tok (sort 1) (ctor mk_tok Tok))
+(def spend (pi k Tok (pi #[once] n Nat (List Tok)))
+  (lam k Tok (lam #[once] n Nat
+    (match n (List Tok)
+      (case (zero) (cons k nil))
+      (case (succ m ih) ih)))))
+
+(def main (List Tok) (spend mk_tok (succ (succ zero))))

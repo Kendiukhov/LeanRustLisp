@@ -64,31 +64,13 @@ fn pretty_type(ty: &MirType) -> String {
         MirType::Bool => "Bool".to_string(),
         MirType::Nat => "Nat".to_string(),
         MirType::Opaque { .. } => "Opaque".to_string(),
-        MirType::IndexTerm(term) => format!("index({:?})", term),
         MirType::Adt(adt_id, args) => {
             let name = pretty_adt(adt_id);
             if args.is_empty() {
                 name
             } else {
-                let mut param_parts = Vec::new();
-                let mut index_parts = Vec::new();
-                for arg in args {
-                    match arg {
-                        MirType::IndexTerm(term) => index_parts.push(format!("{:?}", term)),
-                        _ => param_parts.push(pretty_type(arg)),
-                    }
-                }
-                let param_str = if param_parts.is_empty() {
-                    String::new()
-                } else {
-                    format!("<{}>", param_parts.join(", "))
-                };
-                let index_str = if index_parts.is_empty() {
-                    String::new()
-                } else {
-                    format!("[{}]", index_parts.join(", "))
-                };
-                format!("{}{}{}", name, param_str, index_str)
+                let param_parts: Vec<_> = args.iter().map(pretty_type).collect();
+                format!("{}<{}>", name, param_parts.join(", "))
             }
         }
         MirType::Ref(region, inner, mutability) => {

@@ -1,0 +1,18 @@
+;; Q12 (negative): a closure that consumes its captured token is passed where a repeatable
+;; (#[fn]) function is required. Identical to q12_fnonce_twice.lrl except for the lines marked
+;; CHANGED. Expected: rejected before running.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def burn (pi u Nat (pi t Tok Nat))
+  (lam u Nat (lam t Tok (match t Nat (case (mk_tok id) (add id u))))))
+
+;; CHANGED: apply_twice requires a repeatable (#[fn]) function and calls it twice
+(def apply_twice (pi f (pi #[fn] u Nat Nat) Nat)
+  (lam f (pi #[fn] u Nat Nat) (add (f 2) (f 3))))
+
+(def main Nat
+  (let t Tok (mk_tok 5)
+    (let consume (pi #[once] u Nat Nat) (lam #[once] u Nat (burn u t))
+      (add (print_nat (consume 1))                                            ;; 6
+           (let t2 Tok (mk_tok 5)
+             (print_nat (apply_twice (lam u Nat (burn u t2)))))))))  ;; CHANGED: was apply_once

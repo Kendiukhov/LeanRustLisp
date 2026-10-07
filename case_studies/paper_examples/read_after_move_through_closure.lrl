@@ -1,0 +1,17 @@
+;; Paper, subsections "Who enforces what" (sec:own:trust) and "What is proved"
+;; (sec:own:meta), paper/jot_r1/sections/ownership.tex: reading
+;; a value through a reference held by a closure, after the value was moved, is a borrow conflict,
+;; which the MIR borrow checker rejects (M201). The closure `f` only reads `t` (through a shared
+;; borrow), so the kernel's ownership walk counts it as a read; `t` is then moved, and the closure
+;; is called afterwards.
+;; Expected: M201 ... because it is borrowed as Shared.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok n) n))))
+(def peek (pi t (Ref #[r] Shared Tok) Nat) (lam t (Ref #[r] Shared Tok) zero))
+;; a closure that only reads t (through a shared borrow), then t is moved, then the closure is called
+(def bad (pi t Tok Nat)
+  (lam t Tok
+    (let f (pi u Nat Nat) (lam u Nat (peek (& t)))
+      (let n Nat (burn t)
+        (f n)))))
+(def main Nat (bad (mk_tok 3)))

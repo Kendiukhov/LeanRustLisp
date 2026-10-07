@@ -1,0 +1,19 @@
+;; Q4 (positive): proof arguments at run time. `safe_div` takes a proof that the divisor is not
+;; zero, an argument whose type is a proposition (Eq ... : (sort 0)). The call site supplies
+;; `refl`, which type-checks because (nat_is_zero 2) computes to false. The run script inspects
+;; the generated Rust of `safe_div` (is there a parameter for the proof?) and of the
+;; length-indexed `Vec` (does a `vcons` cell store its length index?).
+(def safe_div (pi a Nat (pi b Nat (pi p (Eq Bool (nat_is_zero b) false) Nat)))
+  (lam a Nat (lam b Nat (lam p (Eq Bool (nat_is_zero b) false) (nat_div a b)))))
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+(def vsum (pi {n Nat} (pi v (Vec Nat n) Nat))
+  (lam {n} Nat (lam v (Vec Nat n)
+    (match v Nat (case (vnil) zero) (case (vcons h t ih) (add h ih))))))
+
+(def main Nat
+  (add (print_nat (safe_div 10 2 (refl Bool false)))
+       (print_nat (vsum (vcons 1 (vcons 2 (vcons 3 vnil)))))))

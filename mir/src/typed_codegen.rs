@@ -18,6 +18,7 @@ pub enum TypedCodegenReason {
     UnsupportedClosureType,
     UnsupportedFixpointType,
     UnsupportedPolymorphicFunctionValue,
+    UnsupportedOpaqueCoercion,
     InternalInvariant,
 }
 
@@ -33,6 +34,7 @@ impl TypedCodegenReason {
             TypedCodegenReason::UnsupportedClosureType => "TB007",
             TypedCodegenReason::UnsupportedFixpointType => "TB008",
             TypedCodegenReason::UnsupportedPolymorphicFunctionValue => "TB009",
+            TypedCodegenReason::UnsupportedOpaqueCoercion => "TB010",
             TypedCodegenReason::InternalInvariant => "TB900",
         }
     }
@@ -132,6 +134,9 @@ struct CodegenContext<'a> {
     recursor_sigs: HashMap<(AdtId, String), RecursorSignature>,
     recursor_specs: Vec<RecursorSpec>,
     recursor_lookup: HashMap<(AdtId, String), String>,
+    /// Recursor specialisations emitted with the uniform (boxed) signature of a large
+    /// elimination: key -> (type of the emitted entry function, type at the use site).
+    boxed_recursors: HashMap<(AdtId, String), (MirType, MirType)>,
     closure_usage: HashMap<usize, ClosureUsage>,
     prop_adts: HashSet<AdtId>,
 }
@@ -166,6 +171,7 @@ impl<'a> CodegenContext<'a> {
             recursor_sigs: HashMap::new(),
             recursor_specs: Vec::new(),
             recursor_lookup: HashMap::new(),
+            boxed_recursors: HashMap::new(),
             closure_usage: HashMap::new(),
             prop_adts,
         })
@@ -242,7 +248,6 @@ impl<'a> CodegenContext<'a> {
     ) -> Result<(), TypedCodegenError> {
         match ty {
             MirType::Unit | MirType::Bool | MirType::Nat => Ok(()),
-            MirType::IndexTerm(_) => Ok(()),
             MirType::Adt(adt, args) => {
                 if self.prop_adts.contains(adt) {
                     return Ok(());
@@ -784,17 +789,66 @@ struct LrlAtomic<T> {
     value: T,
 }
 
-#[derive(Clone, Debug)]
+// Uniform run-time representation of a value whose MIR type is `Opaque`: a type the compiler
+// cannot compute statically, e.g. the result type of a large elimination (a recursor whose motive
+// yields different types for different indices). The value is boxed together with the name of
+// its Rust type; where the type is known again, `unwrap` performs a checked downcast (see
+// docs/spec/codegen/typed-backend.md, "Values of Types Computed at Run Time").
+#[derive(Clone)]
 struct LrlOpaque {
-    reason: String,
+    value: Rc<dyn std::any::Any>,
+    type_name: &'static str,
+}
+
+impl std::fmt::Debug for LrlOpaque {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LrlOpaque({})", self.type_name)
+    }
 }
 
 impl LrlOpaque {
+    // Placeholder for an opaque constant; it holds no run-time value.
     fn new(reason: &str) -> Self {
+        let _ = reason;
         Self {
-            reason: reason.to_string(),
+            value: Rc::new(()),
+            type_name: "<opaque constant>",
         }
     }
+
+    fn wrap<T: Clone + 'static>(value: T) -> Self {
+        let any: Box<dyn std::any::Any> = Box::new(value);
+        match any.downcast::<LrlOpaque>() {
+            // A value that is already boxed is not boxed twice.
+            Ok(boxed) => *boxed,
+            Err(any) => Self {
+                value: Rc::from(any),
+                type_name: std::any::type_name::<T>(),
+            },
+        }
+    }
+
+    fn unwrap<T: Clone + 'static>(self) -> T {
+        if let Some(same) = (&self as &dyn std::any::Any).downcast_ref::<T>() {
+            return same.clone();
+        }
+        let type_name = self.type_name;
+        match self.value.downcast::<T>() {
+            Ok(value) => Rc::try_unwrap(value).unwrap_or_else(|shared| (*shared).clone()),
+            Err(_) => panic!(
+                "typed backend: a value of type {} was used at type {}",
+                type_name,
+                std::any::type_name::<T>()
+            ),
+        }
+    }
+}
+
+// Recursive constructor fields are shared (`Rc`): LRL data is immutable, so cloning a value
+// copies one node, not the whole structure. Moving a field out of its node copies the node
+// only if it is still shared.
+fn lrl_unshare<T: Clone>(value: Rc<T>) -> T {
+    Rc::try_unwrap(value).unwrap_or_else(|shared| (*shared).clone())
 }
 
 fn runtime_refcell_borrow_check<T>(_value: T) {}
@@ -863,7 +917,14 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                 if layout.variants[1].fields.len() < 2 || generics.is_empty() {
                     continue;
                 }
-                let impl_generics = format!("<{}>", generics.join(", "));
+                let impl_generics = format!(
+                    "<{}>",
+                    generics
+                        .iter()
+                        .map(|param| format!("{}: Clone", param))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
                 let adt_ty = self.name_with_generics(&adt_name, &generics);
                 let item_ty = generics[0].clone();
                 let text = format!(
@@ -879,7 +940,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                         return head;
                     }}
                     i -= 1;
-                    current = *tail;
+                    current = lrl_unshare(tail);
                 }},
                 _ => panic!(\"indexing shape unsupported in typed backend\"),
             }}
@@ -913,7 +974,14 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
             let impl_generics = if generics.is_empty() {
                 String::new()
             } else {
-                format!("<{}>", generics.join(", "))
+                format!(
+                    "<{}>",
+                    generics
+                        .iter()
+                        .map(|param| format!("{}: Clone", param))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             };
             let adt_ty = self.name_with_generics(&adt_name, &generics);
             let item_ty = self.rust_type(&item_ty_mir)?;
@@ -948,7 +1016,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                                 .boxed_fields
                                 .contains(&(adt_id.clone(), variant_idx, field_idx))
                             {
-                                format!("*{}", name)
+                                format!("lrl_unshare({})", name)
                             } else {
                                 name
                             };
@@ -963,7 +1031,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                                 .boxed_fields
                                 .contains(&(adt_id.clone(), variant_idx, field_idx))
                             {
-                                format!("*{}", name)
+                                format!("lrl_unshare({})", name)
                             } else {
                                 name
                             };
@@ -1036,7 +1104,7 @@ fn runtime_raw_ptr_read_mut<T: Clone>(ptr: *mut T) -> T {
                 if let Some(ch) = char::from_u32(head as u32) {{
                     output.push(ch);
                 }}
-                list = *tail;
+                list = lrl_unshare(tail);
             }},
             _ => return output,
         }}
@@ -1047,7 +1115,7 @@ fn runtime_string_to_list_nat(input: &str) -> {list_nat_ty} {{
     input
         .chars()
         .rev()
-        .fold({list_enum}::{list_nil_ctor}, |acc, ch| {list_enum}::{list_cons_ctor}(ch as u64, Box::new(acc)))
+        .fold({list_enum}::{list_nil_ctor}, |acc, ch| {list_enum}::{list_cons_ctor}(ch as u64, Rc::new(acc)))
 }}
 
 fn runtime_string_to_text(input: &str) -> {text_ty} {{
@@ -1839,7 +1907,8 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
         generic_types.extend(captures.iter());
         generic_types.push(arg_ty);
         generic_types.push(ret_ty);
-        let generics = self.generics_for_types(generic_types);
+        // Same parameters as the closure body (`body_generic_indices`).
+        let generics = self.runtime_generics_for_types(generic_types);
 
         let mut call_args = Vec::new();
         for i in 0..captures.len() {
@@ -1903,7 +1972,8 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
         generic_types.extend(explicit_captures.iter());
         generic_types.push(arg_ty);
         generic_types.push(ret_ty);
-        let generics = self.generics_for_types(generic_types);
+        // Same parameters as the closure body (`body_generic_indices`).
+        let generics = self.runtime_generics_for_types(generic_types);
 
         let mut call_args = Vec::new();
         call_args.push(self.expr_path("self_fn"));
@@ -2076,12 +2146,30 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
     fn emit_main(&self, program: &TypedProgram) -> Result<Item, TypedCodegenError> {
         let mut stmts = Vec::new();
         if let Some(name) = &program.main_name {
+            // A polymorphic entry (e.g. `(def main (pi A Type ...) ...)`) is a function value
+            // that is printed, never applied; instantiate its type parameters with `()` (Rust
+            // cannot infer them from the call).
+            let entry_generics = program
+                .defs
+                .iter()
+                .find(|body| body.name == *name)
+                .map(|body| self.body_generics(body))
+                .unwrap_or_default();
+            let entry_path = if entry_generics.is_empty() {
+                name.clone()
+            } else {
+                format!(
+                    "{}::<{}>",
+                    name,
+                    vec!["()"; entry_generics.len()].join(", ")
+                )
+            };
             stmts.push(Stmt::Let {
                 name: "result".to_string(),
                 mutable: false,
                 ty: None,
                 value: Some(Expr::Call {
-                    func: Box::new(Expr::Path(name.clone())),
+                    func: Box::new(Expr::Path(entry_path)),
                     args: Vec::new(),
                 }),
             });
@@ -2596,14 +2684,16 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
                     .boxed_fields
                     .contains(&(spec.adt_id.clone(), variant_idx, field_idx))
                 {
+                    // The major premise is owned: move the recursive field out of its node
+                    // (it used to be deep-cloned here, and again for the induction
+                    // hypothesis, which made structural recursion quadratic).
                     arm_stmts.push(Stmt::Let {
                         name: field_name.clone(),
                         mutable: false,
                         ty: None,
-                        value: Some(self.expr_clone(Expr::Unary {
-                            op: UnaryOp::Deref,
-                            expr: Box::new(self.expr_path(&field_name)),
-                        })),
+                        value: Some(
+                            self.expr_call_path("lrl_unshare", vec![self.expr_path(&field_name)]),
+                        ),
                     });
                 }
                 arg_exprs.push(self.expr_path(&field_name));
@@ -2828,10 +2918,26 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
             *count += 1;
             self.recursor_lookup
                 .insert((adt_id.clone(), type_key.clone()), fn_name.clone());
+            let (arg_types, result_ty) = match self.boxed_recursor_signature(&adt_id, &sig)? {
+                Some((arg_types, result_ty)) => {
+                    let boxed_full_ty = rebuild_fn_chain(&sig.full_ty, &arg_types, &result_ty)
+                        .ok_or_else(|| {
+                            TypedCodegenError::new(
+                                "malformed recursor type for a large elimination",
+                            )
+                        })?;
+                    self.boxed_recursors.insert(
+                        (adt_id.clone(), type_key.clone()),
+                        (boxed_full_ty, sig.full_ty.clone()),
+                    );
+                    (arg_types, result_ty)
+                }
+                None => (sig.arg_types, sig.result_ty),
+            };
             self.recursor_specs.push(RecursorSpec {
                 adt_id,
-                arg_types: sig.arg_types,
-                result_ty: sig.result_ty,
+                arg_types,
+                result_ty,
                 name: fn_name,
             });
         }
@@ -2879,6 +2985,7 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
             .or_insert_with(|| RecursorSignature {
                 arg_types: arg_types.clone(),
                 result_ty: result_ty.clone(),
+                full_ty: local_ty.clone(),
             });
 
         used_adts.insert(adt_id);
@@ -2923,10 +3030,302 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
             TypedCodegenError::new(format!("missing recursor specialization for {}", ind_name))
         })?;
 
-        Ok(self.expr_call(
+        let entry = self.expr_call(
             self.expr_path("Rc::new"),
             vec![self.expr_path(name.clone())],
-        ))
+        );
+        if let Some((boxed_ty, use_ty)) = self.boxed_recursors.get(&key) {
+            // A large elimination: the entry function has the uniform signature (every motive
+            // value boxed); adapt it to the types seen at this use site.
+            return self.coerce_expr(entry, boxed_ty, use_ty, true, true);
+        }
+        Ok(entry)
+    }
+
+    /// The argument positions of each minor premise of `adt_id`'s recursor, in the order the
+    /// emitted recursor passes them: `true` marks an induction hypothesis (which follows its
+    /// directly recursive field), `false` a constructor field.
+    fn recursor_minor_shapes(&self, adt_id: &AdtId) -> Result<Vec<Vec<bool>>, TypedCodegenError> {
+        if adt_id.is_builtin(Builtin::Nat) {
+            return Ok(vec![Vec::new(), vec![false, true]]);
+        }
+        if adt_id.is_builtin(Builtin::Bool) {
+            return Ok(vec![Vec::new(), Vec::new()]);
+        }
+        let layout = self
+            .adt_layouts
+            .get(adt_id)
+            .ok_or_else(|| TypedCodegenError::new("missing ADT layout"))?;
+        Ok(layout
+            .variants
+            .iter()
+            .map(|variant| {
+                let mut shape = Vec::new();
+                for field_ty in &variant.fields {
+                    shape.push(false);
+                    if self.is_direct_recursive(field_ty, adt_id) {
+                        shape.push(true);
+                    }
+                }
+                shape
+            })
+            .collect())
+    }
+
+    /// The uniform signature of a recursor specialisation whose motive is a *large
+    /// elimination*, or `None` if the specialisation is uniform already.
+    ///
+    /// The emitted recursor returns the value of the minor premise selected by the major
+    /// premise's constructor, and passes induction hypotheses to the minor premises, so it is
+    /// well typed in Rust only if every minor premise's result, every induction hypothesis and
+    /// the recursor's result have one Rust type. That holds when the motive is constant, but
+    /// not when it computes different types for different indices or constructors (a total
+    /// `head` on `Vec A (succ n)` whose motive is `Unit` at `zero` and `A` at `succ`; the type
+    /// of an induction hypothesis on an unknown index is not even known statically and is
+    /// `Opaque` in MIR). For such a specialisation every motive value -- minor-premise results,
+    /// induction hypotheses and the result -- is given the uniform boxed representation
+    /// `LrlOpaque`; [`Self::recursor_expr`] adapts the entry function to the use site's types
+    /// with [`Self::coerce_expr`] (boxing each minor premise's result and unboxing the
+    /// recursor's result with a checked downcast).
+    fn boxed_recursor_signature(
+        &self,
+        adt_id: &AdtId,
+        sig: &RecursorSignature,
+    ) -> Result<Option<(Vec<MirType>, MirType)>, TypedCodegenError> {
+        let shapes = self.recursor_minor_shapes(adt_id)?;
+        let minor_start = if adt_id.is_builtin(Builtin::Nat) || adt_id.is_builtin(Builtin::Bool) {
+            1
+        } else {
+            let decl = self.env.inductives.get(adt_id.name()).ok_or_else(|| {
+                TypedCodegenError::new("missing inductive declaration for recursor")
+            })?;
+            decl.num_params + 1
+        };
+        if sig.arg_types.len() < minor_start + shapes.len() {
+            return Ok(None);
+        }
+        let result_rs = self.rust_type(&sig.result_ty)?;
+        let boxed = MirType::Opaque {
+            reason: LARGE_ELIMINATION_REASON.to_string(),
+        };
+        let mut uniform = true;
+        let mut arg_types = sig.arg_types.clone();
+        for (minor_idx, shape) in shapes.iter().enumerate() {
+            let minor_ty = &sig.arg_types[minor_start + minor_idx];
+            let Some((minor_args, minor_ret)) = self.split_fn_chain(minor_ty, shape.len()) else {
+                return Ok(None);
+            };
+            if self.rust_type(&minor_ret)? != result_rs {
+                uniform = false;
+            }
+            let mut boxed_args = Vec::new();
+            for (arg, is_ih) in minor_args.iter().zip(shape.iter()) {
+                if *is_ih {
+                    if self.rust_type(arg)? != result_rs {
+                        uniform = false;
+                    }
+                    boxed_args.push(boxed.clone());
+                } else {
+                    boxed_args.push(arg.clone());
+                }
+            }
+            arg_types[minor_start + minor_idx] = rebuild_fn_chain(minor_ty, &boxed_args, &boxed)
+                .ok_or_else(|| TypedCodegenError::new("malformed minor premise type"))?;
+        }
+        if uniform {
+            return Ok(None);
+        }
+        Ok(Some((arg_types, boxed)))
+    }
+
+    /// Rust expression converting `expr`, a value of MIR type `from`, to MIR type `to`, where the
+    /// two types have the same shape except that some positions of one are `Opaque` (a type
+    /// that could not be computed statically, represented by the uniform box `LrlOpaque`):
+    /// a value of a known type entering an `Opaque` position is boxed (`LrlOpaque::wrap`), a
+    /// boxed value leaving one is unboxed with a checked downcast (`LrlOpaque::unwrap`), and a
+    /// function value is wrapped in a closure that converts its argument and result.
+    ///
+    /// Boxing and unboxing happen only at types that contain no `Opaque` position, so that the
+    /// Rust type of a boxed value is the representation of a fully known type, which is the same
+    /// wherever the (definitionally equal) type is known; see docs/spec/codegen/typed-backend.md,
+    /// "Values of Types Computed at Run Time". A conversion that would need to box or unbox a
+    /// partially known type (e.g. a list of opaque values) is rejected.
+    ///
+    /// `annotate_source` gives the converted value its Rust type explicitly (only valid when the
+    /// type parameters of `from` are those of the current body). `local_params` tells whether
+    /// the type parameters (`Param`) of both types are those of the current body; when one type
+    /// is a callee's own signature, its parameters are instantiated by Rust and a parameter
+    /// position never needs a conversion.
+    fn coerce_expr(
+        &self,
+        expr: Expr,
+        from: &MirType,
+        to: &MirType,
+        annotate_source: bool,
+        local_params: bool,
+    ) -> Result<Expr, TypedCodegenError> {
+        if !self.needs_coercion(from, to, local_params) {
+            return Ok(expr);
+        }
+        if !local_params && (mir_type_contains_param(from) || mir_type_contains_param(to)) {
+            // The Rust types of a callee's own type parameters at this use are chosen by
+            // inference; the conversion closures could not be annotated with them.
+            return Err(self.unsupported_coercion(from, to));
+        }
+        self.coerce_expr_at(expr, from, to, annotate_source, local_params, 0)
+    }
+
+    fn coerce_expr_at(
+        &self,
+        expr: Expr,
+        from: &MirType,
+        to: &MirType,
+        annotate_source: bool,
+        local_params: bool,
+        depth: usize,
+    ) -> Result<Expr, TypedCodegenError> {
+        if !self.needs_coercion(from, to, local_params) {
+            return Ok(expr);
+        }
+        match (from, to) {
+            (_, MirType::Opaque { .. }) => {
+                if mir_type_contains_opaque(from) {
+                    return Err(self.unsupported_coercion(from, to));
+                }
+                // The boxed value's Rust type is stated, not inferred: an integer literal would
+                // otherwise be boxed as `i32` and fail the downcast to `u64`.
+                let source = self.rust_type(from)?;
+                Ok(self.expr_call_path(&format!("LrlOpaque::wrap::<{}>", source), vec![expr]))
+            }
+            (MirType::Opaque { .. }, MirType::Unit) => Ok(Expr::Block(Block {
+                stmts: vec![Stmt::Let {
+                    name: "_".to_string(),
+                    mutable: false,
+                    ty: None,
+                    value: Some(expr),
+                }],
+                tail: Some(Box::new(self.expr_path("()"))),
+            })),
+            (MirType::Opaque { .. }, _) => {
+                if mir_type_contains_opaque(to) {
+                    return Err(self.unsupported_coercion(from, to));
+                }
+                let target = self.rust_type(to)?;
+                Ok(self.expr_call_path(&format!("LrlOpaque::unwrap::<{}>", target), vec![expr]))
+            }
+            _ => {
+                let (Some(from_arg), Some(from_ret), Some(to_arg), Some(to_ret)) = (
+                    self.fn_arg_type(from),
+                    self.fn_ret_type(from),
+                    self.fn_arg_type(to),
+                    self.fn_ret_type(to),
+                ) else {
+                    return Err(self.unsupported_coercion(from, to));
+                };
+                let f_name = format!("__lrl_coerce_f{}", depth);
+                let x_name = format!("__lrl_coerce_x{}", depth);
+                let to_arg_rs = self.rust_type(to_arg)?;
+                let to_ret_rs = self.rust_type(to_ret)?;
+                let arg = self.coerce_expr_at(
+                    self.expr_path(&x_name),
+                    to_arg,
+                    from_arg,
+                    local_params,
+                    local_params,
+                    depth + 1,
+                )?;
+                let call = self.expr_call_callable(self.expr_path(&f_name), arg);
+                let result = self.coerce_expr_at(
+                    call,
+                    from_ret,
+                    to_ret,
+                    local_params,
+                    local_params,
+                    depth + 1,
+                )?;
+                let closure = Expr::Closure {
+                    params: vec![Param {
+                        name: x_name,
+                        ty: Some(to_arg_rs.clone()),
+                    }],
+                    body: Block {
+                        stmts: Vec::new(),
+                        tail: Some(Box::new(result)),
+                    },
+                    is_move: true,
+                };
+                Ok(Expr::Block(Block {
+                    stmts: vec![
+                        Stmt::Let {
+                            name: f_name,
+                            mutable: false,
+                            ty: if annotate_source && local_params {
+                                Some(self.rust_type(from)?)
+                            } else {
+                                None
+                            },
+                            value: Some(expr),
+                        },
+                        Stmt::Let {
+                            name: "__lrl_coerced".to_string(),
+                            mutable: false,
+                            ty: Some(format!("Rc<dyn LrlCallable<{}, {}>>", to_arg_rs, to_ret_rs)),
+                            value: Some(self.expr_call_path("Rc::new", vec![closure])),
+                        },
+                    ],
+                    tail: Some(Box::new(self.expr_path("__lrl_coerced"))),
+                }))
+            }
+        }
+    }
+
+    /// Whether a value of MIR type `from` needs a representation change to be used at MIR
+    /// type `to`: the types differ in whether some position is `Opaque` (type parameters are
+    /// instantiated by Rust and need nothing).
+    fn needs_coercion(&self, from: &MirType, to: &MirType, local_params: bool) -> bool {
+        if !local_params && (matches!(from, MirType::Param(_)) || matches!(to, MirType::Param(_))) {
+            return false;
+        }
+        match (from, to) {
+            (MirType::Opaque { .. }, MirType::Opaque { .. }) => false,
+            (MirType::Opaque { .. }, _) | (_, MirType::Opaque { .. }) => true,
+            (MirType::Adt(from_id, from_args), MirType::Adt(to_id, to_args)) => {
+                from_id == to_id
+                    && from_args
+                        .iter()
+                        .zip(to_args.iter())
+                        .any(|(f, t)| self.needs_coercion(f, t, local_params))
+            }
+            (MirType::Ref(_, from_inner, _), MirType::Ref(_, to_inner, _))
+            | (MirType::RawPtr(from_inner, _), MirType::RawPtr(to_inner, _))
+            | (MirType::InteriorMutable(from_inner, _), MirType::InteriorMutable(to_inner, _)) => {
+                self.needs_coercion(from_inner, to_inner, local_params)
+            }
+            _ => match (
+                self.fn_arg_type(from),
+                self.fn_ret_type(from),
+                self.fn_arg_type(to),
+                self.fn_ret_type(to),
+            ) {
+                (Some(from_arg), Some(from_ret), Some(to_arg), Some(to_ret)) => {
+                    self.needs_coercion(to_arg, from_arg, local_params)
+                        || self.needs_coercion(from_ret, to_ret, local_params)
+                }
+                _ => false,
+            },
+        }
+    }
+
+    fn unsupported_coercion(&self, from: &MirType, to: &MirType) -> TypedCodegenError {
+        let render = |ty: &MirType| self.rust_type(ty).unwrap_or_else(|_| format!("{:?}", ty));
+        TypedCodegenError::unsupported(
+            TypedCodegenReason::UnsupportedOpaqueCoercion,
+            format!(
+                "a value of Rust type `{}` cannot be used at Rust type `{}`: values of types computed at run time (large eliminations, `LrlOpaque`) are boxed and unboxed only at fully known types, and this one is only partially known",
+                render(from),
+                render(to)
+            ),
+        )
     }
 
     fn check_recursor_supported(&self, ind_name: &str) -> Result<AdtId, TypedCodegenError> {
@@ -3176,7 +3575,44 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
                 }
                 let dest = self.expr_path(format!("_{}", place.local.index()));
                 let expected_ty = self.place_type(body, place);
-                let expr = self.rvalue_expr(body, rvalue, closure_env, expected_ty.as_ref())?;
+                // A value of a stuck type moved to or from a place of a known type (MIR typing
+                // allows this for loan-free types; docs/spec/mir/typing.md) is boxed or unboxed.
+                let expr = match (rvalue, expected_ty.as_ref()) {
+                    (Rvalue::Use(Operand::Copy(source) | Operand::Move(source)), Some(dest_ty)) => {
+                        let expr =
+                            self.rvalue_expr(body, rvalue, closure_env, expected_ty.as_ref())?;
+                        match self.place_type(body, source) {
+                            Some(source_ty) => {
+                                self.coerce_expr(expr, &source_ty, dest_ty, false, true)?
+                            }
+                            None => expr,
+                        }
+                    }
+                    // A closure literal is built at its own type, then converted.
+                    (Rvalue::Use(Operand::Constant(constant)), Some(dest_ty))
+                        if matches!(constant.literal, Literal::Closure(..) | Literal::Fix(..))
+                            && self.needs_coercion(&constant.ty, dest_ty, true) =>
+                    {
+                        let expr =
+                            self.rvalue_expr(body, rvalue, closure_env, Some(&constant.ty))?;
+                        self.coerce_expr(expr, &constant.ty, dest_ty, false, true)?
+                    }
+                    // A definition's or literal's constant type may be a definition's own
+                    // signature (whose type parameters are not this body's). Other constants
+                    // (constructors, erased values) carry a placeholder type and are never
+                    // stored in a place of a stuck type (lowering builds them in a temporary).
+                    (Rvalue::Use(Operand::Constant(constant)), Some(dest_ty))
+                        if matches!(
+                            constant.literal,
+                            Literal::GlobalDef(_) | Literal::Nat(_) | Literal::Bool(_)
+                        ) =>
+                    {
+                        let expr =
+                            self.rvalue_expr(body, rvalue, closure_env, expected_ty.as_ref())?;
+                        self.coerce_expr(expr, &constant.ty, dest_ty, false, false)?
+                    }
+                    _ => self.rvalue_expr(body, rvalue, closure_env, expected_ty.as_ref())?,
+                };
                 Ok(Some(Stmt::Assign {
                     target: dest,
                     value: self.expr_some(expr),
@@ -3292,12 +3728,33 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
                 target,
             } => {
                 let func_expr = self.call_operand_expr(body, func, closure_env)?;
-                let arg_expr = if let Some(arg) = args.get(0) {
+                let callee_ty = self.call_operand_type(body, func);
+                let mut arg_expr = if let Some(arg) = args.get(0) {
                     self.operand_expr(body, arg, closure_env, None)?
                 } else {
                     self.expr_path("()")
                 };
-                let call_expr = self.expr_call_callable(func_expr, arg_expr);
+                // Arguments and results whose types differ from the callee's only in stuck
+                // (run-time computed) positions are boxed or unboxed, as for assignments.
+                // A constant callee's type is its own signature, whose type parameters are not
+                // those of this body.
+                let callee_params_local =
+                    !matches!(func, CallOperand::Operand(Operand::Constant(_)));
+                if let (Some(param_ty), Some(arg_ty)) = (
+                    callee_ty.as_ref().and_then(|ty| self.fn_arg_type(ty)),
+                    args.get(0).and_then(|arg| self.operand_type(body, arg)),
+                ) {
+                    arg_expr =
+                        self.coerce_expr(arg_expr, &arg_ty, param_ty, false, callee_params_local)?;
+                }
+                let mut call_expr = self.expr_call_callable(func_expr, arg_expr);
+                if let (Some(ret_ty), Some(dest_ty)) = (
+                    callee_ty.as_ref().and_then(|ty| self.fn_ret_type(ty)),
+                    self.place_type(body, destination),
+                ) {
+                    call_expr =
+                        self.coerce_expr(call_expr, ret_ty, &dest_ty, false, callee_params_local)?;
+                }
                 let dest = self.expr_path(format!("_{}", destination.local.index()));
                 stmts.push(Stmt::Assign {
                     target: dest,
@@ -3354,6 +3811,20 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
             Operand::Constant(constant) => {
                 self.constant_expr(body, constant, closure_env, expected_ty)
             }
+        }
+    }
+
+    fn operand_type(&self, body: &TypedBody, op: &Operand) -> Option<MirType> {
+        match op {
+            Operand::Copy(place) | Operand::Move(place) => self.place_type(body, place),
+            Operand::Constant(constant) => Some(constant.ty.clone()),
+        }
+    }
+
+    fn call_operand_type(&self, body: &TypedBody, op: &CallOperand) -> Option<MirType> {
+        match op {
+            CallOperand::Operand(op) => self.operand_type(body, op),
+            CallOperand::Borrow(_, place) => self.place_type(body, place),
         }
     }
 
@@ -3931,7 +4402,6 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
             MirType::Unit => Ok("()".to_string()),
             MirType::Bool => Ok("bool".to_string()),
             MirType::Nat => Ok("u64".to_string()),
-            MirType::IndexTerm(_) => Ok("usize".to_string()),
             MirType::Adt(adt_id, args) => {
                 if self.prop_adts.contains(adt_id) {
                     return Ok("()".to_string());
@@ -3995,7 +4465,9 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
     }
 
     fn interior_mutable_wrapper_for_adt(&self, adt_id: &AdtId) -> Option<&'static str> {
-        match self.adt_name(adt_id) {
+        // The prelude's interior-mutability types, by their LRL name (the Rust name of an
+        // inductive may be mangled, see `sanitize_name`).
+        match adt_id.name() {
             "RefCell" => Some("LrlRefCell"),
             "Mutex" => Some("LrlMutex"),
             "Atomic" => Some("LrlAtomic"),
@@ -4050,11 +4522,7 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
                 }
                 Self::collect_param_indices_in_type(ret, out);
             }
-            MirType::Unit
-            | MirType::Bool
-            | MirType::Nat
-            | MirType::IndexTerm(_)
-            | MirType::Opaque { .. } => {}
+            MirType::Unit | MirType::Bool | MirType::Nat | MirType::Opaque { .. } => {}
         }
     }
 
@@ -4065,6 +4533,22 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
         let mut indices = BTreeSet::new();
         for ty in types {
             Self::collect_param_indices_in_type(ty, &mut indices);
+        }
+        indices
+            .into_iter()
+            .map(|idx| self.generic_param_name(idx))
+            .collect()
+    }
+
+    /// Generic parameters of the Rust types of `types` (parameters that occur only inside a
+    /// proposition, rendered `()`, are not included).
+    fn runtime_generics_for_types<'b, I>(&self, types: I) -> Vec<String>
+    where
+        I: IntoIterator<Item = &'b MirType>,
+    {
+        let mut indices = BTreeSet::new();
+        for ty in types {
+            self.collect_runtime_param_indices_in_type(ty, &mut indices);
         }
         indices
             .into_iter()
@@ -4089,7 +4573,8 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
                 tys.push(arg_ty);
             }
         }
-        if self.is_closure_body(&body.body) {
+        let is_closure = self.is_closure_body(&body.body);
+        if is_closure {
             if let Some(env_decl) = body.body.local_decls.get(1) {
                 for capture_ty in &env_decl.closure_captures {
                     tys.push(capture_ty);
@@ -4098,9 +4583,47 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
         }
         let mut indices = BTreeSet::new();
         for ty in tys {
-            Self::collect_param_indices_in_type(ty, &mut indices);
+            if is_closure {
+                // A closure's type parameters are inferred where it is created, from its Rust
+                // signature; a parameter that occurs only inside a proposition (rendered `()`)
+                // cannot be inferred, e.g. in a proof-typed closure, which has no captures.
+                self.collect_runtime_param_indices_in_type(ty, &mut indices);
+            } else {
+                Self::collect_param_indices_in_type(ty, &mut indices);
+            }
         }
         indices
+    }
+
+    /// Like `collect_param_indices_in_type`, but skips the arguments of propositions (ADTs in
+    /// `prop_adts`, which `rust_type` renders as `()`): a type parameter that occurs only there
+    /// does not occur in the Rust type.
+    fn collect_runtime_param_indices_in_type(&self, ty: &MirType, out: &mut BTreeSet<usize>) {
+        match ty {
+            MirType::Param(idx) => {
+                out.insert(*idx);
+            }
+            MirType::Adt(adt_id, _) if self.prop_adts.contains(adt_id) => {}
+            MirType::Adt(_, args) => {
+                for arg in args {
+                    self.collect_runtime_param_indices_in_type(arg, out);
+                }
+            }
+            MirType::Ref(_, inner, _)
+            | MirType::RawPtr(inner, _)
+            | MirType::InteriorMutable(inner, _) => {
+                self.collect_runtime_param_indices_in_type(inner, out)
+            }
+            MirType::Fn(_, _, args, ret)
+            | MirType::FnItem(_, _, _, args, ret)
+            | MirType::Closure(_, _, _, args, ret) => {
+                for arg in args {
+                    self.collect_runtime_param_indices_in_type(arg, out);
+                }
+                self.collect_runtime_param_indices_in_type(ret, out);
+            }
+            MirType::Unit | MirType::Bool | MirType::Nat | MirType::Opaque { .. } => {}
+        }
     }
 
     fn option_local_type_annotation(
@@ -4233,7 +4756,7 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
             .contains(&(adt_id.clone(), variant_idx, field_idx))
         {
             let inner = self.rust_type(field_ty)?;
-            Ok(format!("Box<{}>", inner))
+            Ok(format!("Rc<{}>", inner))
         } else {
             self.rust_type(field_ty)
         }
@@ -4314,10 +4837,18 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
                 "constructor arity smaller than layout field count",
             ));
         }
+        // The leading arguments are the inductive's parameters: a type parameter is erased to
+        // `()`, a value parameter (e.g. `k : Nat` in `VSplit A k`) is passed with its own type
+        // (it used to be declared `()` while call sites pass the value: rustc E0308).
         let erased_prefix = arity - variant.fields.len();
         let mut arg_types = Vec::with_capacity(arity);
-        for _ in 0..erased_prefix {
-            arg_types.push(MirType::Unit);
+        for param_idx in 0..erased_prefix {
+            let param_ty = if self.prop_adts.contains(adt_id) {
+                None
+            } else {
+                self.ids.adt_param_value_type(adt_id, param_idx)
+            };
+            arg_types.push(param_ty.cloned().unwrap_or(MirType::Unit));
         }
         arg_types.extend(variant.fields.iter().cloned());
         Ok(arg_types)
@@ -4458,7 +4989,7 @@ fn runtime_float_to_string(value: {float_ty}) -> String {{
                 .boxed_fields
                 .contains(&(adt_id.clone(), variant_idx, field_idx))
             {
-                ctor_args.push(self.expr_call_path("Box::new", vec![self.expr_path(arg_name)]));
+                ctor_args.push(self.expr_call_path("Rc::new", vec![self.expr_path(arg_name)]));
             } else {
                 ctor_args.push(self.expr_path(arg_name));
             }
@@ -5593,6 +6124,8 @@ struct ClosureEnv {
 struct RecursorSignature {
     arg_types: Vec<MirType>,
     result_ty: MirType,
+    /// The recursor's type at its use site (the curried chain of `arg_types` to `result_ty`).
+    full_ty: MirType,
 }
 
 #[derive(Debug, Clone)]
@@ -5606,6 +6139,62 @@ struct RecursorSpec {
 impl RecursorSpec {
     fn impl_name(&self) -> String {
         format!("{}_impl", self.name)
+    }
+}
+
+/// `Opaque` reason of the uniform boxed type given to every motive value of a recursor
+/// specialisation that is a large elimination (see `CodegenContext::boxed_recursor_signature`).
+const LARGE_ELIMINATION_REASON: &str = "large elimination";
+
+/// The curried function type with the shape of `original` (kinds and region parameters of its
+/// first `args.len()` arrows) taking `args` and returning `ret`.
+fn rebuild_fn_chain(original: &MirType, args: &[MirType], ret: &MirType) -> Option<MirType> {
+    let Some((arg, rest)) = args.split_first() else {
+        return Some(ret.clone());
+    };
+    let (kind, regions, inner) = match original {
+        MirType::Fn(kind, regions, _, inner)
+        | MirType::FnItem(_, kind, regions, _, inner)
+        | MirType::Closure(kind, _, regions, _, inner) => (*kind, regions.clone(), inner),
+        _ => return None,
+    };
+    Some(MirType::Fn(
+        kind,
+        regions,
+        vec![arg.clone()],
+        Box::new(rebuild_fn_chain(inner, rest, ret)?),
+    ))
+}
+
+fn mir_type_contains_param(ty: &MirType) -> bool {
+    match ty {
+        MirType::Param(_) => true,
+        MirType::Adt(_, args) => args.iter().any(mir_type_contains_param),
+        MirType::Ref(_, inner, _)
+        | MirType::RawPtr(inner, _)
+        | MirType::InteriorMutable(inner, _) => mir_type_contains_param(inner),
+        MirType::Fn(_, _, args, ret)
+        | MirType::FnItem(_, _, _, args, ret)
+        | MirType::Closure(_, _, _, args, ret) => {
+            args.iter().any(mir_type_contains_param) || mir_type_contains_param(ret)
+        }
+        MirType::Unit | MirType::Bool | MirType::Nat | MirType::Opaque { .. } => false,
+    }
+}
+
+fn mir_type_contains_opaque(ty: &MirType) -> bool {
+    match ty {
+        MirType::Opaque { .. } => true,
+        MirType::Adt(_, args) => args.iter().any(mir_type_contains_opaque),
+        MirType::Ref(_, inner, _)
+        | MirType::RawPtr(inner, _)
+        | MirType::InteriorMutable(inner, _) => mir_type_contains_opaque(inner),
+        MirType::Fn(_, _, args, ret)
+        | MirType::FnItem(_, _, _, args, ret)
+        | MirType::Closure(_, _, _, args, ret) => {
+            args.iter().any(mir_type_contains_opaque) || mir_type_contains_opaque(ret)
+        }
+        MirType::Unit | MirType::Bool | MirType::Nat | MirType::Param(_) => false,
     }
 }
 
@@ -5729,6 +6318,10 @@ mod tests {
         assert_eq!(
             TypedCodegenReason::UnsupportedPolymorphicFunctionValue.code(),
             "TB009"
+        );
+        assert_eq!(
+            TypedCodegenReason::UnsupportedOpaqueCoercion.code(),
+            "TB010"
         );
         assert_eq!(TypedCodegenReason::InternalInvariant.code(), "TB900");
     }

@@ -1,9 +1,7 @@
 use crate::errors::{MirSpan, MirSpanMap, SourceSpan};
 use crate::types::{AdtId, CtorId, DefId, IMKind, IdRegistry, MirType, Mutability, Region};
 use crate::*;
-use kernel::ast::{
-    BinderInfo, BorrowWrapperMarker, FunctionKind, Level, MarkerId, Term, TypeMarker,
-};
+use kernel::ast::{BorrowWrapperMarker, FunctionKind, Level, MarkerId, Term, TypeMarker};
 use kernel::checker::{
     compute_recursor_type, infer, is_prop_like_with_transparency, whnf_in_ctx, Builtin, Context,
     Env, PropTransparencyContext, TypeError,
@@ -54,10 +52,16 @@ type FunctionSignature = (FunctionKind, Vec<Region>, Vec<MirType>, Box<MirType>)
 
 pub type StableTermId = u64;
 
+/// Source spans of elaborated terms, keyed by term address (`Rc::as_ptr`).
+///
+/// An address identifies a term only while that term is alive: once it is freed, a term
+/// allocated later (e.g. by MIR lowering) may get the same address and would inherit a stale
+/// span. `pinned_terms` keeps the keyed terms alive for as long as the map exists.
 #[derive(Debug, Clone, Default)]
 pub struct TermSpanMap {
     spans_by_term_id: HashMap<StableTermId, SourceSpan>,
     term_ids_by_ptr: HashMap<usize, StableTermId>,
+    pinned_terms: Vec<Rc<Term>>,
 }
 
 impl TermSpanMap {
@@ -68,7 +72,14 @@ impl TermSpanMap {
         Self {
             spans_by_term_id,
             term_ids_by_ptr,
+            pinned_terms: Vec::new(),
         }
+    }
+
+    /// Keeps `terms` (the terms whose addresses are keys of this map) alive with the map.
+    pub fn with_pinned_terms(mut self, terms: Vec<Rc<Term>>) -> Self {
+        self.pinned_terms = terms;
+        self
     }
 
     pub fn span_for_term(&self, term: &Rc<Term>) -> Option<SourceSpan> {
@@ -95,6 +106,22 @@ pub struct LoweringContext<'a> {
     def_name: Option<String>,
     current_span: Option<SourceSpan>,
     next_region: usize,
+    /// Set by `lower_rec` just before lowering the minor premise of a constructor with a
+    /// recursive field; consumed by the next `Term::Lam` lowered. Such a minor is passed to
+    /// every recursive call and then called, so it must be duplicable: function values it
+    /// only calls (Fn, i.e. read) are captured by shared reference instead of being moved
+    /// into its environment, which makes the closure `Copy` (Rust's rule: a closure is
+    /// Copy when every capture is Copy or a shared reference). The minor never escapes the
+    /// recursor application, so the borrow cannot dangle (NLL checks it like any loan).
+    borrow_fn_captures_in_next_closure: bool,
+    /// Locals of this body into which a closure with a non-Copy capture has been written.
+    /// A local written by several closures (the arms of an inline `match`) is Copy only if
+    /// every one of them is: one capture-free arm must not make the local holding another
+    /// arm's consuming closure duplicable.
+    non_copy_closure_locals: HashSet<Local>,
+    /// Locals of this body made Copy because a closure with only Copy captures was written
+    /// into them (see `non_copy_closure_locals`).
+    copy_closure_locals: HashSet<Local>,
 }
 
 struct CapturePlan {
@@ -249,6 +276,43 @@ fn collect_free_vars(term: &Rc<Term>, depth: usize, acc: &mut HashSet<usize>) {
     }
 }
 
+/// Whether `motive` is syntactically constant: a λ-chain over the `binders` indices and major
+/// premise whose body mentions none of them (`(match e T ...)` elaborates to such a motive).
+fn motive_is_constant(motive: &Rc<Term>, binders: usize) -> bool {
+    let mut body = motive.clone();
+    for _ in 0..binders {
+        let inner = match &*body {
+            Term::Lam(_, inner, _, _) => inner.clone(),
+            _ => return false,
+        };
+        body = inner;
+    }
+    let mut free = HashSet::new();
+    collect_free_vars(&body, 0, &mut free);
+    !free.iter().any(|idx| *idx < binders)
+}
+
+/// Whether two MIR types are different known first-order types (`Unit`, `Bool`, `Nat` or
+/// inductive types with different heads): a value of one can never be used at the other, so an
+/// alternative of a large elimination whose type is one, lowered into a destination of the
+/// other, is never taken (see `LoweringContext::lower_alternative_body`).
+fn known_type_heads_differ(a: &MirType, b: &MirType) -> bool {
+    let first_order = |ty: &MirType| {
+        matches!(
+            ty,
+            MirType::Unit | MirType::Bool | MirType::Nat | MirType::Adt(..)
+        )
+    };
+    match (a, b) {
+        (MirType::Adt(x, _), MirType::Adt(y, _)) => x != y,
+        _ => {
+            first_order(a)
+                && first_order(b)
+                && std::mem::discriminant(a) != std::mem::discriminant(b)
+        }
+    }
+}
+
 fn usage_mode_for_kind(kind: FunctionKind) -> UsageMode {
     match kind {
         FunctionKind::Fn => UsageMode::Observational,
@@ -334,6 +398,9 @@ impl<'a> LoweringContext<'a> {
             def_name,
             current_span: None,
             next_region: 1,
+            borrow_fn_captures_in_next_closure: false,
+            non_copy_closure_locals: HashSet::new(),
+            copy_closure_locals: HashSet::new(),
         };
 
         // Push Return Place _0 with correct type
@@ -602,7 +669,6 @@ impl<'a> LoweringContext<'a> {
                 Box::new(Self::substitute_params_offset(inner, offset, params)),
                 *kind,
             ),
-            MirType::IndexTerm(term) => MirType::IndexTerm(term.clone()),
             MirType::Opaque { reason } => MirType::Opaque {
                 reason: reason.clone(),
             },
@@ -950,12 +1016,14 @@ impl<'a> LoweringContext<'a> {
             })
             .unwrap_or(args.len());
 
+        // Representation types: indices are erased, value parameters become `Unit`
+        // (docs/spec/mir/typing.md, "Indexed families").
         let mut kept_args = Vec::new();
-        for (idx, arg) in args.iter().enumerate() {
-            if idx < param_count {
+        for (idx, arg) in args.iter().enumerate().take(param_count) {
+            if self.ids.adt_param_is_type(&adt_id, idx) {
                 kept_args.push(self.lower_type_general_with_scope(arg, scope)?);
             } else {
-                kept_args.push(MirType::IndexTerm(arg.clone()));
+                kept_args.push(MirType::Unit);
             }
         }
 
@@ -990,12 +1058,14 @@ impl<'a> LoweringContext<'a> {
             })
             .unwrap_or(args.len());
 
+        // Representation types: indices are erased, value parameters become `Unit`
+        // (docs/spec/mir/typing.md, "Indexed families").
         let mut kept_args = Vec::new();
-        for (idx, arg) in args.iter().enumerate() {
-            if idx < param_count {
+        for (idx, arg) in args.iter().enumerate().take(param_count) {
+            if self.ids.adt_param_is_type(&adt_id, idx) {
                 kept_args.push(self.lower_type_in_fn_with_scope(arg, assigner, position, scope)?);
             } else {
-                kept_args.push(MirType::IndexTerm(arg.clone()));
+                kept_args.push(MirType::Unit);
             }
         }
 
@@ -1118,6 +1188,8 @@ impl<'a> LoweringContext<'a> {
         captured_indices: &HashSet<usize>,
         capture_modes: Option<&CaptureModes>,
         required_modes: Option<&CaptureModes>,
+        borrow_fn_values: bool,
+        erased_only: &HashSet<usize>,
     ) -> LoweringResult<CapturePlan> {
         let mut plan = CapturePlan {
             outer_indices: Vec::new(),
@@ -1160,13 +1232,28 @@ impl<'a> LoweringContext<'a> {
                 None => annotated_mode.unwrap_or_else(|| usage_mode_for_kind(kind)),
             };
 
+            // A minor premise that must stay duplicable keeps its read-only captures as
+            // shared borrows (see `borrow_fn_captures_in_next_closure`).
+            let keep_shared_borrow =
+                borrow_fn_values && matches!(capture_mode, UsageMode::Observational);
             if matches!(capture_mode, UsageMode::Observational)
                 && matches!(kind, FunctionKind::FnOnce)
                 && !local_is_copy
+                && !keep_shared_borrow
             {
                 capture_mode = UsageMode::Consuming;
             }
+            if matches!(capture_mode, UsageMode::Observational)
+                && erased_only.contains(&idx)
+                && !local_is_copy
+                && !keep_shared_borrow
+            {
+                // Only needed in erased positions: move it into the closure instead of
+                // borrowing it (a borrow would tie the closure to this scope).
+                capture_mode = UsageMode::Consuming;
+            }
             if !local_is_copy
+                && !keep_shared_borrow
                 && matches!(
                     capture_mode,
                     UsageMode::Observational | UsageMode::MutBorrow
@@ -1187,17 +1274,36 @@ impl<'a> LoweringContext<'a> {
                 plan.operands.push(Operand::Copy(Place::from(*local)));
                 plan.mir_types.push(local_mir_ty);
                 plan.is_copy.push(true);
-                plan.borrowed.push(false);
+                // Re-capturing a variable that this body itself holds by shared reference
+                // copies the reference; the nested closure must dereference it as well.
+                plan.borrowed
+                    .push(self.borrowed_capture_locals.contains(local));
             } else {
+                // A variable that this body itself holds through a borrowed capture (`local`
+                // holds `&T` / `&mut T` to it) is re-borrowed THROUGH that reference
+                // (`&*local` / `&mut *local`, a reference to `T`), not by borrowing `local`
+                // (which would give `&&mut T`): the nested closure dereferences its capture
+                // exactly once, like every borrowed capture.
+                let held_by_reference = self.borrowed_capture_locals.contains(local);
+                let (borrowed_place, borrowed_ty) = match (&local_mir_ty, held_by_reference) {
+                    (MirType::Ref(_, inner, _), true) => (
+                        Place {
+                            local: *local,
+                            projection: vec![PlaceElem::Deref],
+                        },
+                        (**inner).clone(),
+                    ),
+                    _ => (Place::from(*local), local_mir_ty.clone()),
+                };
                 match capture_mode {
                     UsageMode::Observational => {
                         let region = self.fresh_region();
-                        let ref_ty = MirType::Ref(region, Box::new(local_mir_ty), Mutability::Not);
+                        let ref_ty = MirType::Ref(region, Box::new(borrowed_ty), Mutability::Not);
                         let ref_local = self.push_mir_local(ref_ty.clone(), None);
                         self.push_statement(Statement::StorageLive(ref_local));
                         self.push_statement(Statement::Assign(
                             Place::from(ref_local),
-                            Rvalue::Ref(BorrowKind::Shared, Place::from(*local)),
+                            Rvalue::Ref(BorrowKind::Shared, borrowed_place),
                         ));
                         plan.operands.push(Operand::Copy(Place::from(ref_local)));
                         plan.mir_types.push(ref_ty);
@@ -1206,12 +1312,12 @@ impl<'a> LoweringContext<'a> {
                     }
                     UsageMode::MutBorrow => {
                         let region = self.fresh_region();
-                        let ref_ty = MirType::Ref(region, Box::new(local_mir_ty), Mutability::Mut);
+                        let ref_ty = MirType::Ref(region, Box::new(borrowed_ty), Mutability::Mut);
                         let ref_local = self.push_mir_local(ref_ty.clone(), None);
                         self.push_statement(Statement::StorageLive(ref_local));
                         self.push_statement(Statement::Assign(
                             Place::from(ref_local),
-                            Rvalue::Ref(BorrowKind::Mut, Place::from(*local)),
+                            Rvalue::Ref(BorrowKind::Mut, borrowed_place),
                         ));
                         plan.operands.push(Operand::Move(Place::from(ref_local)));
                         plan.mir_types.push(ref_ty);
@@ -1222,7 +1328,9 @@ impl<'a> LoweringContext<'a> {
                         plan.operands.push(Operand::Move(Place::from(*local)));
                         plan.mir_types.push(local_mir_ty);
                         plan.is_copy.push(false);
-                        plan.borrowed.push(false);
+                        // Moving a reference this body holds to the variable: the nested
+                        // closure reaches the variable through it, too.
+                        plan.borrowed.push(held_by_reference);
                     }
                 }
             }
@@ -1541,13 +1649,45 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// Capture modes the closure `λx:arg_ty. body` requires. This is the kernel's analysis
+    /// (`kernel::checker::term_variable_uses`), which the elaborator also uses to record capture
+    /// modes; the local syntactic analysis is a fallback for terms the kernel cannot type here.
     fn required_capture_modes_for_closure(
         &self,
         arg_ty: &Rc<Term>,
         body: &Rc<Term>,
     ) -> LoweringResult<Option<CaptureModes>> {
         let ctx = self.checker_ctx.push(arg_ty.clone());
+        if let Ok(uses) = kernel::checker::term_variable_uses(self.kernel_env, &ctx, body) {
+            if let Ok(modes) =
+                kernel::checker::capture_modes_from_uses(self.kernel_env, &ctx, &uses)
+            {
+                return Ok(Some(modes));
+            }
+        }
         self.collect_required_capture_modes_in_term(body, &ctx, 1, UsageMode::Consuming)
+    }
+
+    /// Captured variables (outer de Bruijn indices) of `λx:arg_ty. body` that occur in the body
+    /// only in erased positions (types, proofs, motives, indices, parameters), per the kernel's
+    /// analysis (`kernel::checker::term_runtime_variables`). Their values are not needed at run
+    /// time; `collect_captures` moves rather than borrows them, so the closure does not hold a
+    /// reference to a local it may outlive.
+    fn erased_only_captures(
+        &self,
+        arg_ty: &Rc<Term>,
+        body: &Rc<Term>,
+        captured_indices: &HashSet<usize>,
+    ) -> HashSet<usize> {
+        let ctx = self.checker_ctx.push(arg_ty.clone());
+        match kernel::checker::term_runtime_variables(self.kernel_env, &ctx, body) {
+            Ok(runtime) => captured_indices
+                .iter()
+                .filter(|idx| !runtime.contains(&(**idx + 1)))
+                .copied()
+                .collect(),
+            Err(_) => HashSet::new(),
+        }
     }
 
     fn is_prop_type(&self, ty: &Rc<Term>) -> LoweringResult<bool> {
@@ -1566,6 +1706,58 @@ impl<'a> LoweringContext<'a> {
                 err
             ))),
         }
+    }
+
+    /// Whether `destination` is a whole local holding a proof that is erased at run time: a
+    /// value of a proposition whose MIR type is not a function type (the same rule as
+    /// `transform::erasure`, which later replaces such locals by `()`).
+    fn is_erased_proof_destination(&self, destination: &Place) -> bool {
+        if !destination.projection.is_empty() {
+            return false;
+        }
+        let Some(decl) = self.body.local_decls.get(destination.local.index()) else {
+            return false;
+        };
+        decl.is_prop
+            && !matches!(
+                decl.ty,
+                MirType::Fn(_, _, _, _)
+                    | MirType::FnItem(_, _, _, _, _)
+                    | MirType::Closure(_, _, _, _, _)
+            )
+    }
+
+    /// Whether `destination` is a whole local holding a proof of function type (a value whose
+    /// type is a Pi ending in a proposition). Such values are erased proofs for the kernel; at
+    /// run time they are represented by capture-free closures (see the `Term::Lam` case of
+    /// `lower_term`) or function items, never by evaluating the term that produced them.
+    fn is_erased_proof_function_destination(&self, destination: &Place) -> bool {
+        if !destination.projection.is_empty() {
+            return false;
+        }
+        let Some(decl) = self.body.local_decls.get(destination.local.index()) else {
+            return false;
+        };
+        decl.is_prop
+            && matches!(
+                decl.ty,
+                MirType::Fn(_, _, _, _)
+                    | MirType::FnItem(_, _, _, _, _)
+                    | MirType::Closure(_, _, _, _, _)
+            )
+    }
+
+    /// Copy-ness of a local of kernel type `ty` (in the current checker context) and MIR type
+    /// `mir_ty`. Proofs (`is_prop`) are erased at run time and Copy, as in the kernel; this is
+    /// decided here with the local context, which the kernel's context-free `is_type_copy` lacks
+    /// for open proof types. This includes proofs of function type: their run-time values are
+    /// capture-free closures or function items (proof-typed closures are built without
+    /// captures, and terms producing them are not evaluated), so duplicating them is safe.
+    fn compute_is_copy_for_local(&self, ty: &Rc<Term>, mir_ty: &MirType, is_prop: bool) -> bool {
+        if is_prop && !matches!(mir_ty, MirType::Opaque { .. }) {
+            return true;
+        }
+        self.compute_is_copy_for_mir(ty, mir_ty)
     }
 
     fn compute_is_copy_for_mir(&self, ty: &Rc<Term>, mir_ty: &MirType) -> bool {
@@ -1597,7 +1789,7 @@ impl<'a> LoweringContext<'a> {
         let mir_ty = self.lower_type(&ty)?;
 
         // Determine if type has Copy semantics (opaque types are always non-Copy)
-        let is_copy = self.compute_is_copy_for_mir(&ty, &mir_ty);
+        let is_copy = self.compute_is_copy_for_local(&ty, &mir_ty, is_prop);
 
         // Update checker context
         self.checker_ctx = self.checker_ctx.push(ty.clone());
@@ -1619,7 +1811,7 @@ impl<'a> LoweringContext<'a> {
         let is_prop = self.is_prop_type(&ty)?;
 
         let mir_ty = self.lower_type(&ty)?;
-        let is_copy = self.compute_is_copy_for_mir(&ty, &mir_ty);
+        let is_copy = self.compute_is_copy_for_local(&ty, &mir_ty, is_prop);
 
         self.body.local_decls.push(LocalDecl {
             ty: mir_ty,
@@ -1639,7 +1831,7 @@ impl<'a> LoweringContext<'a> {
     ) -> LoweringResult<Local> {
         let idx = self.body.local_decls.len();
         let is_prop = self.is_prop_type(&ty)?;
-        let is_copy = self.compute_is_copy_for_mir(&ty, &mir_ty);
+        let is_copy = self.compute_is_copy_for_local(&ty, &mir_ty, is_prop);
         self.body.local_decls.push(LocalDecl {
             ty: mir_ty,
             name,
@@ -1823,6 +2015,94 @@ impl<'a> LoweringContext<'a> {
         }
         self.terminate(terminator);
         self.current_span = prev;
+    }
+
+    /// Whether `term` is a type (its type is a sort). Types are erased at run time. The head of
+    /// an application decides cheaply in the common cases (an inductive type, a sort or a Pi is a
+    /// type; a constructor application is a value); otherwise the term's type is inferred and
+    /// reduced to weak head normal form.
+    fn term_is_type(&self, term: &Rc<Term>) -> bool {
+        let (head, args) = collect_app_spine(term);
+        match &*head {
+            Term::Ind(_, _) | Term::Sort(_) | Term::Pi(_, _, _, _) => return true,
+            Term::Ctor(_, _, _) => return false,
+            _ => {}
+        }
+        // The type of the head, instantiated with the arguments (the arguments are not
+        // re-checked: the term is well typed).
+        let whnf = |ty: Rc<Term>| {
+            whnf_in_ctx(
+                self.kernel_env,
+                &self.checker_ctx,
+                ty,
+                Transparency::Reducible,
+            )
+            .ok()
+        };
+        let Ok(mut ty) = self.infer_term_type(&head) else {
+            return false;
+        };
+        for arg in &args {
+            let Some(ty_norm) = whnf(ty) else {
+                return false;
+            };
+            let Term::Pi(_, body, _, _) = &*ty_norm else {
+                return false;
+            };
+            ty = body.subst(0, arg);
+        }
+        whnf(ty).is_some_and(|ty| matches!(&*ty, Term::Sort(_)))
+    }
+
+    /// Lowers `term`, a proof, into `destination` without evaluating it and without reading any
+    /// variable (the body of a proof-typed closure, which has no captures): a proof of function
+    /// type becomes a capture-free closure (a λ is lowered as such, any other term through its
+    /// eta-expansion), any other proof the unit value it is erased to.
+    fn lower_erased_proof_value(
+        &mut self,
+        term: &Rc<Term>,
+        destination: Place,
+        target: BasicBlock,
+    ) -> LoweringResult<()> {
+        if self.is_erased_proof_function_destination(&destination) {
+            let lam = if matches!(&**term, Term::Lam(..)) {
+                Some(term.clone())
+            } else {
+                self.eta_expand_proof_function(term)?
+            };
+            if let Some(lam) = lam {
+                return self.lower_term(&lam, destination, target);
+            }
+        }
+        let ty = self.body.local_decls[destination.local.index()].ty.clone();
+        let constant = Constant {
+            literal: Literal::Unit,
+            ty,
+        };
+        self.push_statement(Statement::Assign(
+            destination,
+            Rvalue::Use(Operand::Constant(Box::new(constant))),
+        ));
+        self.terminate(Terminator::Goto { target });
+        Ok(())
+    }
+
+    /// The eta-expansion `λx:A. t x` of a term `t` whose type reduces to `Π x:A. B` (the binder
+    /// info and function kind are kept); `None` if the type is not a Pi.
+    fn eta_expand_proof_function(&self, term: &Rc<Term>) -> LoweringResult<Option<Rc<Term>>> {
+        let ty = self.infer_term_type(term)?;
+        let ty_whnf = whnf_in_ctx(
+            self.kernel_env,
+            &self.checker_ctx,
+            ty,
+            Transparency::Reducible,
+        )
+        .map_err(|e| self.lowering_error(format!("Failed to reduce a proof type: {}", e)))?;
+        let Term::Pi(dom, _, info, kind) = &*ty_whnf else {
+            return Ok(None);
+        };
+        let body = Term::app(term.shift(0, 1), Rc::new(Term::Var(0)));
+        Ok(Some(Rc::new(Term::Lam(dom.clone(), body, *info, *kind))))
     }
 
     fn infer_term_type(&self, term: &Rc<Term>) -> LoweringResult<Rc<Term>> {
@@ -2025,6 +2305,55 @@ impl<'a> LoweringContext<'a> {
     ) -> LoweringResult<()> {
         self.ensure_closure_id_map(term);
         let _span_guard = self.enter_term_span(term);
+        if self.is_erased_proof_destination(&destination) && !matches!(&**term, Term::Var(_)) {
+            // A proof is erased at run time, so it is not evaluated: the kernel's ownership
+            // walk never visits proof terms (docs/spec/ownership_model.md, erased positions), and
+            // evaluating them here would move values the kernel considers unused, or run
+            // eliminations of erased proofs (projections out of a `()` at run time).
+            let ty = self.body.local_decls[destination.local.index()].ty.clone();
+            let constant = Constant {
+                literal: Literal::Unit,
+                ty,
+            };
+            self.push_statement(Statement::Assign(
+                destination,
+                Rvalue::Use(Operand::Constant(Box::new(constant))),
+            ));
+            self.terminate(Terminator::Goto { target });
+            return Ok(());
+        }
+        if self.is_erased_proof_function_destination(&destination)
+            && !matches!(
+                &**term,
+                Term::Var(_) | Term::Lam(..) | Term::Const(..) | Term::Ctor(..)
+            )
+        {
+            // A proof of function type produced by a computation (an application, a `let`, an
+            // elimination, ...) is not evaluated either: it is replaced by its eta-expansion
+            // `λx. t x`, which the `Term::Lam` case builds as a capture-free closure whose body
+            // (a proof) is erased.
+            if let Some(eta) = self.eta_expand_proof_function(term)? {
+                return self.lower_term(&eta, destination, target);
+            }
+        }
+        if !matches!(&**term, Term::Var(_)) && self.local_has_stuck_type(&destination) {
+            if let Some(temp) = self.push_temp_for_known_value_into_stuck(term)? {
+                // A value of a known type stored in a place of a type computed at run time
+                // (docs/spec/mir/typing.md, "Types Computed at Run Time"): the value is built
+                // in a temporary of its own type, so that the change of representation is an
+                // assignment between two locals with faithful declared types (constants such
+                // as constructors carry only a placeholder type).
+                self.push_statement(Statement::StorageLive(temp));
+                let value_end = self.new_block();
+                self.lower_term(term, Place::from(temp), value_end)?;
+                self.set_block(value_end);
+                let value = self.local_operand(temp);
+                self.push_statement(Statement::Assign(destination, Rvalue::Use(value)));
+                self.push_statement(Statement::StorageDead(temp));
+                self.terminate(Terminator::Goto { target });
+                return Ok(());
+            }
+        }
         if let Some(nat_value) = self.try_nat_literal(term) {
             let constant = Constant {
                 literal: Literal::Nat(nat_value),
@@ -2084,6 +2413,20 @@ impl<'a> LoweringContext<'a> {
                 self.checker_ctx = saved_ctx;
                 self.set_block(after_body_block);
                 self.push_statement(Statement::StorageDead(temp));
+                self.terminate(Terminator::Goto { target });
+            }
+            Term::App(_, _, _) if self.term_is_type(term) => {
+                // A type APPLICATION (`List Nat`, `Vec A 1`, `T k` with `T : Nat -> Type`) is
+                // erased like a bare inductive or Pi: its value is `()`. Lowering it as a call
+                // would apply the erased head (a `()` placeholder) at run time.
+                let constant = Constant {
+                    literal: Literal::Unit,
+                    ty: MirType::Unit,
+                };
+                self.push_statement(Statement::Assign(
+                    destination,
+                    Rvalue::Use(Operand::Constant(Box::new(constant))),
+                ));
                 self.terminate(Terminator::Goto { target });
             }
             Term::App(_, _, _) => {
@@ -2335,17 +2678,36 @@ impl<'a> LoweringContext<'a> {
                 self.terminate(Terminator::Goto { target });
             }
             Term::Lam(ty, body, _info, kind) => {
+                let borrow_fn_values =
+                    std::mem::replace(&mut self.borrow_fn_captures_in_next_closure, false);
                 let arg_ty = ty.clone();
+                // A closure whose type is a proposition (a Pi ending in Prop) is a proof: the
+                // kernel never walks it and treats it as Copy. Its body produces a proof, which
+                // is erased (never evaluated), so the closure needs no captures: it is built
+                // capture-free (and is therefore Copy), and no captured value is moved or
+                // borrowed by building it.
+                let erased_proof_closure = self.is_prop_type(&self.infer_term_type(term)?)?;
                 let mut free_vars = HashSet::new();
-                collect_free_vars(body, 1, &mut free_vars);
-                let required_modes = self.required_capture_modes_for_closure(ty, body)?;
-                let capture_modes = self.capture_modes_for_required_closure(term, &free_vars)?;
-                self.ensure_capture_modes_complete(term, &free_vars, capture_modes.as_ref())?;
+                if !erased_proof_closure {
+                    collect_free_vars(body, 1, &mut free_vars);
+                }
+                let (required_modes, capture_modes, erased_only) = if erased_proof_closure {
+                    (None, None, HashSet::new())
+                } else {
+                    let required_modes = self.required_capture_modes_for_closure(ty, body)?;
+                    let capture_modes =
+                        self.capture_modes_for_required_closure(term, &free_vars)?;
+                    self.ensure_capture_modes_complete(term, &free_vars, capture_modes.as_ref())?;
+                    let erased_only = self.erased_only_captures(ty, body, &free_vars);
+                    (required_modes, capture_modes, erased_only)
+                };
                 let capture_plan = self.collect_captures(
                     *kind,
                     &free_vars,
                     capture_modes.as_ref(),
                     required_modes.as_ref(),
+                    borrow_fn_values,
+                    &erased_only,
                 )?;
 
                 let mut mir_body = Body::new(2);
@@ -2371,16 +2733,34 @@ impl<'a> LoweringContext<'a> {
                     closure_id_map: self.closure_id_map.clone(),
                     def_name: self.def_name.clone(),
                     current_span: None,
-                    next_region: 1,
+                    // Continue the enclosing body's region counter: the closure body's own
+                    // regions must not coincide with the regions of its captured types
+                    // (allocated by enclosing bodies), which the borrow checker would identify.
+                    next_region: self.next_region,
+                    borrow_fn_captures_in_next_closure: false,
+                    non_copy_closure_locals: HashSet::new(),
+                    copy_closure_locals: HashSet::new(),
                 };
 
                 if destination.projection.is_empty() {
-                    let decl = &mut self.body.local_decls[destination.local.index()];
+                    let local = destination.local;
+                    let all_captures_copy = capture_plan.is_copy.iter().all(|is_copy| *is_copy);
+                    let decl = &mut self.body.local_decls[local.index()];
                     decl.closure_captures.clone_from(&capture_plan.mir_types);
-                    if capture_plan.is_copy.iter().all(|is_copy| *is_copy) {
-                        // Closures with copyable captures can be duplicated by cloning.
-                        // This keeps recursive recursor minor-premise closures reusable.
-                        decl.is_copy = true;
+                    if all_captures_copy {
+                        if !self.non_copy_closure_locals.contains(&local) && !decl.is_copy {
+                            // Closures with copyable captures can be duplicated by cloning.
+                            // This keeps recursive recursor minor-premise closures reusable.
+                            decl.is_copy = true;
+                            self.copy_closure_locals.insert(local);
+                        }
+                    } else {
+                        self.non_copy_closure_locals.insert(local);
+                        if self.copy_closure_locals.remove(&local) {
+                            // An earlier closure written into this local (another arm) made
+                            // it Copy; this one holds a non-Copy capture.
+                            decl.is_copy = false;
+                        }
                     }
                 }
 
@@ -2485,7 +2865,13 @@ impl<'a> LoweringContext<'a> {
                 sub_ctx.checker_ctx = sub_ctx.checker_ctx.push(arg_ty);
 
                 let return_block = sub_ctx.new_block();
-                sub_ctx.lower_term(body, Place::from(Local(0)), return_block)?;
+                if erased_proof_closure {
+                    // The closure captured nothing: its body (a proof) is not evaluated, and
+                    // must not read the outer variables either.
+                    sub_ctx.lower_erased_proof_value(body, Place::from(Local(0)), return_block)?;
+                } else {
+                    sub_ctx.lower_term(body, Place::from(Local(0)), return_block)?;
+                }
                 sub_ctx.set_block(return_block);
                 sub_ctx.terminate_with_term_span(body, Terminator::Return);
 
@@ -2583,6 +2969,8 @@ impl<'a> LoweringContext<'a> {
                     &free_vars,
                     capture_modes.as_ref(),
                     required_modes.as_ref(),
+                    false,
+                    &HashSet::new(),
                 )?;
 
                 let mut mir_body = Body::new(2);
@@ -2608,7 +2996,13 @@ impl<'a> LoweringContext<'a> {
                     closure_id_map: self.closure_id_map.clone(),
                     def_name: self.def_name.clone(),
                     current_span: None,
-                    next_region: 1,
+                    // Continue the enclosing body's region counter: the closure body's own
+                    // regions must not coincide with the regions of its captured types
+                    // (allocated by enclosing bodies), which the borrow checker would identify.
+                    next_region: self.next_region,
+                    borrow_fn_captures_in_next_closure: false,
+                    non_copy_closure_locals: HashSet::new(),
+                    copy_closure_locals: HashSet::new(),
                 };
 
                 if destination.projection.is_empty() {
@@ -2642,12 +3036,13 @@ impl<'a> LoweringContext<'a> {
                     Rc::new(Term::Sort(kernel::ast::Level::Zero)),
                     Some("env".to_string()),
                 )?;
-                if !capture_plan.mir_types.is_empty() {
-                    let mut env_types = Vec::with_capacity(capture_plan.mir_types.len() + 1);
-                    env_types.push(self.lower_type(ty)?);
-                    env_types.extend(capture_plan.mir_types.clone());
-                    sub_ctx.body.local_decls[env_local.index()].closure_captures = env_types;
-                }
+                // env[0] is the fixpoint itself (read below as `self`), env[1..] the captures;
+                // record the self slot even without captures so that the environment shape
+                // matches the body's reads (the typed backend requires it).
+                let mut env_types = Vec::with_capacity(capture_plan.mir_types.len() + 1);
+                env_types.push(self.lower_type(ty)?);
+                env_types.extend(capture_plan.mir_types.clone());
+                sub_ctx.body.local_decls[env_local.index()].closure_captures = env_types;
                 sub_ctx.checker_ctx = outer_checker_ctx.clone();
                 let arg_local = sub_ctx.push_temp_local_with_mir(
                     arg_ty.clone(),
@@ -2726,11 +3121,22 @@ impl<'a> LoweringContext<'a> {
 
                 let return_block = sub_ctx.new_block();
 
-                let shifted_body = body.shift(0, 1);
-                let body_app = Term::app(shifted_body, Rc::new(Term::Var(0)));
-                sub_ctx.lower_term(&body_app, Place::from(Local(0)), return_block)?;
-                sub_ctx.set_block(return_block);
-                sub_ctx.terminate_with_term_span(&body_app, Terminator::Return);
+                // The fixpoint body is a function of the argument. When it is a syntactic λ,
+                // lower its body directly (the argument local plays the role of the λ-binder:
+                // Var(0) = argument, Var(1) = self). Building `(shift body) arg` instead would
+                // create fresh terms whose closures have no span/capture metadata (keyed by
+                // term pointer), so a capturing closure inside the body could not be lowered.
+                if let Term::Lam(_, lam_body, _, _) = &**body {
+                    sub_ctx.lower_term(lam_body, Place::from(Local(0)), return_block)?;
+                    sub_ctx.set_block(return_block);
+                    sub_ctx.terminate_with_term_span(lam_body, Terminator::Return);
+                } else {
+                    let shifted_body = body.shift(0, 1);
+                    let body_app = Term::app(shifted_body, Rc::new(Term::Var(0)));
+                    sub_ctx.lower_term(&body_app, Place::from(Local(0)), return_block)?;
+                    sub_ctx.set_block(return_block);
+                    sub_ctx.terminate_with_term_span(&body_app, Terminator::Return);
+                }
 
                 let body_obj = sub_ctx.body;
                 let index = self.derived_bodies.borrow().len();
@@ -2804,18 +3210,17 @@ impl<'a> LoweringContext<'a> {
         let expected_args = recursor.expected_args;
 
         if args.len() < expected_args {
-            let mut partial_term: Rc<Term> =
-                Rc::new(Term::Rec(ind_name.to_string(), levels.to_vec()));
-            for arg in args.iter() {
-                partial_term = Term::app(partial_term, arg.clone());
-            }
-            let constant = self.constant_for_term(partial_term)?;
-            self.push_statement(Statement::Assign(
-                destination,
-                Rvalue::Use(Operand::Constant(Box::new(constant))),
-            ));
-            self.terminate(Terminator::Goto { target });
-            return Ok(());
+            // An unsaturated recursor application used to be emitted as an opaque constant,
+            // which no backend can execute (the dynamic binary panicked with "OpaqueConst
+            // literal reached codegen", the typed backend's Rust output did not compile).
+            // Reject it here instead, with a hint.
+            return Err(self.lowering_error(format!(
+                "Partially applied recursor for '{}' ({} of {} arguments) is not supported by code generation; apply it to all of its arguments (eta-expand it, e.g. (lam n T ((rec {}) ... n)))",
+                ind_name,
+                args.len(),
+                expected_args,
+                ind_name
+            )));
         }
 
         let major_premise = &args[args.len() - 1];
@@ -2827,14 +3232,53 @@ impl<'a> LoweringContext<'a> {
         let indices_start = minors_start + n_minors;
         let index_terms = &args[indices_start..indices_start + n_indices];
 
+        // Constructor fields with the parameters instantiated. Every binder after the
+        // parameters is a field (implicit binders included): it is stored in the runtime
+        // value (see `ctor_field_templates`) and bound by the kernel's minor premise.
+        let ctor_insts: Vec<Rc<Term>> = decl
+            .ctors
+            .iter()
+            .map(|ctor| instantiate_params(ctor.ty.clone(), params))
+            .collect();
+        let ctor_field_types: Vec<Vec<Rc<Term>>> = ctor_insts
+            .iter()
+            .map(|ctor_inst| peel_pi_binders(ctor_inst).0)
+            .collect();
+        let ctor_has_recursive_field: Vec<bool> = ctor_field_types
+            .iter()
+            .map(|fields| fields.iter().any(|f| is_recursive_head(f, ind_name)))
+            .collect();
+        let unreachable_arms =
+            self.unreachable_rec_arms(ind_name, n_params, &ctor_insts, index_terms);
+
+        if !ctor_has_recursive_field.iter().any(|has_rec| *has_rec) {
+            let constant_motive = motive_is_constant(motive_term, n_indices + 1);
+            return self.lower_rec_alternatives(
+                &ctor_field_types,
+                minor_terms,
+                &unreachable_arms,
+                constant_motive,
+                major_premise,
+                destination,
+                target,
+            );
+        }
+
         let mut param_locals = Vec::new();
         for param in params {
             param_locals.push(self.lower_term_to_local(param)?);
         }
         let motive_local = self.lower_term_to_local(motive_term)?;
         let mut minor_locals = Vec::new();
-        for minor in minor_terms {
-            minor_locals.push(self.lower_term_to_local(minor)?);
+        for (ctor_idx, minor) in minor_terms.iter().enumerate() {
+            // The minor of a constructor with a recursive field is passed to the recursive
+            // call(s) computing the induction hypotheses and then called: lower it as a
+            // duplicable closure where possible (see `borrow_fn_captures_in_next_closure`).
+            self.borrow_fn_captures_in_next_closure =
+                ctor_has_recursive_field[ctor_idx] && matches!(&**minor, Term::Lam(..));
+            let lowered = self.lower_term_to_local(minor);
+            self.borrow_fn_captures_in_next_closure = false;
+            minor_locals.push(lowered?);
         }
         let mut index_locals = Vec::new();
         for idx in index_terms {
@@ -2846,89 +3290,102 @@ impl<'a> LoweringContext<'a> {
         shared_locals.extend_from_slice(&minor_locals);
         shared_locals.extend_from_slice(&index_locals);
 
-        let major_ty = self.infer_term_type(major_premise)?;
-        let temp_major = self.push_temp_local(major_ty, None)?;
-        self.push_statement(Statement::StorageLive(temp_major));
-        let major_block = self.new_block();
-        self.lower_term(major_premise, Place::from(temp_major), major_block)?;
-        self.set_block(major_block);
+        let (temp_major, discr_temp, target_blocks) =
+            self.lower_rec_major_and_switch(major_premise, decl.ctors.len())?;
         let major_adt = match &self.body.local_decls[temp_major.index()].ty {
             MirType::Adt(adt_id, args) => Some((adt_id.clone(), args.clone())),
             _ => None,
         };
-
-        let discr_temp = self.push_mir_local(MirType::Nat, None);
-        self.push_statement(Statement::StorageLive(discr_temp));
-        self.push_statement(Statement::Assign(
-            Place::from(discr_temp),
-            Rvalue::Discriminant(Place::from(temp_major)),
-        ));
-        shared_locals.push(discr_temp);
+        shared_locals.extend(discr_temp);
         shared_locals.push(temp_major);
-
-        let mut target_blocks = Vec::new();
-        let mut values = Vec::new();
-
-        for (ctor_idx, _) in decl.ctors.iter().enumerate() {
-            let arm_block = self.new_block();
-            target_blocks.push(arm_block);
-            values.push(ctor_idx as u128);
-        }
-
-        self.terminate(Terminator::SwitchInt {
-            discr: Operand::Move(Place::from(discr_temp)),
-            targets: SwitchTargets {
-                values,
-                targets: target_blocks.clone(),
-            },
-        });
 
         let base_ctx = self.checker_ctx.clone();
 
         for (i, arm_block) in target_blocks.iter().enumerate() {
             self.set_block(*arm_block);
-            let ctor = &decl.ctors[i];
+            self.checker_ctx = base_ctx.clone();
+            if unreachable_arms[i] {
+                // The constructor's indices clash with the scrutinee's: the kernel-checked
+                // type rules this constructor out, so the arm can never run.
+                self.terminate(Terminator::Unreachable);
+                continue;
+            }
+
+            // Only a duplicable (Copy) minor premise may be handed to the entry function, which
+            // calls it once per recursive occurrence out of MIR's sight: a minor that consumes a
+            // captured value is not Copy and keeps the unpacked lowering, where MIR rejects it.
+            if self.local_is_copy(minor_locals[i])
+                && self.rec_arm_dispatches_to_entry(
+                    ind_name,
+                    &ctor_field_types[i],
+                    &minor_terms[i],
+                )?
+            {
+                // A non-Copy recursive field is consumed by the computation of its induction
+                // hypothesis, and the minor premise does not use it at run time (it binds it
+                // only nominally, as the kernel requires). Unpacking the arm here would move the
+                // field twice (into the IH call and into the minor's argument list), so the
+                // whole major premise is handed to the recursor's entry function instead, which
+                // performs the same dispatch (and passes the minor premise its own copy of the
+                // unused field).
+                let mut rec_args: Vec<Rc<Term>> = params.to_vec();
+                rec_args.push(motive_term.clone());
+                rec_args.extend(minor_terms.iter().cloned());
+                rec_args.extend(index_terms.iter().cloned());
+                let rec_local =
+                    self.push_recursor_entry_local(ind_name, levels, decl, &rec_args)?;
+                let mut entry_args = Vec::new();
+                for &p in &param_locals {
+                    entry_args.push(self.local_operand(p));
+                }
+                entry_args.push(self.local_operand(motive_local));
+                for &m in &minor_locals {
+                    entry_args.push(self.local_operand(m));
+                }
+                for &idx_local in &index_locals {
+                    entry_args.push(self.local_operand(idx_local));
+                }
+                entry_args.push(self.local_operand(temp_major));
+                self.call_with_args(rec_local, &entry_args, Some(destination.clone()))?;
+                let mut dropped = HashSet::new();
+                for local in std::iter::once(&rec_local).chain(shared_locals.iter().rev()) {
+                    if dropped.insert(*local) {
+                        self.push_statement(Statement::StorageDead(*local));
+                    }
+                }
+                self.terminate(Terminator::Goto { target });
+                continue;
+            }
 
             let mut args_for_minor = Vec::new();
-            self.checker_ctx = base_ctx.clone();
 
             let minor_local = minor_locals[i];
-            let ctor_inst = instantiate_params(ctor.ty.clone(), params);
-            let field_types = peel_pi_binders(&ctor_inst).0;
+            let field_types = &ctor_field_types[i];
             let mut field_locals = Vec::new();
             let mut arm_locals = Vec::new();
+            // Field `k`'s type may mention the fields before it: type it in the context
+            // extended with them (it used to be typed in the outer context, which mis-scoped
+            // dependent fields such as `i : Fin n`).
+            let mut field_ctx = base_ctx.clone();
 
             for (field_pos, field_ty) in field_types.iter().enumerate() {
                 let field_place = Place {
                     local: temp_major,
                     projection: vec![PlaceElem::Downcast(i), PlaceElem::Field(field_pos)],
                 };
-                let field_local = if let Some((major_adt_id, major_adt_args)) = &major_adt {
-                    if major_adt_id.name() == "Pair" || major_adt_id.name() == "Comp" {
-                        let field_mir_ty = self
-                            .ids
-                            .adt_layouts()
-                            .field_type(major_adt_id, Some(i), field_pos, major_adt_args)
-                            .ok_or_else(|| {
-                                self.lowering_error(format!(
-                                    "Missing Pair field type for variant {} field {}",
-                                    i, field_pos
-                                ))
-                            })?;
-                        self.push_mir_local(field_mir_ty, None)
-                    } else {
-                        self.push_temp_local(field_ty.clone(), None)?
-                    }
-                } else {
-                    self.push_temp_local(field_ty.clone(), None)?
-                };
+                self.checker_ctx = field_ctx.clone();
+                let field_local =
+                    self.push_rec_field_local(major_adt.as_ref(), i, field_pos, field_ty)?;
+                self.checker_ctx = base_ctx.clone();
+                field_ctx = field_ctx.push(field_ty.clone());
                 self.push_statement(Statement::StorageLive(field_local));
-                let field_is_copy = self.body.local_decls[field_local.index()].is_copy;
-                let field_operand = if field_is_copy {
-                    Operand::Copy(field_place)
-                } else {
-                    Operand::Move(field_place)
-                };
+                let field_operand = self.field_read_operand(
+                    major_adt.as_ref(),
+                    i,
+                    field_pos,
+                    field_place,
+                    field_local,
+                );
                 self.push_statement(Statement::Assign(
                     Place::from(field_local),
                     Rvalue::Use(field_operand),
@@ -2965,30 +3422,13 @@ impl<'a> LoweringContext<'a> {
                         rec_index_terms_final = Some(index_terms.to_vec());
                     }
 
-                    let rec_term = Rc::new(Term::Rec(ind_name.to_string(), levels.to_vec()));
-                    let rec_ty = compute_recursor_type(decl, levels);
                     let mut rec_args: Vec<Rc<Term>> = params.to_vec();
                     rec_args.push(motive_term.clone());
                     rec_args.extend(minor_terms.iter().cloned());
                     let rec_index_terms = rec_index_terms_final.as_deref().unwrap_or(index_terms);
                     rec_args.extend(rec_index_terms.iter().cloned());
-                    let rec_local = if let Some(spec_ty) =
-                        self.specialize_pi_type_with_args_and_last(rec_ty, &rec_args)?
-                    {
-                        // Build the recursor value with the specialized MIR type so the
-                        // assignment and local declaration stay in sync for MIR typing.
-                        let local = self.push_mir_local(spec_ty.clone(), None);
-                        self.push_statement(Statement::StorageLive(local));
-                        let mut constant = self.constant_for_term(rec_term.clone())?;
-                        constant.ty = spec_ty;
-                        self.push_statement(Statement::Assign(
-                            Place::from(local),
-                            Rvalue::Use(Operand::Constant(Box::new(constant))),
-                        ));
-                        local
-                    } else {
-                        self.lower_term_to_local(&rec_term)?
-                    };
+                    let rec_local =
+                        self.push_recursor_entry_local(ind_name, levels, decl, &rec_args)?;
                     let mut ih_args = Vec::new();
                     for &p in &param_locals {
                         ih_args.push(self.local_operand(p));
@@ -3009,6 +3449,7 @@ impl<'a> LoweringContext<'a> {
                     args_for_minor.push(self.local_operand(ih_local));
                 }
             }
+            self.checker_ctx = base_ctx.clone();
 
             if args_for_minor.is_empty() {
                 self.push_statement(Statement::Assign(
@@ -3028,8 +3469,507 @@ impl<'a> LoweringContext<'a> {
 
             self.terminate(Terminator::Goto { target });
         }
+        self.checker_ctx = base_ctx;
 
         Ok(())
+    }
+
+    fn local_has_stuck_type(&self, place: &Place) -> bool {
+        place.projection.is_empty()
+            && self
+                .body
+                .local_decls
+                .get(place.local.index())
+                .is_some_and(|decl| decl.ty.is_stuck_type())
+    }
+
+    /// For a term to be stored in a place of a stuck type: a temporary of the term's own type,
+    /// if that type is known (not stuck) and first-order (see `lower_term`).
+    fn push_temp_for_known_value_into_stuck(
+        &mut self,
+        term: &Rc<Term>,
+    ) -> LoweringResult<Option<Local>> {
+        let Ok(term_ty) = self.infer_term_type(term) else {
+            return Ok(None);
+        };
+        let Ok(mir_ty) = self.lower_type(&term_ty) else {
+            return Ok(None);
+        };
+        if !matches!(
+            mir_ty,
+            MirType::Unit | MirType::Bool | MirType::Nat | MirType::Adt(..)
+        ) {
+            return Ok(None);
+        }
+        Ok(Some(self.push_temp_local(term_ty, None)?))
+    }
+
+    /// Lowers the body of an inline alternative (a minor premise of a non-recursive recursor)
+    /// into `destination` when the motive is not constant. The body's type is the motive at the
+    /// alternative's constructor, which for a large elimination can differ from the
+    /// destination's type, the motive at the scrutinee: a stuck type (`MirType::is_stuck_type`,
+    /// e.g. `BoolOrNat b` for an unknown `b`) on one side and a known type on the other, or two
+    /// different known types (`Nat` and `Bool` for a scrutinee known to be `true`, in which case
+    /// the alternative is never taken). The body is then lowered into a temporary of its own
+    /// type and moved into the destination, through a stuck temporary in the second case, so
+    /// that every assignment relates a stuck type and a known one (MIR typing accepts that for
+    /// loan-free known types; see docs/spec/mir/typing.md, "Types Computed at Run Time").
+    fn lower_alternative_body(
+        &mut self,
+        body: &Rc<Term>,
+        destination: Place,
+        target: BasicBlock,
+    ) -> LoweringResult<()> {
+        if !destination.projection.is_empty() {
+            return self.lower_term(body, destination, target);
+        }
+        let dest_ty = self.body.local_decls[destination.local.index()].ty.clone();
+        let Ok(body_kernel_ty) = self.infer_term_type(body) else {
+            return self.lower_term(body, destination, target);
+        };
+        let Ok(body_ty) = self.lower_type(&body_kernel_ty) else {
+            return self.lower_term(body, destination, target);
+        };
+        let route_through_stuck = match (body_ty.is_stuck_type(), dest_ty.is_stuck_type()) {
+            (true, true) => return self.lower_term(body, destination, target),
+            (true, false) | (false, true) => false,
+            (false, false) => {
+                if !known_type_heads_differ(&body_ty, &dest_ty) {
+                    return self.lower_term(body, destination, target);
+                }
+                true
+            }
+        };
+        let temp = self.push_temp_local(body_kernel_ty, None)?;
+        self.push_statement(Statement::StorageLive(temp));
+        let body_end = self.new_block();
+        self.lower_term(body, Place::from(temp), body_end)?;
+        self.set_block(body_end);
+        let value = self.local_operand(temp);
+        if route_through_stuck {
+            let stuck = self.push_mir_local(
+                MirType::Opaque {
+                    reason: crate::types::STUCK_TYPE_REASON.to_string(),
+                },
+                None,
+            );
+            self.push_statement(Statement::StorageLive(stuck));
+            self.push_statement(Statement::Assign(Place::from(stuck), Rvalue::Use(value)));
+            self.push_statement(Statement::Assign(
+                destination,
+                Rvalue::Use(Operand::Move(Place::from(stuck))),
+            ));
+            self.push_statement(Statement::StorageDead(stuck));
+        } else {
+            self.push_statement(Statement::Assign(destination, Rvalue::Use(value)));
+        }
+        self.push_statement(Statement::StorageDead(temp));
+        self.terminate(Terminator::Goto { target });
+        Ok(())
+    }
+
+    /// A local holding the recursor entry function of `ind_name`, typed as the recursor
+    /// specialised to `rec_args` (parameters, motive, minor premises and indices), so that the
+    /// assignment and the local declaration agree for MIR typing.
+    fn push_recursor_entry_local(
+        &mut self,
+        ind_name: &str,
+        levels: &[Level],
+        decl: &kernel::ast::InductiveDecl,
+        rec_args: &[Rc<Term>],
+    ) -> LoweringResult<Local> {
+        let rec_term = Rc::new(Term::Rec(ind_name.to_string(), levels.to_vec()));
+        let rec_ty = compute_recursor_type(decl, levels);
+        if let Some(spec_ty) = self.specialize_pi_type_with_args_and_last(rec_ty, rec_args)? {
+            let local = self.push_mir_local(spec_ty.clone(), None);
+            self.push_statement(Statement::StorageLive(local));
+            let mut constant = self.constant_for_term(rec_term)?;
+            constant.ty = spec_ty;
+            self.push_statement(Statement::Assign(
+                Place::from(local),
+                Rvalue::Use(Operand::Constant(Box::new(constant))),
+            ));
+            Ok(local)
+        } else {
+            self.lower_term_to_local(&rec_term)
+        }
+    }
+
+    /// Whether the arm of a recursive recursor application for a constructor with fields
+    /// `field_types` (parameters instantiated) and minor premise `minor` must be delegated to
+    /// the recursor's entry function: some recursive field is not Copy (computing its
+    /// induction hypothesis consumes it), and `minor` is a λ-chain binding every field and
+    /// induction hypothesis whose body uses none of those non-Copy recursive fields at run
+    /// time. If the body does use one, the arm is unpacked as usual and the ownership check
+    /// reports the double move.
+    fn rec_arm_dispatches_to_entry(
+        &mut self,
+        ind_name: &str,
+        field_types: &[Rc<Term>],
+        minor: &Rc<Term>,
+    ) -> LoweringResult<bool> {
+        let saved_ctx = self.checker_ctx.clone();
+        let result = self.rec_arm_dispatches_to_entry_in_ctx(ind_name, field_types, minor);
+        self.checker_ctx = saved_ctx;
+        result
+    }
+
+    fn rec_arm_dispatches_to_entry_in_ctx(
+        &mut self,
+        ind_name: &str,
+        field_types: &[Rc<Term>],
+        minor: &Rc<Term>,
+    ) -> LoweringResult<bool> {
+        // Binder positions (in the minor's λ-chain) of the non-Copy recursive fields.
+        let base_ctx = self.checker_ctx.clone();
+        let mut non_copy_recursive_binders = Vec::new();
+        let mut binder_count = 0usize;
+        let mut field_ctx = base_ctx.clone();
+        for field_ty in field_types {
+            let recursive = is_recursive_head(field_ty, ind_name);
+            if recursive {
+                self.checker_ctx = field_ctx.clone();
+                let is_prop = self.is_prop_type(field_ty)?;
+                let mir_ty = self.lower_type(field_ty)?;
+                if !self.compute_is_copy_for_local(field_ty, &mir_ty, is_prop) {
+                    non_copy_recursive_binders.push(binder_count);
+                }
+            }
+            field_ctx = field_ctx.push(field_ty.clone());
+            binder_count += if recursive { 2 } else { 1 };
+        }
+        if non_copy_recursive_binders.is_empty() {
+            return Ok(false);
+        }
+
+        // The minor premise is a term of the base context (the loop above left
+        // `self.checker_ctx` at the context of a recursive field; using it here misaligned
+        // the minor's de Bruijn indices whenever the field had predecessors, e.g. `t` in
+        // `cons h t`, so a minor using a captured variable could not be typed).
+        let mut ctx = base_ctx;
+        let mut body = minor.clone();
+        for _ in 0..binder_count {
+            let Term::Lam(dom, inner, _, _) = &*body else {
+                return Ok(false);
+            };
+            ctx = ctx.push(dom.clone());
+            body = inner.clone();
+        }
+        let Ok(runtime) = kernel::checker::term_runtime_variables(self.kernel_env, &ctx, &body)
+        else {
+            return Ok(false);
+        };
+        Ok(non_copy_recursive_binders
+            .iter()
+            .all(|pos| !runtime.contains(&(binder_count - 1 - pos))))
+    }
+
+    /// Lowers the major premise of a recursor application into a fresh local, reads its
+    /// discriminant and terminates the current block with a switch over the constructors.
+    /// Returns the major local, the discriminant local and one (empty) arm block per
+    /// constructor; the caller fills the arms.
+    ///
+    /// A proof (Prop-typed major) of a single-constructor inductive (e.g. `Eq`) is erased at
+    /// run time, so it has no discriminant to read; its only arm is entered directly and no
+    /// discriminant local is created.
+    fn lower_rec_major_and_switch(
+        &mut self,
+        major_premise: &Rc<Term>,
+        num_ctors: usize,
+    ) -> LoweringResult<(Local, Option<Local>, Vec<BasicBlock>)> {
+        let major_ty = self.infer_term_type(major_premise)?;
+        let temp_major = self.push_temp_local(major_ty, None)?;
+        self.push_statement(Statement::StorageLive(temp_major));
+        let major_block = self.new_block();
+        self.lower_term(major_premise, Place::from(temp_major), major_block)?;
+        self.set_block(major_block);
+
+        let mut target_blocks = Vec::new();
+        let mut values = Vec::new();
+        for ctor_idx in 0..num_ctors {
+            let arm_block = self.new_block();
+            target_blocks.push(arm_block);
+            values.push(ctor_idx as u128);
+        }
+
+        if num_ctors == 1 && self.body.local_decls[temp_major.index()].is_prop {
+            self.terminate(Terminator::Goto {
+                target: target_blocks[0],
+            });
+            return Ok((temp_major, None, target_blocks));
+        }
+
+        let discr_temp = self.push_mir_local(MirType::Nat, None);
+        self.push_statement(Statement::StorageLive(discr_temp));
+        self.push_statement(Statement::Assign(
+            Place::from(discr_temp),
+            Rvalue::Discriminant(Place::from(temp_major)),
+        ));
+
+        self.terminate(Terminator::SwitchInt {
+            discr: Operand::Move(Place::from(discr_temp)),
+            targets: SwitchTargets {
+                values,
+                targets: target_blocks.clone(),
+            },
+        });
+        Ok((temp_major, Some(discr_temp), target_blocks))
+    }
+
+    /// Declares the local that receives field `field_pos` of constructor `ctor_idx` when a
+    /// recursor arm unpacks the scrutinee. The caller has set `checker_ctx` to the context
+    /// in which `field_ty` is well scoped.
+    fn push_rec_field_local(
+        &mut self,
+        major_adt: Option<&(AdtId, Vec<MirType>)>,
+        ctor_idx: usize,
+        field_pos: usize,
+        field_ty: &Rc<Term>,
+    ) -> LoweringResult<Local> {
+        if let Some((major_adt_id, major_adt_args)) = major_adt {
+            if major_adt_id.name() == "Pair" || major_adt_id.name() == "Comp" {
+                let field_mir_ty = self
+                    .ids
+                    .adt_layouts()
+                    .field_type(major_adt_id, Some(ctor_idx), field_pos, major_adt_args)
+                    .ok_or_else(|| {
+                        self.lowering_error(format!(
+                            "Missing Pair field type for variant {} field {}",
+                            ctor_idx, field_pos
+                        ))
+                    })?;
+                return Ok(self.push_mir_local(field_mir_ty, None));
+            }
+        }
+        self.push_temp_local(field_ty.clone(), None)
+    }
+
+    /// The operand that reads field `field_pos` of variant `ctor_idx` out of `field_place` into
+    /// `field_local`: a copy when `field_local` is Copy, else a move. Exception: when the field's
+    /// type in the ADT layout is a stuck type (computed at run time, e.g. `F zero` for a
+    /// type-family parameter `F`, which a layout template cannot instantiate), MIR typing sees
+    /// the field place at that non-Copy type, so the field is moved even if the local's known
+    /// type (`K zero`, i.e. `Nat`, for `F := K`) is Copy; a stuck type and a loan-free known type
+    /// meet as in any assignment (docs/spec/mir/typing.md, "Types Computed at Run Time").
+    fn field_read_operand(
+        &self,
+        major_adt: Option<&(AdtId, Vec<MirType>)>,
+        ctor_idx: usize,
+        field_pos: usize,
+        field_place: Place,
+        field_local: Local,
+    ) -> Operand {
+        let place_is_stuck = major_adt.is_some_and(|(adt_id, adt_args)| {
+            self.ids
+                .adt_layouts()
+                .field_type(adt_id, Some(ctor_idx), field_pos, adt_args)
+                .is_some_and(|ty| ty.is_stuck_type())
+        });
+        if self.local_is_copy(field_local) && !place_is_stuck {
+            Operand::Copy(field_place)
+        } else {
+            Operand::Move(field_place)
+        }
+    }
+
+    /// `Rec` on a NON-RECURSIVE inductive (no constructor has a field of the inductive
+    /// itself): the minor premises are alternatives, exactly one of which runs, once. Each
+    /// minor is therefore lowered inside its own switch arm instead of being built as a
+    /// closure before the switch:
+    /// * a minor that is a syntactic λ-chain binding exactly the constructor's fields is
+    ///   inlined: the fields are moved (or copied) out of the scrutinee into locals that play
+    ///   the role of the λ-binders and the body is lowered straight into the destination;
+    /// * any other minor is evaluated in its arm and applied to the fields (a minor of a
+    ///   field-less constructor is just evaluated there).
+    ///
+    /// Consequently an owned outer value used by several minors is moved only on the path
+    /// that runs, and the parameters, motive and indices (needed only by induction
+    /// hypotheses, of which there are none) are not evaluated at all.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_rec_alternatives(
+        &mut self,
+        ctor_field_types: &[Vec<Rc<Term>>],
+        minor_terms: &[Rc<Term>],
+        unreachable_arms: &[bool],
+        constant_motive: bool,
+        major_premise: &Rc<Term>,
+        destination: Place,
+        target: BasicBlock,
+    ) -> LoweringResult<()> {
+        let (temp_major, discr_temp, target_blocks) =
+            self.lower_rec_major_and_switch(major_premise, ctor_field_types.len())?;
+        let major_adt = match &self.body.local_decls[temp_major.index()].ty {
+            MirType::Adt(adt_id, args) => Some((adt_id.clone(), args.clone())),
+            _ => None,
+        };
+        let base_ctx = self.checker_ctx.clone();
+        let base_len = self.debruijn_map.len();
+
+        for (i, arm_block) in target_blocks.iter().enumerate() {
+            self.set_block(*arm_block);
+            self.checker_ctx = base_ctx.clone();
+            if unreachable_arms[i] {
+                self.terminate(Terminator::Unreachable);
+                continue;
+            }
+
+            let field_types = &ctor_field_types[i];
+            let minor = &minor_terms[i];
+
+            // Peel exactly one λ per field.
+            let mut binder_types = Vec::new();
+            let mut minor_body = minor.clone();
+            while binder_types.len() < field_types.len() {
+                let next = match &*minor_body {
+                    Term::Lam(dom, inner, _, _) => Some((dom.clone(), inner.clone())),
+                    _ => None,
+                };
+                let Some((dom, inner)) = next else {
+                    break;
+                };
+                binder_types.push(dom);
+                minor_body = inner;
+            }
+            let inline = binder_types.len() == field_types.len();
+
+            let mut field_locals = Vec::new();
+            for field_pos in 0..field_types.len() {
+                let field_ty = if inline {
+                    binder_types[field_pos].clone()
+                } else {
+                    field_types[field_pos].clone()
+                };
+                let field_local =
+                    self.push_rec_field_local(major_adt.as_ref(), i, field_pos, &field_ty)?;
+                self.push_statement(Statement::StorageLive(field_local));
+                let field_place = Place {
+                    local: temp_major,
+                    projection: vec![PlaceElem::Downcast(i), PlaceElem::Field(field_pos)],
+                };
+                let field_operand = self.field_read_operand(
+                    major_adt.as_ref(),
+                    i,
+                    field_pos,
+                    field_place,
+                    field_local,
+                );
+                self.push_statement(Statement::Assign(
+                    Place::from(field_local),
+                    Rvalue::Use(field_operand),
+                ));
+                field_locals.push(field_local);
+                self.checker_ctx = self.checker_ctx.push(field_ty);
+            }
+
+            let arm_end = self.new_block();
+            let mut minor_local = None;
+            if inline {
+                self.debruijn_map.extend_from_slice(&field_locals);
+                let lowered = if constant_motive {
+                    self.lower_term(&minor_body, destination.clone(), arm_end)
+                } else {
+                    self.lower_alternative_body(&minor_body, destination.clone(), arm_end)
+                };
+                self.debruijn_map.truncate(base_len);
+                lowered?;
+            } else {
+                self.checker_ctx = base_ctx.clone();
+                let local = self.lower_term_to_local(minor)?;
+                minor_local = Some(local);
+                if field_locals.is_empty() {
+                    self.push_statement(Statement::Assign(
+                        destination.clone(),
+                        Rvalue::Use(self.local_operand(local)),
+                    ));
+                } else {
+                    let field_operands: Vec<Operand> = field_locals
+                        .iter()
+                        .map(|field_local| self.local_operand(*field_local))
+                        .collect();
+                    self.call_with_args(local, &field_operands, Some(destination.clone()))?;
+                }
+                self.terminate(Terminator::Goto { target: arm_end });
+            }
+            self.set_block(arm_end);
+            self.checker_ctx = base_ctx.clone();
+
+            if let Some(local) = minor_local {
+                self.push_statement(Statement::StorageDead(local));
+            }
+            for local in field_locals.iter().rev() {
+                self.push_statement(Statement::StorageDead(*local));
+            }
+            if let Some(discr_temp) = discr_temp {
+                self.push_statement(Statement::StorageDead(discr_temp));
+            }
+            self.push_statement(Statement::StorageDead(temp_major));
+            self.terminate(Terminator::Goto { target });
+        }
+        self.checker_ctx = base_ctx;
+        Ok(())
+    }
+
+    /// For each constructor, whether its arm of a `Rec` application is unreachable because
+    /// the constructor's result indices clash with the scrutinee's indices (`index_terms`,
+    /// normalised): e.g. `nil : Vec A zero` can never be the scrutinee of type
+    /// `Vec A (succ n)`. Only constructor-headed index terms are compared (no confusion of
+    /// distinct constructors); anything else counts as possibly equal, so this is sound for
+    /// kernel-checked programs and conservative otherwise. Pruning such arms matters for
+    /// "large" eliminations whose motive computes a different type in the impossible case.
+    fn unreachable_rec_arms(
+        &self,
+        ind_name: &str,
+        n_params: usize,
+        ctor_insts: &[Rc<Term>],
+        index_terms: &[Rc<Term>],
+    ) -> Vec<bool> {
+        ctor_insts
+            .iter()
+            .map(|ctor_inst| {
+                if index_terms.is_empty() {
+                    return false;
+                }
+                let (_, ctor_result) = peel_pi_binders(ctor_inst);
+                match extract_inductive_indices(&ctor_result, ind_name, n_params) {
+                    Some(ctor_indices) if ctor_indices.len() == index_terms.len() => index_terms
+                        .iter()
+                        .zip(ctor_indices.iter())
+                        .any(|(major_idx, ctor_idx)| self.index_terms_clash(major_idx, ctor_idx)),
+                    _ => false,
+                }
+            })
+            .collect()
+    }
+
+    /// `major` lives in the current context (it is normalised here); `ctor_side` is a
+    /// constructor's result index under the constructor's field binders (only its
+    /// constructor structure is inspected, never its variables).
+    fn index_terms_clash(&self, major: &Rc<Term>, ctor_side: &Rc<Term>) -> bool {
+        let (ctor_head, ctor_args) = collect_app_spine(ctor_side);
+        let Term::Ctor(ctor_name, ctor_idx, _) = &*ctor_head else {
+            return false;
+        };
+        // Normalisation failure only means "unknown": the arm is kept.
+        let Ok(major_norm) = whnf_in_ctx(
+            self.kernel_env,
+            &self.checker_ctx,
+            major.clone(),
+            Transparency::Reducible,
+        ) else {
+            return false;
+        };
+        let (major_head, major_args) = collect_app_spine(&major_norm);
+        let Term::Ctor(major_name, major_idx, _) = &*major_head else {
+            return false;
+        };
+        if major_name != ctor_name || major_idx != ctor_idx {
+            return true;
+        }
+        major_args.len() == ctor_args.len()
+            && major_args
+                .iter()
+                .zip(ctor_args.iter())
+                .any(|(major_arg, ctor_arg)| self.index_terms_clash(major_arg, ctor_arg))
     }
 
     fn get_ctor_arity(&self, ind_name: &str, ctor_idx: usize) -> Option<usize> {
@@ -3104,7 +4044,7 @@ fn opaque_reason(term: &Rc<Term>) -> String {
             match &*head {
                 Term::Const(name, _) => format!("app {}", name),
                 Term::Ind(name, _) => format!("app ind {}", name),
-                _ => "app".to_string(),
+                _ => crate::types::STUCK_TYPE_REASON.to_string(),
             }
         }
         Term::Pi(_, _, _, _) => "pi".to_string(),
@@ -3160,13 +4100,15 @@ fn instantiate_params(mut ty: Rc<Term>, params: &[Rc<Term>]) -> Rc<Term> {
     ty
 }
 
+/// Binder domains of a (parameter-instantiated) constructor type, and its result type.
+/// All binders are returned, implicit ones included: they are fields of the runtime value
+/// (`ctor_field_templates` in types.rs keeps them) and the kernel's minor premises bind
+/// them, so skipping them would misalign field positions and minor arguments.
 fn peel_pi_binders(ty: &Rc<Term>) -> (Vec<Rc<Term>>, Rc<Term>) {
     let mut binders = Vec::new();
     let mut current = ty.clone();
-    while let Term::Pi(dom, body, info, _) = &*current {
-        if *info == BinderInfo::Default {
-            binders.push(dom.clone());
-        }
+    while let Term::Pi(dom, body, _, _) = &*current {
+        binders.push(dom.clone());
         current = body.clone();
     }
     (binders, current)
@@ -3358,7 +4300,8 @@ mod tests {
     fn test_malformed_borrow_application_reports_lowering_error() {
         let env = Env::new();
         let ids = IdRegistry::from_env(&env);
-        let ret_ty = Rc::new(Term::Sort(Level::Zero));
+        // Not `Prop`: a destination of type `Prop` holds an erased proposition and is not lowered.
+        let ret_ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
         let malformed = Term::app(
             Rc::new(Term::Const("borrow_shared".to_string(), vec![])),
             Rc::new(Term::Const("not_a_var".to_string(), vec![])),
@@ -3402,7 +4345,8 @@ mod tests {
     fn test_capturing_closure_missing_capture_metadata_fails_closed() {
         let env = Env::new();
         let ids = IdRegistry::from_env(&env);
-        let ret_ty = Rc::new(Term::Sort(Level::Zero));
+        // Not `Prop`: a destination of type `Prop` holds an erased proposition and is not lowered.
+        let ret_ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
         let captured_ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
         let term = Rc::new(Term::Lam(
             captured_ty.clone(),
@@ -3437,7 +4381,8 @@ mod tests {
     fn test_capturing_closure_missing_span_metadata_fails_closed() {
         let env = Env::new();
         let ids = IdRegistry::from_env(&env);
-        let ret_ty = Rc::new(Term::Sort(Level::Zero));
+        // Not `Prop`: a destination of type `Prop` holds an erased proposition and is not lowered.
+        let ret_ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
         let captured_ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
         let term = Rc::new(Term::Lam(
             captured_ty.clone(),
@@ -3525,7 +4470,8 @@ mod tests {
 
         let env = Env::new();
         let ids = IdRegistry::from_env(&env);
-        let ret_ty = Rc::new(Term::Sort(Level::Zero));
+        // Not `Prop`: a destination of type `Prop` holds an erased proposition and is not lowered.
+        let ret_ty = Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))));
         let mut ctx =
             LoweringContext::new(vec![], ret_ty, &env, &ids).expect("context init should succeed");
         let target = ctx.new_block();
@@ -3885,6 +4831,573 @@ mod tests {
             lam_decl.is_copy,
             "closure with Copy environment should be Copy"
         );
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Recursor lowering: alternatives for non-recursive inductives, Copy minor closures
+    // ---------------------------------------------------------------------------------
+
+    fn sort1() -> Rc<Term> {
+        Rc::new(Term::Sort(Level::Succ(Box::new(Level::Zero))))
+    }
+
+    fn fn_pi(dom: Rc<Term>, cod: Rc<Term>) -> Rc<Term> {
+        Rc::new(Term::Pi(dom, cod, BinderInfo::Default, FunctionKind::Fn))
+    }
+
+    fn konst(name: &str) -> Rc<Term> {
+        Rc::new(Term::Const(name.to_string(), vec![]))
+    }
+
+    fn ind(name: &str) -> Rc<Term> {
+        Rc::new(Term::Ind(name.to_string(), vec![]))
+    }
+
+    /// `Tok` is an opaque, non-Copy resource type and `close`, `finish : Tok -> R` consume
+    /// it. `B` (two field-less constructors) and `Opt` (`none`, `some : R -> Opt`) are
+    /// non-recursive; `L` (`lnil`, `lcons : L -> L`) is recursive.
+    fn env_for_rec_lowering() -> Env {
+        let mut env = Env::new();
+        env.add_definition(Definition::axiom("Tok".to_string(), sort1()))
+            .expect("Tok");
+        env.add_definition(Definition::axiom("R".to_string(), sort1()))
+            .expect("R");
+        let consume_ty = fn_pi(konst("Tok"), konst("R"));
+        env.add_definition(Definition::axiom("close".to_string(), consume_ty.clone()))
+            .expect("close");
+        env.add_definition(Definition::axiom("finish".to_string(), consume_ty))
+            .expect("finish");
+        let ctor = |name: &str, ty: Rc<Term>| kernel::ast::Constructor {
+            name: name.to_string(),
+            ty,
+        };
+        env.add_inductive(InductiveDecl::new(
+            "B".to_string(),
+            sort1(),
+            vec![ctor("bt", ind("B")), ctor("bf", ind("B"))],
+        ))
+        .expect("B");
+        env.add_inductive(InductiveDecl::new(
+            "Opt".to_string(),
+            sort1(),
+            vec![
+                ctor("none", ind("Opt")),
+                ctor("some", fn_pi(konst("R"), ind("Opt"))),
+            ],
+        ))
+        .expect("Opt");
+        env.add_inductive(InductiveDecl::new(
+            "L".to_string(),
+            sort1(),
+            vec![
+                ctor("lnil", ind("L")),
+                ctor("lcons", fn_pi(ind("L"), ind("L"))),
+            ],
+        ))
+        .expect("L");
+        env
+    }
+
+    /// `(rec I) (λ _:I. R) minors... major`, non-dependent motive into `R`.
+    fn rec_app(ind_name: &str, minors: Vec<Rc<Term>>, major: Rc<Term>) -> Rc<Term> {
+        let rec = Rc::new(Term::Rec(
+            ind_name.to_string(),
+            vec![Level::Succ(Box::new(Level::Zero))],
+        ));
+        let motive = Rc::new(Term::Lam(
+            ind(ind_name),
+            konst("R"),
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        ));
+        let mut term = Term::app(rec, motive);
+        for minor in minors {
+            term = Term::app(term, minor);
+        }
+        Term::app(term, major)
+    }
+
+    /// Lowers `term : R` in the context `c : Tok, x : major_ty` and returns the ownership
+    /// errors of the resulting body together with the body and its derived closure bodies.
+    fn lower_with_token(
+        env: &Env,
+        major_ty: Rc<Term>,
+        term: &Rc<Term>,
+    ) -> (Vec<String>, Body, usize) {
+        let ids = IdRegistry::from_env(env);
+        let mut ctx = LoweringContext::new(
+            vec![("c".to_string(), konst("Tok")), ("x".to_string(), major_ty)],
+            konst("R"),
+            env,
+            &ids,
+        )
+        .expect("context init should succeed");
+        let target = ctx.new_block();
+        ctx.lower_term(term, Place::from(Local(0)), target)
+            .expect("lowering should succeed");
+        ctx.set_block(target);
+        ctx.terminate(Terminator::Return);
+        let closures = ctx.derived_bodies.borrow().len();
+        let mut body = ctx.finish();
+        crate::transform::storage::insert_exit_storage_deads(&mut body);
+        let mut ownership = crate::analysis::ownership::OwnershipAnalysis::new(&body);
+        ownership.analyze();
+        let errors = ownership
+            .check_structured()
+            .iter()
+            .map(|e| e.to_string())
+            .collect();
+        (errors, body, closures)
+    }
+
+    fn count_unreachable(body: &Body) -> usize {
+        body.basic_blocks
+            .iter()
+            .filter(|bb| matches!(bb.terminator, Some(Terminator::Unreachable)))
+            .count()
+    }
+
+    /// R4: the minors of a non-recursive inductive are alternatives. `c` is consumed by both
+    /// field-less minors (`close c` / `finish c`); each is lowered in its own arm, so `c` is
+    /// moved once on every path. (Before, both minors were evaluated before the switch:
+    /// a use of a moved value.)
+    #[test]
+    fn test_rec_non_recursive_minors_consume_same_value_in_each_arm() {
+        let env = env_for_rec_lowering();
+        // Context: c = Var(1), x = Var(0).
+        let close_c = Term::app(konst("close"), Rc::new(Term::Var(1)));
+        let finish_c = Term::app(konst("finish"), Rc::new(Term::Var(1)));
+        let term = rec_app("B", vec![close_c, finish_c], Rc::new(Term::Var(0)));
+        let (errors, body, closures) = lower_with_token(&env, ind("B"), &term);
+        assert!(
+            errors.is_empty(),
+            "expected no ownership errors, got {:?}",
+            errors
+        );
+        assert_eq!(closures, 0, "no minor closure should be created");
+        let moves_of_c = body
+            .basic_blocks
+            .iter()
+            .flat_map(|bb| bb.statements.iter())
+            .filter(|stmt| {
+                matches!(stmt, Statement::Assign(_, Rvalue::Use(Operand::Move(place)))
+                    if place.local == Local(1) && place.projection.is_empty())
+            })
+            .count();
+        assert_eq!(
+            moves_of_c, 2,
+            "c must be moved once in each of the two arms"
+        );
+    }
+
+    /// R4: a minor that is a λ binding exactly the constructor's fields is inlined (no
+    /// closure); the field is moved out of the scrutinee into a local, and the captured
+    /// token may still be consumed in both arms.
+    #[test]
+    fn test_rec_non_recursive_lambda_minor_is_inlined() {
+        let env = env_for_rec_lowering();
+        let close_c = Term::app(konst("close"), Rc::new(Term::Var(1)));
+        // λ r:R. finish c   (under the binder, c = Var(2))
+        let some_minor = Rc::new(Term::Lam(
+            konst("R"),
+            Term::app(konst("finish"), Rc::new(Term::Var(2))),
+            BinderInfo::Default,
+            FunctionKind::FnOnce,
+        ));
+        let term = rec_app("Opt", vec![close_c, some_minor], Rc::new(Term::Var(0)));
+        let (errors, body, closures) = lower_with_token(&env, ind("Opt"), &term);
+        assert!(
+            errors.is_empty(),
+            "expected no ownership errors, got {:?}",
+            errors
+        );
+        assert_eq!(
+            closures, 0,
+            "the λ minor must be inlined, not built as a closure"
+        );
+        let field_reads = body
+            .basic_blocks
+            .iter()
+            .flat_map(|bb| bb.statements.iter())
+            .filter(|stmt| {
+                matches!(stmt, Statement::Assign(_, Rvalue::Use(Operand::Move(place)))
+                    if place.projection == vec![PlaceElem::Downcast(1), PlaceElem::Field(0)])
+            })
+            .count();
+        assert_eq!(field_reads, 1, "the `some` field must be bound in its arm");
+    }
+
+    /// The recursive lowering is unchanged: for `L` the minors are still built as closures
+    /// before the switch, so consuming `c` in two minors is rejected (the cons minor is
+    /// called once per element; only the kernel/MIR rules for repeated minors apply).
+    #[test]
+    fn test_rec_recursive_minors_still_built_before_switch() {
+        let env = env_for_rec_lowering();
+        let close_c = Term::app(konst("close"), Rc::new(Term::Var(1)));
+        // λ t:L. λ ih:R. finish c   (c = Var(3))
+        let cons_minor = Rc::new(Term::Lam(
+            ind("L"),
+            Rc::new(Term::Lam(
+                konst("R"),
+                Term::app(konst("finish"), Rc::new(Term::Var(3))),
+                BinderInfo::Default,
+                FunctionKind::FnOnce,
+            )),
+            BinderInfo::Default,
+            FunctionKind::FnOnce,
+        ));
+        let term = rec_app("L", vec![close_c, cons_minor], Rc::new(Term::Var(0)));
+        let (errors, _body, closures) = lower_with_token(&env, ind("L"), &term);
+        assert!(closures >= 1, "recursive minors must still be closures");
+        assert!(
+            errors.iter().any(|e| e.contains("moved")),
+            "expected a use-after-move error for the recursive lowering, got {:?}",
+            errors
+        );
+    }
+
+    /// `env_for_rec_lowering` plus `TL` (`tnil | tcons (h : Tok) (t : TL)`, non-Copy because
+    /// `Tok` is opaque) and `use_tl : TL -> R`.
+    fn env_with_token_list() -> Env {
+        let mut env = env_for_rec_lowering();
+        let ctor = |name: &str, ty: Rc<Term>| kernel::ast::Constructor {
+            name: name.to_string(),
+            ty,
+        };
+        env.add_inductive(InductiveDecl::new(
+            "TL".to_string(),
+            sort1(),
+            vec![
+                ctor("tnil", ind("TL")),
+                ctor("tcons", fn_pi(konst("Tok"), fn_pi(ind("TL"), ind("TL")))),
+            ],
+        ))
+        .expect("TL");
+        env.add_definition(Definition::axiom(
+            "use_tl".to_string(),
+            fn_pi(ind("TL"), konst("R")),
+        ))
+        .expect("use_tl");
+        env
+    }
+
+    /// `λ h:Tok. λ t:TL. λ ih:R. body` (in `body`: h = Var(2), t = Var(1), ih = Var(0)).
+    fn tcons_minor(body: Rc<Term>) -> Rc<Term> {
+        Rc::new(Term::Lam(
+            konst("Tok"),
+            Rc::new(Term::Lam(
+                ind("TL"),
+                Rc::new(Term::Lam(
+                    konst("R"),
+                    body,
+                    BinderInfo::Default,
+                    FunctionKind::FnOnce,
+                )),
+                BinderInfo::Default,
+                FunctionKind::FnOnce,
+            )),
+            BinderInfo::Default,
+            FunctionKind::FnOnce,
+        ))
+    }
+
+    fn moves_of_projection(body: &Body, projection: &[PlaceElem]) -> usize {
+        body.basic_blocks
+            .iter()
+            .flat_map(|bb| bb.statements.iter())
+            .filter(|stmt| {
+                matches!(stmt, Statement::Assign(_, Rvalue::Use(Operand::Move(place)))
+                    if place.projection == projection)
+            })
+            .count()
+    }
+
+    /// A non-Copy recursive field is consumed by the computation of its induction hypothesis.
+    /// When the minor premise does not use the field at run time, its arm is not unpacked in
+    /// MIR (which would move the field twice): the major premise goes to the recursor's entry
+    /// function, and the ownership check passes.
+    #[test]
+    fn test_rec_arm_with_unused_non_copy_recursive_field_dispatches_to_entry() {
+        let env = env_with_token_list();
+        // tnil: close c (c = Var(1)); tcons: λ h t ih. finish h
+        let close_c = Term::app(konst("close"), Rc::new(Term::Var(1)));
+        let cons_minor = tcons_minor(Term::app(konst("finish"), Rc::new(Term::Var(2))));
+        let term = rec_app("TL", vec![close_c, cons_minor], Rc::new(Term::Var(0)));
+        let (errors, body, _closures) = lower_with_token(&env, ind("TL"), &term);
+        assert!(
+            errors.is_empty(),
+            "expected no ownership errors, got {:?}",
+            errors
+        );
+        assert_eq!(
+            moves_of_projection(&body, &[PlaceElem::Downcast(1), PlaceElem::Field(1)]),
+            0,
+            "the tcons arm must not unpack the recursive field"
+        );
+        let entry_calls = body
+            .basic_blocks
+            .iter()
+            .flat_map(|bb| bb.statements.iter())
+            .filter(|stmt| {
+                matches!(stmt, Statement::Assign(_, Rvalue::Use(Operand::Constant(c)))
+                    if matches!(c.literal, Literal::Recursor(ref name) if name == "TL"))
+            })
+            .count();
+        assert_eq!(
+            entry_calls, 1,
+            "the tcons arm must call the recursor entry once"
+        );
+    }
+
+    /// A minor premise that uses a non-Copy recursive field at run time is still unpacked, and
+    /// MIR reports the double move itself (the field goes to the induction hypothesis and to
+    /// the minor premise).
+    #[test]
+    fn test_rec_arm_using_non_copy_recursive_field_is_still_rejected() {
+        let env = env_with_token_list();
+        let close_c = Term::app(konst("close"), Rc::new(Term::Var(1)));
+        let cons_minor = tcons_minor(Term::app(konst("use_tl"), Rc::new(Term::Var(1))));
+        let term = rec_app("TL", vec![close_c, cons_minor], Rc::new(Term::Var(0)));
+        let (errors, body, _closures) = lower_with_token(&env, ind("TL"), &term);
+        assert_eq!(
+            moves_of_projection(&body, &[PlaceElem::Downcast(1), PlaceElem::Field(1)]),
+            1,
+            "the tcons arm must unpack the recursive field"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("moved")),
+            "expected a use-after-move error, got {:?}",
+            errors
+        );
+    }
+
+    /// A recursive-case minor premise that consumes a captured value is not Copy: it is not
+    /// handed to the recursor's entry function (which would call it once per recursive
+    /// occurrence, out of MIR's sight), so MIR still sees, and rejects, the repeated use
+    /// (the kernel rejects the program first, `ConsumedInRepeatedScope`).
+    #[test]
+    fn test_rec_arm_with_consuming_minor_is_not_dispatched() {
+        let mut env = env_with_token_list();
+        env.add_definition(Definition::axiom("r0".to_string(), konst("R")))
+            .expect("r0");
+        // tnil: r0; tcons: λ h t ih. finish c (c = Var(4) under the three binders)
+        let cons_minor = tcons_minor(Term::app(konst("finish"), Rc::new(Term::Var(4))));
+        let term = rec_app("TL", vec![konst("r0"), cons_minor], Rc::new(Term::Var(0)));
+        let (errors, body, _closures) = lower_with_token(&env, ind("TL"), &term);
+        assert_eq!(
+            moves_of_projection(&body, &[PlaceElem::Downcast(1), PlaceElem::Field(1)]),
+            1,
+            "the tcons arm of a consuming minor must be unpacked"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("moved")),
+            "expected a use-after-move error, got {:?}",
+            errors
+        );
+    }
+
+    /// A local written by the arms of an inline `match` is Copy only if every closure written
+    /// into it is: here one arm stores a closure that consumes the captured token `c` and the
+    /// other a capture-free closure, and the local `g` is called twice. MIR must reject the
+    /// second call (the kernel rejects the program first, `UseAfterMove` of `g`; before, the
+    /// capture-free arm made the local Copy and MIR accepted it, stage-matrix probe g5).
+    #[test]
+    fn test_local_written_by_consuming_and_capture_free_closures_is_not_copy() {
+        let mut env = env_for_rec_lowering();
+        env.add_definition(Definition::axiom(
+            "combine".to_string(),
+            fn_pi(konst("R"), fn_pi(konst("R"), konst("R"))),
+        ))
+        .expect("combine");
+        env.add_definition(Definition::axiom("r0".to_string(), konst("R")))
+            .expect("r0");
+        let once_pi = |dom: Rc<Term>, cod: Rc<Term>| {
+            Rc::new(Term::Pi(
+                dom,
+                cod,
+                BinderInfo::Default,
+                FunctionKind::FnOnce,
+            ))
+        };
+        let once_lam = |dom: Rc<Term>, body: Rc<Term>| {
+            Rc::new(Term::Lam(
+                dom,
+                body,
+                BinderInfo::Default,
+                FunctionKind::FnOnce,
+            ))
+        };
+        let g_ty = once_pi(konst("R"), konst("R"));
+        // Context: c = Var(1), x = Var(0). Under the arm's binder k: k = Var(0), c = Var(2).
+        let consuming = once_lam(
+            konst("R"),
+            Term::app(
+                Term::app(konst("combine"), Rc::new(Term::Var(0))),
+                Term::app(konst("close"), Rc::new(Term::Var(2))),
+            ),
+        );
+        let capture_free = once_lam(konst("R"), Rc::new(Term::Var(0)));
+        let motive = Rc::new(Term::Lam(
+            ind("B"),
+            g_ty.clone(),
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        ));
+        let rec = Rc::new(Term::Rec(
+            "B".to_string(),
+            vec![Level::Succ(Box::new(Level::Zero))],
+        ));
+        // Both orders: the consuming closure written first, or second (then the local was
+        // already made Copy by the capture-free one and must be downgraded).
+        for (first, second) in [
+            (consuming.clone(), capture_free.clone()),
+            (capture_free, consuming),
+        ] {
+            let pick = Term::app(
+                Term::app(
+                    Term::app(Term::app(rec.clone(), motive.clone()), first),
+                    second,
+                ),
+                Rc::new(Term::Var(0)),
+            );
+            // let g = pick in combine (g r0) (g r0)
+            let call_g = Term::app(Rc::new(Term::Var(0)), konst("r0"));
+            let body = Term::app(Term::app(konst("combine"), call_g.clone()), call_g);
+            let term = Rc::new(Term::LetE(g_ty.clone(), pick, body));
+            let (errors, _body, _closures) = lower_with_token(&env, ind("B"), &term);
+            assert!(
+                errors.iter().any(|e| e.contains("moved")),
+                "expected a use-after-move error for the second call of g, got {:?}",
+                errors
+            );
+        }
+    }
+
+    /// Arms whose constructor indices clash with the scrutinee's indices are unreachable:
+    /// `Rec_Fin` on `Fin (succ zero)` cannot take a branch typed at `Fin zero`.
+    #[test]
+    fn test_rec_arm_with_clashing_index_is_unreachable() {
+        let mut env = env_for_rec_lowering();
+        let ctor = |name: &str, ty: Rc<Term>| kernel::ast::Constructor {
+            name: name.to_string(),
+            ty,
+        };
+        // inductive N : Type | nz | ns (n : N); inductive F : N -> Type | f0 : F nz | f1 : F (ns nz)
+        env.add_inductive(InductiveDecl::new(
+            "N".to_string(),
+            sort1(),
+            vec![ctor("nz", ind("N")), ctor("ns", fn_pi(ind("N"), ind("N")))],
+        ))
+        .expect("N");
+        let nz = Rc::new(Term::Ctor("N".to_string(), 0, vec![]));
+        let ns_nz = Term::app(Rc::new(Term::Ctor("N".to_string(), 1, vec![])), nz.clone());
+        env.add_inductive(InductiveDecl::new(
+            "F".to_string(),
+            fn_pi(ind("N"), sort1()),
+            vec![
+                ctor("f0", Term::app(ind("F"), nz.clone())),
+                ctor("f1", Term::app(ind("F"), ns_nz.clone())),
+            ],
+        ))
+        .expect("F");
+        let rec = Rc::new(Term::Rec(
+            "F".to_string(),
+            vec![Level::Succ(Box::new(Level::Zero))],
+        ));
+        // motive λ k:N. λ _:F k. R
+        let motive = Rc::new(Term::Lam(
+            ind("N"),
+            Rc::new(Term::Lam(
+                Term::app(ind("F"), Rc::new(Term::Var(0))),
+                konst("R"),
+                BinderInfo::Default,
+                FunctionKind::Fn,
+            )),
+            BinderInfo::Default,
+            FunctionKind::Fn,
+        ));
+        let close_c = Term::app(konst("close"), Rc::new(Term::Var(1)));
+        let finish_c = Term::app(konst("finish"), Rc::new(Term::Var(1)));
+        let mut term = Term::app(rec, motive);
+        term = Term::app(term, close_c);
+        term = Term::app(term, finish_c);
+        term = Term::app(term, ns_nz.clone());
+        term = Term::app(term, Rc::new(Term::Var(0)));
+        let (errors, body, _) = lower_with_token(&env, Term::app(ind("F"), ns_nz), &term);
+        assert!(
+            errors.is_empty(),
+            "expected no ownership errors, got {:?}",
+            errors
+        );
+        assert_eq!(
+            count_unreachable(&body),
+            1,
+            "the f0 arm (index nz vs ns nz) must be unreachable"
+        );
+    }
+
+    /// R3: a closure is Copy only when every capture is Copy or a shared reference. A minor
+    /// premise of a recursive constructor keeps an Fn-called (read-only) function capture
+    /// as a shared borrow, which makes it Copy; captures by move or by mutable borrow
+    /// keep it non-Copy.
+    #[test]
+    fn test_minor_closure_copy_rule_for_function_captures() {
+        let env = Env::new();
+        let ids = IdRegistry::from_env(&env);
+        let nat_like = sort1();
+        let f_ty = fn_pi(nat_like.clone(), nat_like.clone());
+        let plan_for = |mode: UsageMode, borrow_fn_values: bool| {
+            let mut ctx = LoweringContext::new(
+                vec![("f".to_string(), f_ty.clone())],
+                Rc::new(Term::Sort(Level::Zero)),
+                &env,
+                &ids,
+            )
+            .expect("context init should succeed");
+            let captured: HashSet<usize> = [0usize].into_iter().collect();
+            let mut modes = CaptureModes::new();
+            modes.insert(0usize, mode);
+            ctx.collect_captures(
+                FunctionKind::FnOnce,
+                &captured,
+                Some(&modes),
+                Some(&modes),
+                borrow_fn_values,
+                &HashSet::new(),
+            )
+            .expect("capture plan")
+        };
+
+        let read = plan_for(UsageMode::Observational, true);
+        assert_eq!(
+            read.is_copy,
+            vec![true],
+            "read-only fn capture is a shared borrow"
+        );
+        assert_eq!(read.borrowed, vec![true]);
+        assert!(matches!(
+            read.mir_types[0],
+            MirType::Ref(_, _, Mutability::Not)
+        ));
+
+        let moved = plan_for(UsageMode::Consuming, true);
+        assert_eq!(
+            moved.is_copy,
+            vec![false],
+            "a moved capture keeps the closure non-Copy"
+        );
+
+        let mutated = plan_for(UsageMode::MutBorrow, true);
+        assert_eq!(
+            mutated.is_copy,
+            vec![false],
+            "a mutably used capture keeps the closure non-Copy"
+        );
+
+        // Outside a recursive minor, function values are still moved into the environment.
+        let ordinary = plan_for(UsageMode::Observational, false);
+        assert_eq!(ordinary.is_copy, vec![false]);
+        assert_eq!(ordinary.borrowed, vec![false]);
     }
 
     #[test]

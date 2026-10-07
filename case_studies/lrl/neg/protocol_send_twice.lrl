@@ -1,0 +1,30 @@
+;; Negative variant of case study B (../protocol.lrl).  The declarations up to the marked line
+;; are copied from protocol.lrl (comments and unused definitions omitted); only the code after
+;; it is new.
+;; Expected: rejected by the kernel, K0021 UseAfterMove naming `c`.
+
+(inductive (affine) Chan (pi n Nat (sort 1))
+  (ctor mk_chan (pi {n Nat} (pi log (List Nat) (Chan n)))))
+(inductive Receipt (sort 1)
+  (ctor receipt (pi log (List Nat) Receipt)))
+(def open_chan (pi n Nat (Chan n))
+  (lam n Nat (mk_chan nil)))
+(def close (pi c (Chan zero) Receipt)
+  (lam c (Chan zero)
+    (match c Receipt (case (mk_chan log) (receipt log)))))
+(defmacro defsend (name payload encode)
+  (def name (pi {n Nat} (pi c (Chan (succ n)) (pi #[once] x payload (Chan n))))
+    (lam {n} Nat (lam c (Chan (succ n)) (lam #[once] x payload
+      (match c (Chan n)
+        (case (mk_chan log) (mk_chan (cons (encode x) log)))))))))
+(def log (pi m Nat Nat) (lam m Nat (print_nat m)))
+(defsend send Nat log)
+
+;; ---- new code ----
+
+;; Sends 7 on `c` and closes the session, then sends again on the SAME channel value `c`
+;; (as if a channel could be replayed).  `c` was moved into the first `send`.
+(def replay (pi c (Chan 1) Receipt)
+  (lam c (Chan 1)
+    (let r Receipt (close (send c 7))
+      (close (send c 7)))))

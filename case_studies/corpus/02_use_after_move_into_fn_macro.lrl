@@ -1,0 +1,13 @@
+;; Class 02 (macro twin) - `burn-and-return` expands to
+;; `(let n Nat (burn t) t)`; the macro's own binder `n` is hygienic and
+;; irrelevant here, the argument `t` is used twice.
+;; Expected: kernel K0021 [UseAfterMove] naming `t`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def burn (pi t Tok Nat)
+  (lam t Tok (match t Nat (case (mk_tok i) i))))
+
+(defmacro burn-and-return (x) `(let n Nat (burn ,x) ,x))
+
+(def burn_then_keep (pi t Tok Tok)
+  (lam t Tok (burn-and-return t)))

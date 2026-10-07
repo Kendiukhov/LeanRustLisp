@@ -1,0 +1,15 @@
+;; MIR-independence probe for the stage matrix (case_studies/tools/run_stage_matrix.sh, set `mir_gaps`).
+;; Regression probe: MIR used to mark a local Copy when ANY closure written into it had only Copy
+;; captures (mir/src/lower.rs). Here the false branch writes a capture-free closure into the local
+;; holding `g`, so the FnOnce closure of the true branch (which moves the token `t`) could be called
+;; twice without an MIR error. A local is now Copy only if every closure written into it is; MIR
+;; reports M100. The kernel rejects `f` (K0021 UseAfterMove 'g').
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok n) n))))
+(def f (pi b Bool (pi t Tok Nat))
+  (lam b Bool (lam t Tok
+    (let g (pi #[once] k Nat Nat)
+      (match b (pi #[once] k Nat Nat)
+        (case (true) (lam #[once] k Nat (add k (burn t))))
+        (case (false) (lam #[once] k Nat k)))
+      (add (g zero) (g zero))))))

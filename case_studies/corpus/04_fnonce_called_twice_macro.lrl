@@ -1,0 +1,7 @@
+;; Class 04 (macro twin) - `sum-of-two-calls` expands to
+;; `(add (f zero) (f zero))`.
+;; Expected: kernel K0021 [UseAfterMove] naming `f`.
+(defmacro sum-of-two-calls (g) `(add (,g zero) (,g zero)))
+
+(def call_twice (pi f (pi #[once] x Nat Nat) Nat)
+  (lam f (pi #[once] x Nat Nat) (sum-of-two-calls f)))

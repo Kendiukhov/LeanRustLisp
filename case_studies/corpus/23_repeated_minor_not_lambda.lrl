@@ -1,0 +1,13 @@
+;; Class 23 - a step case that runs repeatedly is given as a let-bound FnOnce
+;; closure instead of a lambda. The closure consumes the captured token `k`;
+;; since it is not a syntactic lambda, the recursor rule cannot check its body
+;; under the repetition barrier.
+;; Expected: kernel K0021 [RepeatedMinorNotLambda].
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive TL (sort 1) (ctor tnil TL) (ctor tcons (pi h Tok (pi t TL TL))))
+
+(def spread (pi k Tok (pi #[once] n Nat TL))
+  (lam k Tok (lam #[once] n Nat
+    (let f (pi #[once] m Nat (pi #[once] ih TL TL))
+           (lam #[once] m Nat (lam #[once] ih TL (tcons k ih)))
+      ((rec Nat) (lam z Nat TL) tnil f n)))))

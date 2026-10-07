@@ -1,0 +1,4 @@
+;; Class 18 - the `affine` marker together with an explicit Copy request.
+;; `copy` asks the kernel to treat the type as Copy, `(affine)` forbids it.
+;; Expected: kernel K0052 (AffineCopyConflict).
+(inductive copy (affine) Chan (sort 1) (ctor mk_chan (pi id Nat Chan)))

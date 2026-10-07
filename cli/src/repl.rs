@@ -33,6 +33,24 @@ pub struct RunFileOptions {
     pub allow_redefine: bool,
 }
 
+/// Outcome of processing one file with [`run_file`]. Diagnostics have already been printed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunFileReport {
+    /// Last definition admitted by this file (`None` if the file reported any error).
+    pub last_defined: Option<String>,
+    /// Number of error diagnostics reported while processing the file (parse, macro expansion,
+    /// elaboration, kernel, MIR, evaluation gating). A file that cannot be read, or whose
+    /// processing aborts without an error diagnostic, counts as one error.
+    pub error_count: usize,
+}
+
+impl RunFileReport {
+    /// True iff every top-level form of the file was accepted.
+    pub fn succeeded(&self) -> bool {
+        self.error_count == 0
+    }
+}
+
 pub fn start(
     trace_macros: bool,
     panic_free: bool,
@@ -358,7 +376,9 @@ fn handle_repl_line(
                             prelude_frozen: true,
                             allow_redefine: options.allow_redefine,
                         },
-                    ) {
+                    )
+                    .last_defined
+                    {
                         *last_defined = Some(name);
                     }
                     expander.enter_module("repl");
@@ -477,12 +497,16 @@ fn handle_repl_line(
     ReplLineAction::Continue
 }
 
+/// Processes every top-level form of `path` (definitions are admitted into `env`, top-level
+/// expressions are evaluated and printed) and prints the diagnostics. The returned report says
+/// whether any form was rejected; callers that act as a command (`run`, the legacy file mode)
+/// turn a failed report into a non-zero exit status.
 pub fn run_file(
     path: &str,
     env: &mut Env,
     expander: &mut Expander,
     options: RunFileOptions,
-) -> Option<String> {
+) -> RunFileReport {
     match fs::read_to_string(path) {
         Ok(content) => {
             // For file execution, show_eval=true to see output of top-level expressions
@@ -501,11 +525,27 @@ pub fn run_file(
             let result =
                 driver::process_code(&content, path, env, expander, &options, &mut diagnostics);
             print_diagnostics(&diagnostics, path, &content);
-            return extract_last_defined(&result, &diagnostics, env);
+            let mut error_count = diagnostics
+                .diagnostics
+                .iter()
+                .filter(|diag| diag.level == frontend::diagnostics::Level::Error)
+                .count();
+            if result.is_err() && error_count == 0 {
+                error_count = 1;
+            }
+            RunFileReport {
+                last_defined: extract_last_defined(&result, &diagnostics, env),
+                error_count,
+            }
         }
-        Err(e) => println!("Error reading file {}: {:?}", path, e),
+        Err(e) => {
+            println!("Error reading file {}: {:?}", path, e);
+            RunFileReport {
+                last_defined: None,
+                error_count: 1,
+            }
+        }
     }
-    None
 }
 
 fn handle_expand_command(line: &str, command: &str, mode: ExpandMode, expander: &mut Expander) {

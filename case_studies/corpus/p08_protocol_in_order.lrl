@@ -1,0 +1,15 @@
+;; Positive control P08 (nearest legal variant of class 11) - the protocol
+;; operations are applied in the right order: open, then close.
+;; Expected: accepted; main = 1.
+(inductive St (sort 1) (ctor opened St) (ctor closed St))
+(inductive (affine) Door (pi s St (sort 1))
+  (ctor mk_open (Door opened))
+  (ctor mk_closed (Door closed)))
+
+(def open_door (Door opened) mk_open)
+(def close (pi d (Door opened) (Door closed))
+  (lam d (Door opened) mk_closed))
+(def finish (pi d (Door closed) Nat)
+  (lam d (Door closed) 1))
+
+(def main Nat (finish (close open_door)))

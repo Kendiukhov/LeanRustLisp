@@ -407,6 +407,21 @@ impl fmt::Display for BorrowError {
 }
 
 impl BorrowError {
+    /// Where the loan involved in the error was issued, when known.
+    pub fn loan_location(&self) -> Option<MirSpan> {
+        let context = match self {
+            BorrowError::ConflictingBorrow { context, .. }
+            | BorrowError::UseWhileBorrowed { context, .. }
+            | BorrowError::MoveOutOfRef { context, .. }
+            | BorrowError::DanglingReference { context, .. }
+            | BorrowError::EscapingReference { context, .. }
+            | BorrowError::MutateSharedRef { context, .. }
+            | BorrowError::AssignWhileBorrowed { context, .. }
+            | BorrowError::InternalInvariant { context, .. } => context,
+        };
+        context.loan.as_ref().map(|loan| loan.issued_at)
+    }
+
     pub fn location(&self) -> Option<MirSpan> {
         match self {
             BorrowError::ConflictingBorrow { location, .. }

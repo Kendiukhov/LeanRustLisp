@@ -12,5 +12,5 @@ members = [
 version = "0.1.0"
 edition = "2026"
 authors = ["LeanRustLisp Developers"]
-license = "Apache-2.0 OR MIT"
-repository = "https://github.com/leanrustlisp/leanrustlisp"
+license = "MIT"
+repository = "https://github.com/Kendiukhov/LeanRustLisp"

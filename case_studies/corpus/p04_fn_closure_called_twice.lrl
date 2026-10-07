@@ -1,0 +1,14 @@
+;; Positive control P04 (nearest legal variant of classes 04/05) - a closure
+;; that only BORROWS its captured token is Fn: it is called twice, and the
+;; token is moved after the closure's last use.
+;; Expected: accepted; main = 4.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+(def eat (pi t Tok Nat) (lam t Tok (succ (succ zero))))
+
+(def reread (pi t Tok Nat)
+  (lam t Tok
+    (let g (pi u Nat Nat) (lam u Nat (look (& t)))
+      (add (add (g zero) (g zero)) (eat t)))))
+
+(def main Nat (reread (mk_tok 0)))

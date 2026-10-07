@@ -1,0 +1,20 @@
+;; Q4 (negative): forging the evidence. The proof argument of safe_div is produced by an
+;; axiom instead of being proved. Identical to q04_erasure.lrl except for the lines marked
+;; CHANGED. Expected: rejected before running (a total `def` may not depend on an axiom).
+(def safe_div (pi a Nat (pi b Nat (pi p (Eq Bool (nat_is_zero b) false) Nat)))
+  (lam a Nat (lam b Nat (lam p (Eq Bool (nat_is_zero b) false) (nat_div a b)))))
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+(def vsum (pi {n Nat} (pi v (Vec Nat n) Nat))
+  (lam {n} Nat (lam v (Vec Nat n)
+    (match v Nat (case (vnil) zero) (case (vcons h t ih) (add h ih))))))
+
+;; CHANGED: a forged proof that 0 is not zero, postulated as an axiom, and used for divisor 0
+(axiom zero_not_zero (Eq Bool (nat_is_zero 0) false))
+
+(def main Nat
+  (add (print_nat (safe_div 10 0 zero_not_zero))   ;; CHANGED: divisor 0, forged proof
+       (print_nat (vsum (vcons 1 (vcons 2 (vcons 3 vnil)))))))

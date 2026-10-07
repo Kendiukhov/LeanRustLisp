@@ -1,0 +1,30 @@
+;; Q2 (positive): append on length-indexed vectors whose result length is the sum of the
+;; argument lengths, `Vec A n -> Vec A m -> Vec A (add n m)`. Each case type-checks by
+;; computation of `add` (add zero m = m, add (succ k) m = succ (add k m)); the induction
+;; hypothesis `ih` has type `Vec A (add k m)`. `five` checks the claim "2 + 3 elements =
+;; 5 elements" by giving the result the type `Vec Nat 5`; `main` prints the elements.
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+(def vappend (pi {A (sort 1)} (pi {n Nat} (pi {m Nat}
+               (pi xs (Vec A n) (pi #[once] ys (Vec A m) (Vec A (add n m)))))))
+  (lam {A} (sort 1) (lam {n} Nat (lam {m} Nat (lam xs (Vec A n) (lam #[once] ys (Vec A m)
+    (match xs (motive (lam k Nat (lam w (Vec A k) (Vec A (add k m)))))
+      (case (vnil) ys)
+      (case (vcons h t ih) (vcons h ih)))))))))
+
+;; prints the elements in order (print_nat) and returns their number. The match builds a
+;; function of a counter so that each element is printed before the rest of the vector.
+(def vprint (pi {n Nat} (pi v (Vec Nat n) Nat))
+  (lam {n} Nat (lam v (Vec Nat n)
+    ((match v (pi c Nat Nat)
+       (case (vnil) (lam c Nat c))
+       (case (vcons h t ih) (lam c Nat (let p Nat (print_nat h) (ih (succ c))))))
+     zero))))
+
+(def two (Vec Nat 2) (vcons 1 (vcons 2 vnil)))
+(def three (Vec Nat 3) (vcons 3 (vcons 4 (vcons 5 vnil))))
+(def five (Vec Nat 5) (vappend two three))
+
+(def main Nat (vprint five))

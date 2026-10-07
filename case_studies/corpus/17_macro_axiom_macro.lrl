@@ -1,0 +1,8 @@
+;; Class 17 (macro twin) - the axiom is produced by the macro `postulate`.
+;; Macro output may not introduce `axiom`, `unsafe` definitions, `eval` or
+;; `(import classical)`: the expander rejects the expansion at the call site
+;; (macro boundary). `--macro-boundary-warn` downgrades this to a warning.
+;; Expected: macro boundary F0104 (MacroBoundaryDenied).
+(defmacro postulate (name ty) `(axiom ,name ,ty))
+
+(postulate zero_is_one (Eq Nat zero (succ zero)))

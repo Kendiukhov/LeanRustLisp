@@ -1715,8 +1715,8 @@ fn negative_ownership_linear_use_twice() {
     let result = env.add_definition(Definition::total("dup".to_string(), dup_ty, dup_val));
 
     match result {
-        Err(TypeError::OwnershipError(OwnershipError::UseAfterMove(idx))) => {
-            assert_eq!(idx, 0);
+        Err(TypeError::OwnershipError(OwnershipError::UseAfterMove(var))) => {
+            assert_eq!(var.index, 0);
         }
         other => panic!("Expected ownership error, got {:?}", other),
     }
@@ -1771,8 +1771,8 @@ fn negative_implicit_binder_consumes_noncopy() {
     ));
 
     match result {
-        Err(TypeError::OwnershipError(OwnershipError::ImplicitNonCopyUse { index, .. })) => {
-            assert_eq!(index, 0);
+        Err(TypeError::OwnershipError(OwnershipError::ImplicitNonCopyUse { var, .. })) => {
+            assert_eq!(var.index, 0);
         }
         other => panic!("Expected implicit binder ownership error, got {:?}", other),
     }
@@ -2073,7 +2073,7 @@ fn copy_inductive_recursive_field_same_params_allowed() {
     env.add_inductive(list_decl)
         .expect("List copy derivation should succeed when recursion preserves params");
     assert!(
-        env.copy_instances.contains_key("List"),
+        env.copy_instances().contains_key("List"),
         "expected derived Copy instance for List"
     );
 }

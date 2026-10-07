@@ -1,0 +1,9 @@
+;; Class 16 (macro twin) - `peek` expands to `(raw_peek n)`, a call of the
+;; user's unsafe definition (the macro itself introduces no `unsafe` form).
+;; Expected: kernel K0022 (EffectError).
+(unsafe raw_peek (pi n Nat Nat) (lam n Nat n))
+
+(defmacro peek (x) `(raw_peek ,x))
+
+(def total_peek (pi n Nat Nat)
+  (lam n Nat (peek n)))

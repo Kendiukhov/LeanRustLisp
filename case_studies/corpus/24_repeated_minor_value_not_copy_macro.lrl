@@ -1,0 +1,16 @@
+;; Class 24 (macro twin) - `fold-tree` expands to the same match; its pattern
+;; binders are hygienic.
+;; Expected: kernel K0021 [RepeatedMinorValueNotCopy].
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive TL (sort 1) (ctor tnil TL) (ctor tcons (pi h Tok (pi t TL TL))))
+(inductive Tree (sort 1) (ctor leaf Tree) (ctor node (pi l Tree (pi r Tree Tree))))
+(inductive TLP (sort 1) (ctor mk_tlp (pi a TL (pi b TL TLP))))
+
+(defmacro fold-tree (tree at-leaf)
+  `(match ,tree TLP
+     (case (leaf) ,at-leaf)
+     (case (node l ihl r ihr) ihl)))
+
+(def leaves (pi k Tok (pi #[once] t Tree TLP))
+  (lam k Tok (lam #[once] t Tree
+    (fold-tree t (mk_tlp (tcons k tnil) tnil)))))

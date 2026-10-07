@@ -1,0 +1,6 @@
+;; Paper, subsection "Function kinds" (label sec:core:kinds, paper/jot_r1/sections/core.tex): the same as pair_with_inner_pi_unannotated.lrl
+;; with the inner Pi annotated `#[fn]` explicitly.
+;; Expected: F0206 Function kind mismatch: expected Fn, got FnOnce.
+(inductive (affine) Tok (sort 1) (ctor mk_tok Tok))
+(def pair_with (pi a Tok (pi #[fn] b Nat (Pair Tok Nat)))
+  (lam a Tok (lam #[once] b Nat (mk_pair a b))))

@@ -1,0 +1,10 @@
+;; Positive control P13 (macro twin) - `ignore` expands to `zero`, discarding
+;; its argument syntax entirely; the token parameter is never used.
+;; Expected: accepted; main = 0.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(defmacro ignore (x) `zero)
+
+(def drop_it (pi t Tok Nat) (lam t Tok (ignore t)))
+
+(def main Nat (drop_it (mk_tok 9)))

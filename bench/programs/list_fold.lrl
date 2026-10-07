@@ -1,0 +1,28 @@
+;; Benchmark workload list_fold: build a List Nat (prelude List) of n elements at run time and fold
+;; it with the case study's log_sum (protocol.lrl: the sum of a channel log).
+;; Every element is 1, so the result is n.
+;; @SIZE@ is replaced by the driver (bench/run_bench.py) with `(nat_mul A B)` for small literals
+;; A and B, so that n is computed at run time instead of being written as one large unary literal.
+;;
+;; The workload is a function of n and `main` applies it to `size`, as in the vector workloads.
+;;
+;; The forms named on the @copied-from line are copied verbatim from the case study;
+;; `python3 bench/run_bench.py check` verifies that they are still identical to it.
+;; @copied-from case_studies/lrl/protocol.lrl: log_sum
+
+(def log_sum (pi l (List Nat) Nat)
+  (lam l (List Nat) (match l Nat (case (nil) zero) (case (cons x rest ih) (add x ih)))))
+
+;; ---- workload ----
+(def lbuild (pi n Nat (List Nat))
+  (lam n Nat
+    (match n (List Nat)
+      (case (zero) nil)
+      (case (succ k ih) (cons 1 ih)))))
+
+(def size Nat @SIZE@)
+
+(def workload (pi n Nat Nat)
+  (lam n Nat (log_sum (lbuild n))))
+
+(def main Nat (workload size))

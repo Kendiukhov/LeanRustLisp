@@ -99,10 +99,15 @@ fn lrl_corpus_matches_expected_pass_fail_contract_for_typed_and_dynamic() {
         "tests/borrow_edge_cases_negative.lrl",
         "tests/borrow_surface_negative.lrl",
         "tests/indexing_negative.lrl",
-        "tests/prop_elim_eq_bad.lrl",
         "tests/stdlib_sugared_usage.lrl",
     ]);
     let expected_negative_dynamic_only: HashSet<&'static str> = HashSet::new();
+    // `prop_elim_eq_bad.lrl` (its header says "Expected: accept") used to be rejected by a false
+    // K0043: the kernel counted the index and parameter arguments of the `Eq` recursor as moves
+    // of the non-Copy `a`/`b`. The kernel and MIR now accept it and both backends compile it (the
+    // typed backend's Rust output was rejected by rustc with E0283 until the polymorphic entry
+    // definition was instantiated explicitly, docs/spec/codegen/typed-backend.md "Entry Point").
+    let expected_negative_typed_only: HashSet<&'static str> = HashSet::new();
 
     let mut mismatches = Vec::new();
     for backend in ["typed", "dynamic"] {
@@ -113,7 +118,8 @@ fn lrl_corpus_matches_expected_pass_fail_contract_for_typed_and_dynamic() {
                 .to_string_lossy()
                 .replace('\\', "/");
             let should_fail = expected_negative_all_backends.contains(rel.as_str())
-                || (backend == "dynamic" && expected_negative_dynamic_only.contains(rel.as_str()));
+                || (backend == "dynamic" && expected_negative_dynamic_only.contains(rel.as_str()))
+                || (backend == "typed" && expected_negative_typed_only.contains(rel.as_str()));
             if !should_fail {
                 continue;
             }

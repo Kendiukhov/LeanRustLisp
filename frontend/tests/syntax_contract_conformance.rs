@@ -230,6 +230,40 @@ fn desugar_match_requires_at_least_one_case() {
 }
 
 #[test]
+fn desugar_match_reads_motive_clause_as_explicit_motive() {
+    let decls = parse_declarations("(match n (motive (lam k Nat T)) (case (zero) a))")
+        .expect("match with an explicit motive should parse");
+    match &decls[0] {
+        Declaration::Expr(term) => match &term.kind {
+            SurfaceTermKind::Match(_, ret, cases) => {
+                assert!(
+                    matches!(&ret.kind, SurfaceTermKind::MatchMotive(motive)
+                        if matches!(motive.kind, SurfaceTermKind::Lam(..))),
+                    "expected an explicit motive, got {:?}",
+                    ret.kind
+                );
+                assert_eq!(cases.len(), 1);
+            }
+            other => panic!("expected match term, got {:?}", other),
+        },
+        other => panic!("expected expression declaration, got {:?}", other),
+    }
+    // A plain return type is still a constant motive.
+    let decls = parse_declarations("(match n Nat (case (zero) a))").expect("match should parse");
+    match &decls[0] {
+        Declaration::Expr(term) => match &term.kind {
+            SurfaceTermKind::Match(_, ret, _) => {
+                assert!(matches!(&ret.kind, SurfaceTermKind::Var(name) if name == "Nat"))
+            }
+            other => panic!("expected match term, got {:?}", other),
+        },
+        other => panic!("expected expression declaration, got {:?}", other),
+    }
+    assert!(parse_declarations("(match n (motive) (case (zero) a))").is_err());
+    assert!(parse_declarations("(match n (motive M N) (case (zero) a))").is_err());
+}
+
+#[test]
 fn def_rejects_fix_outside_partial() {
     assert!(parse_declarations("(def bad (sort 1) (fix f (sort 1) f))").is_err());
 }

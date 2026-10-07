@@ -1,0 +1,7 @@
+;; Paper, subsection "Function kinds" (label sec:core:kinds, paper/jot_r1/sections/core.tex): "Without the annotation #[once] on the inner Pi
+;; the elaborator rejects the definition (F0206)." The inner Pi below has no annotation, so it has
+;; kind Fn, while the lambda (which moves the captured token) is FnOnce.
+;; Expected: F0206 Function kind mismatch: expected Fn, got FnOnce.
+(inductive (affine) Tok (sort 1) (ctor mk_tok Tok))
+(def pair_with (pi a Tok (pi b Nat (Pair Tok Nat)))
+  (lam a Tok (lam #[once] b Nat (mk_pair a b))))

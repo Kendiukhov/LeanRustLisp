@@ -1,0 +1,18 @@
+;; Positive control P11 (macro twin) - `boxed-borrow` expands to `(rb (& t))`.
+;; Expected: accepted; main = 3.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok n) n))))
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+
+(inductive RB (sort 1) (ctor rb (pi r (Ref #[r] Shared Tok) RB)))
+(def lookb (pi b RB Nat) (lam b RB (match b Nat (case (rb r) (look r)))))
+
+(defmacro boxed-borrow (v) `(rb (& ,v)))
+
+(def f (pi t Tok Nat)
+  (lam t Tok
+    (let b RB (boxed-borrow t)
+      (let n Nat (lookb b)
+        (add n (burn t))))))
+
+(def main Nat (f (mk_tok 2)))

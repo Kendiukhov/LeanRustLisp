@@ -39,6 +39,7 @@ fn collect_vars(term: &SurfaceTerm, vars: &mut Vec<String>) {
                 collect_vars(body, vars);
             }
         }
+        SurfaceTermKind::MatchMotive(motive) => collect_vars(motive, vars),
         SurfaceTermKind::Eval(code, cap) => {
             collect_vars(code, vars);
             collect_vars(cap, vars);

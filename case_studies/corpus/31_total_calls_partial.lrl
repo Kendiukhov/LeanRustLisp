@@ -1,0 +1,9 @@
+;; Class 31 - effect violation: a total definition calls a `partial`
+;; definition (general recursion). Total definitions may appear in types and
+;; must terminate, so they may not call partial code (the partial variant of
+;; class 16).
+;; Expected: kernel K0022 (EffectError).
+(partial spin (pi n Nat (Comp Nat)) (lam n Nat (ret Nat)))
+
+(def total_spin (pi n Nat (Comp Nat))
+  (lam n Nat (spin n)))

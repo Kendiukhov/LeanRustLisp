@@ -44,6 +44,10 @@ If you add or change a code, update this file and keep the mapping stable.
 - `F0219`: `ElabError::UnknownTypeMarker`
 - `F0220`: `ElabError::ConflictingTypeMarkers`
 - `F0221`: `ElabError::MissingInteriorMutabilityKind`
+- `F0222`: `ElabError::AmbiguousName`
+- `F0223`: `ElabError::CaseBindsTooManyVariables` (a `match` case binds more variables than the
+  constructor's fields and induction hypotheses, and the body uses a surplus one; constructor
+  binders that are uniform parameters of the inductive are not fields)
 
 ## Kernel: Type Checker (`K000x`)
 
@@ -61,13 +65,19 @@ If you add or change a code, update this file and keep the mapping stable.
 - `K0012`: `TypeError::ReservedCoreName`
 - `K0013`: `TypeError::DefinitionAlreadyExists`
 - `K0014`: `TypeError::InductiveAlreadyExists`
-- `K0015`: `TypeError::NonPositiveOccurrence`
+- `K0015`: `TypeError::NonPositiveOccurrence`, `TypeError::InductiveInCtorResultArg` (the inductive
+  occurs in an argument of a constructor's result type)
 - `K0016`: `TypeError::NestedInductive`
 - `K0017`: `TypeError::UniverseLevelTooSmall`
 - `K0018`: `TypeError::NonTerminating`
 - `K0019`: `TypeError::TerminationError`
 - `K0020`: `TypeError::PartialInType`
-- `K0021`: `TypeError::OwnershipError`
+- `K0021`: `TypeError::OwnershipError` (kernel ownership walk; the message is
+  `Ownership violation [<Variant>]: <text>` and names the variable by its source binder name,
+  e.g. `[UseAfterMove]: variable 'k' is used after it was moved`; variants: `UseAfterMove`,
+  `ImplicitNonCopyUse`, `ConsumedInRepeatedScope`, `RecursiveFieldConsumedByIh`,
+  `RepeatedMinorNotLambda`, `RepeatedMinorValueNotCopy`, `MinorMustBindRecursiveField`,
+  `RecursorWithoutMinorPremises`; see `docs/spec/ownership_model.md` §6.2)
 - `K0022`: `TypeError::EffectError`
 - `K0023`: `TypeError::AxiomDependencyRequiresNoncomputable`
 - `K0024`: `TypeError::PartialReturnType`
@@ -98,6 +108,15 @@ If you add or change a code, update this file and keep the mapping stable.
 - `K0049`: `TypeError::DefEqFixUnfold`
 - `K0050`: `TypeError::NbeNonFunctionApplication`
 - `K0051`: `TypeError::NotImplemented`
+- `K0052`: `TypeError::AffineCopyConflict` (an inductive marked `affine` is declared `copy`,
+  given an explicit Copy instance, or is a proposition (an inductive in `Prop`, whose proofs are
+  erased and always duplicable))
+- `K0053`: `TypeError::MissingDefinitionValue` (a definition other than an axiom has no value)
+- `K0054`: `TypeError::RedefinitionWithDependents` (under `--allow-redefine`, a definition or
+  inductive that other entries refer to cannot be redefined)
+- `K0055`: `TypeError::FixProofCodomain` (a fixpoint whose result type is a proposition)
+- `K0056`: `TypeError::NormalizationDepthExceeded` (a fuelled normalisation or conversion nested
+  deeper than the evaluation depth limit)
 
 ## MIR: Ownership/Borrow/Typing (`M1xx`/`M2xx`/`M3xx`)
 
@@ -105,7 +124,7 @@ If you add or change a code, update this file and keep the mapping stable.
 - `M101`: `OwnershipError::CopyOfNonCopy`
 - `M102`: `OwnershipError::DoubleMoveInArgs`
 - `M103`: `OwnershipError::OverwriteWithoutDrop`
-- `M104`: `OwnershipError::LinearNotConsumed`
+- `M104`: `OwnershipError::LinearNotConsumed` (reserved: defined, never reported; LRL values are affine, a non-Copy value may be dropped)
 - `M105`: `OwnershipError::UninitializedReturn`
 - `M106`: `OwnershipError::UseUninitialized`
 - `M200`: `BorrowError::ConflictingBorrow`
@@ -127,3 +146,4 @@ If you add or change a code, update this file and keep the mapping stable.
 - `C0005`: Interior mutability gated in safe code
 - `C0006`: Panic-free lint error
 - `C0007`: Invalid `import-macros` form (expects string paths)
+- `C0008`: `fix` in a top-level expression (`fix` is only allowed in `partial` definitions)

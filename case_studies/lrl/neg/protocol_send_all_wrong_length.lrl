@@ -1,0 +1,35 @@
+;; Negative variant of case study B (../protocol.lrl).  The declarations up to the marked line
+;; are copied from protocol.lrl (comments and unused definitions omitted); only the code after
+;; it is new.
+;; Expected: type error (a `Vec Nat 2` cannot feed a `Chan 3`).
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+(inductive (affine) Chan (pi n Nat (sort 1))
+  (ctor mk_chan (pi {n Nat} (pi log (List Nat) (Chan n)))))
+(inductive Receipt (sort 1)
+  (ctor receipt (pi log (List Nat) Receipt)))
+(def open_chan (pi n Nat (Chan n))
+  (lam n Nat (mk_chan nil)))
+(def close (pi c (Chan zero) Receipt)
+  (lam c (Chan zero)
+    (match c Receipt (case (mk_chan log) (receipt log)))))
+(defmacro defsend (name payload encode)
+  (def name (pi {n Nat} (pi c (Chan (succ n)) (pi #[once] x payload (Chan n))))
+    (lam {n} Nat (lam c (Chan (succ n)) (lam #[once] x payload
+      (match c (Chan n)
+        (case (mk_chan log) (mk_chan (cons (encode x) log)))))))))
+(def log (pi m Nat Nat) (lam m Nat (print_nat m)))
+(defsend send Nat log)
+(def send_all (pi {n Nat} (pi v (Vec Nat n) (pi #[once] c (Chan n) Receipt)))
+  (lam {n} Nat (lam v (Vec Nat n)
+    (match v (motive (lam k Nat (lam w (Vec Nat k) (pi #[once] c (Chan k) Receipt))))
+      (case (vnil) close)
+      (case (vcons h t ih) (lam #[once] c (Chan (succ _)) (ih (send c h))))))))
+
+;; ---- new code ----
+
+;; A 3-message channel fed by a 2-element vector.
+(def short (pi c (Chan 3) Receipt)
+  (lam c (Chan 3) (send_all (vcons 7 (vcons 8 vnil)) c)))

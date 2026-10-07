@@ -1,10 +1,11 @@
 use crate::ast::{
-    is_reserved_core_name, is_reserved_marker_name, is_reserved_primitive_name, marker_name,
-    AxiomTag, BinderInfo, Constructor, CopyInstance, CopyInstanceSource, Definition,
-    DefinitionKind, FunctionKind, InductiveDecl, Level, Term, Totality, Transparency, TypeMarker,
+    is_reserved_core_name, is_reserved_marker_name, is_reserved_primitive_name,
+    level_is_never_zero, marker_name, AxiomTag, BinderInfo, Constructor, CopyInstance,
+    CopyInstanceSource, Definition, DefinitionKind, FunctionKind, InductiveDecl, Level, Term,
+    Totality, Transparency, TypeMarker,
 };
 use crate::nbe;
-use crate::ownership::{DefCaptureModeMap, OwnershipError, UsageContext, UsageMode};
+use crate::ownership::{CaptureModes, DefCaptureModeMap, OwnershipError, UsageContext, UsageMode};
 use crate::DefId;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
@@ -200,6 +201,14 @@ pub enum TypeError {
     #[error("Non-strictly positive occurrence of {0} in constructor {1} argument {2}")]
     NonPositiveOccurrence(String, String, usize),
     #[error(
+        "Non-positive occurrence of {ind} in argument {arg} of the result type of constructor {ctor}: the result type of a constructor may not mention the inductive being declared in its parameters or indices"
+    )]
+    InductiveInCtorResultArg {
+        ind: String,
+        ctor: String,
+        arg: usize,
+    },
+    #[error(
         "Nested inductive occurrence of {ind} in constructor {ctor} field {field} is not supported"
     )]
     NestedInductive {
@@ -313,6 +322,19 @@ pub enum TypeError {
     NbeNonFunctionApplication,
     #[error("Not implemented")]
     NotImplemented,
+    #[error("Inductive {ind} is marked affine and cannot be Copy (declared copy, given an explicit Copy instance, or a proposition)")]
+    AffineCopyConflict { ind: String },
+    #[error("Definition {name} has no value: only an axiom may be declared without a value (totality {totality:?})")]
+    MissingDefinitionValue { name: String, totality: Totality },
+    #[error("Cannot redefine {name}: {dependents:?} refer to it and were checked against its current meaning")]
+    RedefinitionWithDependents {
+        name: String,
+        dependents: Vec<String>,
+    },
+    #[error("A fixpoint may not return a proof: its type ends in the proposition {codomain:?} (proofs are erased, so a looping fixpoint would stand for a proof that does not exist)")]
+    FixProofCodomain { codomain: Rc<Term> },
+    #[error("Normalization exceeded the evaluation depth limit ({limit} nested steps); the kernel cannot decide this")]
+    NormalizationDepthExceeded { limit: usize },
 }
 
 impl TypeError {
@@ -333,6 +355,7 @@ impl TypeError {
             TypeError::DefinitionAlreadyExists(_) => "K0013",
             TypeError::InductiveAlreadyExists(_) => "K0014",
             TypeError::NonPositiveOccurrence(_, _, _) => "K0015",
+            TypeError::InductiveInCtorResultArg { .. } => "K0015",
             TypeError::NestedInductive { .. } => "K0016",
             TypeError::UniverseLevelTooSmall(_, _, _, _) => "K0017",
             TypeError::NonTerminating(_) => "K0018",
@@ -369,6 +392,11 @@ impl TypeError {
             TypeError::DefEqFixUnfold => "K0049",
             TypeError::NbeNonFunctionApplication => "K0050",
             TypeError::NotImplemented => "K0051",
+            TypeError::AffineCopyConflict { .. } => "K0052",
+            TypeError::MissingDefinitionValue { .. } => "K0053",
+            TypeError::RedefinitionWithDependents { .. } => "K0054",
+            TypeError::FixProofCodomain { .. } => "K0055",
+            TypeError::NormalizationDepthExceeded { .. } => "K0056",
         }
     }
 }
@@ -396,6 +424,14 @@ pub enum TerminationErrorDetails {
     RecursiveCallInType,
     /// Recursive reference without application
     BareRecursiveReference,
+    /// Recursive call that does not supply the decreasing argument (a partial application of
+    /// the function could later be applied to any value)
+    MissingDecreasingArgument {
+        /// Position of the decreasing argument
+        arg_position: usize,
+        /// Number of arguments the call supplies
+        supplied: usize,
+    },
     /// Mutual recursion detected but not all functions decrease
     MutualRecursionError {
         /// Functions involved in the mutual recursion
@@ -442,6 +478,16 @@ impl std::fmt::Display for TerminationErrorDetails {
             }
             TerminationErrorDetails::BareRecursiveReference => {
                 write!(f, "recursive reference appears without application")
+            }
+            TerminationErrorDetails::MissingDecreasingArgument {
+                arg_position,
+                supplied,
+            } => {
+                write!(
+                    f,
+                    "recursive call supplies {} argument(s), so the decreasing argument at position {} is not given",
+                    supplied, arg_position
+                )
             }
             TerminationErrorDetails::MutualRecursionError { functions } => {
                 write!(
@@ -516,6 +562,7 @@ pub struct MarkerRegistry {
     concurrency_primitive: Option<crate::ast::MarkerId>,
     atomic_primitive: Option<crate::ast::MarkerId>,
     indexable: Option<crate::ast::MarkerId>,
+    affine: Option<crate::ast::MarkerId>,
 }
 
 impl MarkerRegistry {
@@ -527,6 +574,7 @@ impl MarkerRegistry {
             concurrency_primitive: None,
             atomic_primitive: None,
             indexable: None,
+            affine: None,
         }
     }
 
@@ -545,6 +593,7 @@ impl MarkerRegistry {
             TypeMarker::ConcurrencyPrimitive => self.concurrency_primitive = Some(id),
             TypeMarker::AtomicPrimitive => self.atomic_primitive = Some(id),
             TypeMarker::Indexable => self.indexable = Some(id),
+            TypeMarker::Affine => self.affine = Some(id),
         }
     }
 
@@ -556,6 +605,7 @@ impl MarkerRegistry {
             TypeMarker::ConcurrencyPrimitive => self.concurrency_primitive,
             TypeMarker::AtomicPrimitive => self.atomic_primitive,
             TypeMarker::Indexable => self.indexable,
+            TypeMarker::Affine => self.affine,
         };
         id.ok_or(TypeError::MarkerRegistryUninitialized)
     }
@@ -591,6 +641,7 @@ impl MarkerRegistry {
             || Some(id) == self.concurrency_primitive
             || Some(id) == self.atomic_primitive
             || Some(id) == self.indexable
+            || Some(id) == self.affine
     }
 }
 
@@ -604,9 +655,13 @@ pub struct Env {
     pub known_inductives: HashMap<Builtin, String>,
     allow_reserved_primitives: bool,
     allow_redefinition: bool,
-    pub copy_instances: HashMap<String, Vec<crate::ast::CopyInstance>>,
+    copy_instances: HashMap<String, Vec<crate::ast::CopyInstance>>,
     marker_registry: MarkerRegistry,
     constructor_index: BTreeMap<String, Vec<ConstructorRef>>,
+    /// Total definitions whose value refers to the definition itself (structural recursion
+    /// through a constant; kernel API, or a redefinition under `allow_redefinition`). Their δ
+    /// unfolding is guarded by the decreasing argument (see `nbe::guarded_rec_arg`).
+    self_recursive: HashSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -708,7 +763,13 @@ impl Env {
             copy_instances: HashMap::new(),
             marker_registry: MarkerRegistry::new(),
             constructor_index: BTreeMap::new(),
+            self_recursive: HashSet::new(),
         }
+    }
+
+    /// Whether the total definition `name` refers to itself (recursion through its own constant).
+    pub fn is_self_recursive(&self, name: &str) -> bool {
+        self.self_recursive.contains(name)
     }
 
     pub fn set_allow_reserved_primitives(&mut self, allow: bool) {
@@ -788,12 +849,57 @@ impl Env {
             self.marker_registry
                 .set_marker(marker, crate::ast::marker_def_id(marker));
         }
+        // `affine` is built into the kernel: it only restricts Copy, so it needs no trusted
+        // marker definition.
+        self.marker_registry.set_marker(
+            TypeMarker::Affine,
+            crate::ast::marker_def_id(TypeMarker::Affine),
+        );
 
         self.marker_registry.initialized = true;
         Ok(())
     }
 
+    /// The Copy instances registered for each inductive. Read-only: instances are added only by
+    /// [`Env::add_copy_instance`] (checked) and by the kernel's own derivation when an inductive
+    /// is declared.
+    pub fn copy_instances(&self) -> &HashMap<String, Vec<CopyInstance>> {
+        &self.copy_instances
+    }
+
+    /// Register a Copy instance submitted by a client of the kernel API.
+    ///
+    /// An `Explicit` instance must be `unsafe`, may not target an interior-mutable or `affine`
+    /// inductive, and is recorded as the unsafe axiom `copy_instance(T)`. A `Derived` instance is
+    /// a conclusion the kernel draws from the declaration's fields, so it is accepted only if it
+    /// is exactly the instance the kernel derives itself for the registered declaration (fields
+    /// Copy or required Copy, no interior-mutable or `affine` marker); anything else is
+    /// `CopyDeriveFailure` (K0029), and an unknown inductive is `UnknownInductive`. (Before, a
+    /// `Derived` instance was registered unchecked, so a client could make any type Copy with no
+    /// axiom recorded.)
     pub fn add_copy_instance(&mut self, inst: CopyInstance) -> Result<(), TypeError> {
+        if matches!(inst.source, CopyInstanceSource::Derived) {
+            let decl = self
+                .inductives
+                .get(&inst.ind_name)
+                .cloned()
+                .ok_or_else(|| TypeError::UnknownInductive(inst.ind_name.clone()))?;
+            let derived = compute_derived_copy_instance(self, &decl).map_err(|reason| {
+                TypeError::CopyDeriveFailure {
+                    ind: inst.ind_name.clone(),
+                    reason,
+                }
+            })?;
+            if derived != inst {
+                return Err(TypeError::CopyDeriveFailure {
+                    ind: inst.ind_name.clone(),
+                    reason:
+                        "the submitted derived instance is not the instance the kernel derives \
+                             from the declaration"
+                            .to_string(),
+                });
+            }
+        }
         if matches!(inst.source, CopyInstanceSource::Explicit) {
             if !inst.is_unsafe {
                 return Err(TypeError::ExplicitCopyInstanceRequiresUnsafe {
@@ -809,6 +915,14 @@ impl Env {
                         ind: inst.ind_name.clone(),
                     });
                 }
+                if self
+                    .marker_registry
+                    .has_marker(&decl.markers, TypeMarker::Affine)?
+                {
+                    return Err(TypeError::AffineCopyConflict {
+                        ind: inst.ind_name.clone(),
+                    });
+                }
             } else {
                 return Err(TypeError::UnknownInductive(inst.ind_name.clone()));
             }
@@ -816,6 +930,12 @@ impl Env {
             self.refresh_axiom_dependencies();
         }
 
+        self.push_copy_instance(inst);
+        Ok(())
+    }
+
+    /// Store an already-checked Copy instance.
+    fn push_copy_instance(&mut self, inst: CopyInstance) {
         let entry = self
             .copy_instances
             .entry(inst.ind_name.clone())
@@ -826,7 +946,6 @@ impl Env {
         } else {
             entry.push(inst);
         }
-        Ok(())
     }
 
     fn register_copy_instance_axiom(&mut self, ind_name: &str) {
@@ -941,6 +1060,57 @@ impl Env {
         }
     }
 
+    /// The other definitions and inductives whose stored terms (type, value, constructor types)
+    /// refer to the definition `name`, sorted.
+    ///
+    /// Under `allow_redefinition` (CLI `--allow-redefine`) a name may be given a new meaning, but
+    /// only while nothing refers to it: every entry was checked against the meaning its
+    /// references had at the time, and the kernel neither re-checks nor invalidates entries
+    /// afterwards. Replacing a referenced name would keep entries that no longer check — a proof
+    /// `p : Eq Nat zero c` made with `c := zero` would prove `Eq Nat zero (succ zero)` after
+    /// `c := succ zero` (δ uses the current body), and a value of an inductive that is then
+    /// redeclared empty would inhabit the empty type, both closed proofs of `False` without an
+    /// axiom; axiom and effect information recorded for dependents would also go stale.
+    fn dependents_of_definition(&self, name: &str) -> Vec<String> {
+        self.dependents_where(name, &|t| {
+            term_mentions(t, &|node| matches!(node, Term::Const(n, _) if n == name))
+        })
+    }
+
+    /// Like [`Env::dependents_of_definition`], for the inductive `name` (its type, constructors
+    /// and recursor).
+    fn dependents_of_inductive(&self, name: &str) -> Vec<String> {
+        self.dependents_where(name, &|t| {
+            term_mentions(t, &|node| match node {
+                Term::Ind(n, _) | Term::Rec(n, _) | Term::Ctor(n, _, _) => n == name,
+                _ => false,
+            })
+        })
+    }
+
+    fn dependents_where(&self, name: &str, refers: &dyn Fn(&Rc<Term>) -> bool) -> Vec<String> {
+        let mut dependents: Vec<String> = Vec::new();
+        for (def_name, def) in &self.definitions {
+            if def_name == name {
+                continue;
+            }
+            if refers(&def.ty) || def.value.as_ref().is_some_and(refers) {
+                dependents.push(def_name.clone());
+            }
+        }
+        for (ind_name, decl) in &self.inductives {
+            if ind_name == name {
+                continue;
+            }
+            if refers(&decl.ty) || decl.ctors.iter().any(|ctor| refers(&ctor.ty)) {
+                dependents.push(ind_name.clone());
+            }
+        }
+        dependents.sort();
+        dependents.dedup();
+        dependents
+    }
+
     /// Register an inductive type definition
     pub fn add_inductive(&mut self, mut decl: InductiveDecl) -> Result<(), TypeError> {
         if is_reserved_primitive_name(&decl.name) {
@@ -952,15 +1122,52 @@ impl Env {
         {
             return Err(TypeError::ReservedCoreName(decl.name));
         }
-        if self.inductives.contains_key(&decl.name) && !self.allow_redefinition {
-            return Err(TypeError::InductiveAlreadyExists(decl.name));
+        if self.inductives.contains_key(&decl.name) {
+            if !self.allow_redefinition {
+                return Err(TypeError::InductiveAlreadyExists(decl.name));
+            }
+            // Redeclaration (`allow_redefinition`): nothing that was checked against the old
+            // declaration may survive it (see `dependents_of_inductive`).
+            let dependents = self.dependents_of_inductive(&decl.name);
+            if !dependents.is_empty() {
+                return Err(TypeError::RedefinitionWithDependents {
+                    name: decl.name.clone(),
+                    dependents,
+                });
+            }
         }
         // Validate core invariants early (no metas, explicit recursor levels, etc.)
         validate_core_term(&decl.ty)?;
         for ctor in &decl.ctors {
             validate_core_term(&ctor.ty)?;
         }
+        // The arity and the constructor types are read syntactically from here on (parameter
+        // inference, strict positivity, nested occurrences, recursive arguments of the recursor
+        // and of ι-reduction, Copy derivation, MIR lowering). Expand every `let` first (zeta is
+        // definitional, so the declaration means the same) so that a let-bound variable cannot
+        // hide an occurrence of the inductive from these checks.
+        decl.ty = zeta_expand(&decl.ty);
+        for ctor in &mut decl.ctors {
+            ctor.ty = zeta_expand(&ctor.ty);
+        }
         validate_marker_definitions(self, &decl.markers)?;
+        if decl.is_copy && self.has_marker(&decl.markers, TypeMarker::Affine)? {
+            return Err(TypeError::AffineCopyConflict {
+                ind: decl.name.clone(),
+            });
+        }
+        // Proofs are erased at run time and always duplicable, so an `affine` proposition would
+        // silently stay Copy: reject the marker on an inductive in `Prop`.
+        if self.has_marker(&decl.markers, TypeMarker::Affine)?
+            && matches!(
+                result_sort_with_transparency(self, &Context::new(), &decl.ty, Transparency::Reducible),
+                Ok(Some(level)) if level_is_zero(&level)
+            )
+        {
+            return Err(TypeError::AffineCopyConflict {
+                ind: decl.name.clone(),
+            });
+        }
 
         if let Some(partial_name) = contains_partial_def(self, &decl.ty) {
             return Err(TypeError::PartialInType(partial_name));
@@ -980,8 +1187,17 @@ impl Env {
             ..decl.clone()
         };
         let previous = self.inductives.insert(name.clone(), placeholder);
+        // Copy instances (derived or explicit) belong to the declaration they were checked
+        // against. A re-declaration (`allow_redefinition`) starts without them; the new
+        // declaration derives its own below. (Keeping them let an `affine` re-declaration stay
+        // Copy, so the kernel accepted a duplicated affine value.)
+        let previous_copy_instances = self.copy_instances.remove(&name);
 
-        if let Err(e) = check_inductive_soundness(self, &decl) {
+        // Every step from here to the final registration can fail. On failure the placeholder
+        // must not stay behind: it would be a zero-constructor type of that name that later forms
+        // could use, and it would block a corrected re-declaration. Restore the previous entry
+        // and its Copy instances.
+        if let Err(e) = self.check_and_complete_inductive(&mut decl) {
             match previous {
                 Some(prev) => {
                     self.inductives.insert(name.clone(), prev);
@@ -990,8 +1206,38 @@ impl Env {
                     self.inductives.remove(&name);
                 }
             }
+            self.copy_instances.remove(&name);
+            if let Some(instances) = previous_copy_instances {
+                self.copy_instances.insert(name.clone(), instances);
+            }
             return Err(e);
         }
+
+        if decl.name == "Nat" {
+            self.known_inductives
+                .insert(Builtin::Nat, decl.name.clone());
+        }
+        if decl.name == "Bool" {
+            self.known_inductives
+                .insert(Builtin::Bool, decl.name.clone());
+        }
+        if decl.name == "List" {
+            self.known_inductives
+                .insert(Builtin::List, decl.name.clone());
+        }
+        if let Some(ref prev) = previous {
+            self.remove_constructor_index_for(prev);
+        }
+        self.add_constructor_index_for(&decl);
+        self.inductives.insert(decl.name.clone(), decl);
+        Ok(())
+    }
+
+    /// The fallible part of `add_inductive`, run while the placeholder for `decl` is in the
+    /// environment: soundness checks, axiom/primitive dependencies, markers and the Copy
+    /// derivation. Completes `decl.axioms` and `decl.primitive_deps`.
+    fn check_and_complete_inductive(&mut self, decl: &mut InductiveDecl) -> Result<(), TypeError> {
+        check_inductive_soundness(self, decl)?;
 
         // Compute axiom/primitive dependencies for the inductive (type + constructors).
         let mut used_axioms = HashSet::new();
@@ -1034,7 +1280,8 @@ impl Env {
         decl.primitive_deps.sort();
 
         // Auto-derive Copy instance when possible; if explicitly requested, surface failures.
-        if let Err(reason) = derive_copy_instance(self, &decl) {
+        // (Last fallible step: a derived instance is registered only when derivation succeeds.)
+        if let Err(reason) = derive_copy_instance(self, decl) {
             if decl.is_copy {
                 return Err(TypeError::CopyDeriveFailure {
                     ind: decl.name.clone(),
@@ -1042,24 +1289,6 @@ impl Env {
                 });
             }
         }
-
-        if decl.name == "Nat" {
-            self.known_inductives
-                .insert(Builtin::Nat, decl.name.clone());
-        }
-        if decl.name == "Bool" {
-            self.known_inductives
-                .insert(Builtin::Bool, decl.name.clone());
-        }
-        if decl.name == "List" {
-            self.known_inductives
-                .insert(Builtin::List, decl.name.clone());
-        }
-        if let Some(ref prev) = previous {
-            self.remove_constructor_index_for(prev);
-        }
-        self.add_constructor_index_for(&decl);
-        self.inductives.insert(decl.name.clone(), decl);
         Ok(())
     }
 
@@ -1111,14 +1340,40 @@ impl Env {
                 def.primitive_deps.push(def.name.clone());
             }
         }
-        if def.totality == Totality::Axiom && def.kind == DefinitionKind::Def {
+        // Only an axiom may come without a value: every other definition is admitted on the
+        // strength of its checked value (a Total/WellFounded/Partial/Unsafe definition without
+        // one would be an unchecked postulate that is not tracked as an axiom).
+        if def.value.is_none() && def.totality != Totality::Axiom {
+            return Err(TypeError::MissingDefinitionValue {
+                name: def.name.clone(),
+                totality: def.totality,
+            });
+        }
+        if def.totality == Totality::Axiom && !is_reserved {
+            // An axiom depends on itself. This is recorded by the kernel, not taken from the
+            // client-supplied `axioms` list or `kind` (only the reserved runtime primitives,
+            // handled above, are tracked as primitives instead).
             def.kind = DefinitionKind::AxiomLogical;
+            if !def.axioms.contains(&def.name) {
+                def.axioms.push(def.name.clone());
+            }
         }
         if is_reserved_core && !self.allow_reserved_primitives && !self.allow_redefinition {
             return Err(TypeError::ReservedCoreName(def.name.clone()));
         }
-        if self.definitions.contains_key(&def.name) && !self.allow_redefinition {
-            return Err(TypeError::DefinitionAlreadyExists(def.name.clone()));
+        if self.definitions.contains_key(&def.name) {
+            if !self.allow_redefinition {
+                return Err(TypeError::DefinitionAlreadyExists(def.name.clone()));
+            }
+            // Redefinition (`allow_redefinition`) replaces the entry; nothing that was checked
+            // against the old meaning may survive it (see `dependents_of_definition`).
+            let dependents = self.dependents_of_definition(&def.name);
+            if !dependents.is_empty() {
+                return Err(TypeError::RedefinitionWithDependents {
+                    name: def.name.clone(),
+                    dependents,
+                });
+            }
         }
         // Validate core invariants early (no metas, explicit recursor levels, etc.)
         validate_core_term(&def.ty)?;
@@ -1384,6 +1639,19 @@ impl Env {
             });
         }
 
+        let refers_to_itself = def.totality == Totality::Total
+            && def.value.as_ref().is_some_and(|val| {
+                term_mentions(
+                    val,
+                    &|node| matches!(node, Term::Const(n, _) if *n == def.name),
+                )
+            });
+        if refers_to_itself {
+            self.self_recursive.insert(def.name.clone());
+        } else {
+            self.self_recursive.remove(&def.name);
+        }
+
         // Also add to legacy defs for backward compatibility
         self.definitions.insert(def.name.clone(), def);
         Ok(())
@@ -1419,16 +1687,30 @@ impl Env {
             .map_or(true, |d| d.is_type_safe())
     }
 
+    /// Temporarily register a constructor-less `placeholder` for an inductive that is about to
+    /// be declared (the elaborator needs the name in scope while it elaborates the constructor
+    /// types). Returns the entry it replaces, if any.
+    ///
+    /// Replacing an existing inductive is a redeclaration: like [`Env::add_inductive`] it is
+    /// refused when other definitions or inductives refer to that inductive
+    /// (`RedefinitionWithDependents`, K0054), since they were checked against the old
+    /// declaration.
     pub fn insert_inductive_placeholder(
         &mut self,
         placeholder: InductiveDecl,
-    ) -> Option<InductiveDecl> {
+    ) -> Result<Option<InductiveDecl>, TypeError> {
         let name = placeholder.name.clone();
+        if self.inductives.contains_key(&name) {
+            let dependents = self.dependents_of_inductive(&name);
+            if !dependents.is_empty() {
+                return Err(TypeError::RedefinitionWithDependents { name, dependents });
+            }
+        }
         let previous = self.inductives.insert(name, placeholder);
         if let Some(ref prev) = previous {
             self.remove_constructor_index_for(prev);
         }
-        previous
+        Ok(previous)
     }
 
     pub fn restore_inductive(&mut self, decl: InductiveDecl) {
@@ -1479,6 +1761,14 @@ struct TerminationCtx {
     recursive_aliases: Vec<usize>,
     /// The argument position (0-based) of the decreasing argument
     rec_arg_pos: usize,
+    /// The de Bruijn index (at the current depth) of the decreasing argument, when the body
+    /// binds it with a lambda; `None` when the body does not bind it (an eta-reduced body) and
+    /// during inference.
+    decreasing_var: Option<usize>,
+    /// Inference of the decreasing argument (`collect_recursion_info`): the argument is not
+    /// known yet, so the recursive fields of a recursor applied to any variable are taken as
+    /// smaller. Only a candidate that passes the checking pass (`inferring == false`) is used.
+    inferring: bool,
     /// Name of the inductive type being recursed on
     ind_name: String,
     /// Current binding depth
@@ -1486,12 +1776,34 @@ struct TerminationCtx {
 }
 
 impl TerminationCtx {
-    fn new(rec_arg_pos: usize, ind_name: String) -> Self {
+    /// Checking context for the decreasing argument at `rec_arg_pos`, for a body opened under
+    /// its first `bound_params` parameters (`open_binders`).
+    fn new(rec_arg_pos: usize, ind_name: String, bound_params: usize) -> Self {
+        let decreasing_var = if rec_arg_pos < bound_params {
+            Some(bound_params - 1 - rec_arg_pos)
+        } else {
+            None
+        };
         TerminationCtx {
             smaller_vars: Vec::new(),
             recursive_aliases: Vec::new(),
             rec_arg_pos,
+            decreasing_var,
+            inferring: false,
             ind_name,
+            depth: 0,
+        }
+    }
+
+    /// Context for inferring the decreasing argument.
+    fn inference() -> Self {
+        TerminationCtx {
+            smaller_vars: Vec::new(),
+            recursive_aliases: Vec::new(),
+            rec_arg_pos: 0,
+            decreasing_var: None,
+            inferring: true,
+            ind_name: String::new(),
             depth: 0,
         }
     }
@@ -1502,6 +1814,8 @@ impl TerminationCtx {
             smaller_vars: self.smaller_vars.iter().map(|v| v + 1).collect(),
             recursive_aliases: self.recursive_aliases.iter().map(|v| v + 1).collect(),
             rec_arg_pos: self.rec_arg_pos,
+            decreasing_var: self.decreasing_var.map(|v| v + 1),
+            inferring: self.inferring,
             ind_name: self.ind_name.clone(),
             depth: self.depth + 1,
         }
@@ -1621,6 +1935,7 @@ fn collect_recursion_info(
 
                     let minor_start = decl.num_params + 1;
                     let minor_end = minor_start + decl.ctors.len();
+                    let fields_smaller = recursor_fields_are_smaller(decl, &rec_args, ctx);
 
                     for (ctor_idx, minor) in rec_args
                         .iter()
@@ -1629,7 +1944,7 @@ fn collect_recursion_info(
                         .enumerate()
                     {
                         if let Some((body, new_ctx)) =
-                            build_minor_premise_ctx(decl, ctor_idx, minor, ctx)
+                            build_minor_premise_ctx(decl, ctor_idx, minor, ctx, fields_smaller)
                         {
                             collect_recursion_info(
                                 env,
@@ -1797,7 +2112,7 @@ pub fn check_termination_with_hint(
     }
 
     let num_params = param_types.len();
-    let inner_body = peel_lambdas(body, num_params);
+    let inner_body = open_binders(body, num_params);
     let ind_names = inductive_param_names(env, &param_types);
 
     if let Some(hint) = rec_arg_hint {
@@ -1810,7 +2125,7 @@ pub fn check_termination_with_hint(
     }
 
     let mut info = RecArgInference::new(num_params);
-    let ctx = TerminationCtx::new(0, String::new());
+    let ctx = TerminationCtx::inference();
     collect_recursion_info(
         env,
         def_name,
@@ -1820,6 +2135,12 @@ pub fn check_termination_with_hint(
         num_params,
         &mut info,
     )?;
+
+    let check_at = |pos: usize| -> Result<(), TypeError> {
+        let ind_name = ind_names[pos].clone().unwrap_or_default();
+        let check_ctx = TerminationCtx::new(pos, ind_name, num_params);
+        check_recursive_calls_ctx(env, def_name, &inner_body, &check_ctx)
+    };
 
     let mut rec_arg = None;
     if info.saw_recursive_call {
@@ -1834,23 +2155,34 @@ pub fn check_termination_with_hint(
                 rec_arg = Some(hint);
             } else {
                 if hint < ind_names.len() && ind_names[hint].is_some() {
-                    let ind_name = ind_names[hint].clone().unwrap_or_default();
-                    let hint_ctx = TerminationCtx::new(hint, ind_name);
-                    return check_recursive_calls_ctx(env, def_name, &inner_body, &hint_ctx)
-                        .map(|_| Some(hint));
+                    return check_at(hint).map(|_| Some(hint));
                 }
                 return Err(TypeError::TerminationError {
                     def_name: def_name.to_string(),
                     details: TerminationErrorDetails::NoDecreasingArgument,
                 });
             }
-        } else if let Some(pos) = first_true(&candidates) {
-            rec_arg = Some(pos);
+        } else if first_true(&candidates).is_some() {
+            // Inference over-approximates (it does not know which argument decreases); the
+            // first candidate that passes the checking pass is the decreasing argument. When
+            // none passes, report the first candidate's error.
+            let mut first_err = None;
+            for pos in (0..candidates.len()).filter(|pos| candidates[*pos]) {
+                match check_at(pos) {
+                    Ok(()) => return Ok(Some(pos)),
+                    Err(err) => {
+                        if first_err.is_none() {
+                            first_err = Some(err);
+                        }
+                    }
+                }
+            }
+            if let Some(err) = first_err {
+                return Err(err);
+            }
         } else {
             if let Some(first_ind) = ind_names.iter().position(|n| n.is_some()) {
-                let ind_name = ind_names[first_ind].clone().unwrap_or_default();
-                let err_ctx = TerminationCtx::new(first_ind, ind_name);
-                check_recursive_calls_ctx(env, def_name, &inner_body, &err_ctx)?;
+                check_at(first_ind)?;
             }
             return Err(TypeError::TerminationError {
                 def_name: def_name.to_string(),
@@ -1872,9 +2204,7 @@ pub fn check_termination_with_hint(
     }
 
     if let Some(rec_arg_pos) = rec_arg {
-        let ind_name = ind_names[rec_arg_pos].clone().unwrap_or_default();
-        let check_ctx = TerminationCtx::new(rec_arg_pos, ind_name);
-        check_recursive_calls_ctx(env, def_name, &inner_body, &check_ctx)?;
+        check_at(rec_arg_pos)?;
         Ok(Some(rec_arg_pos))
     } else {
         Ok(None)
@@ -1968,9 +2298,9 @@ fn check_mutual_termination_with_hints(
                     }
                 }
 
-                let inner_body = peel_lambdas(body, num_params);
+                let inner_body = open_binders(body, num_params);
                 let mut info = RecArgInference::new(num_params);
-                let ctx = TerminationCtx::new(0, String::new());
+                let ctx = TerminationCtx::inference();
                 collect_recursion_info(
                     env,
                     def_name,
@@ -1994,7 +2324,7 @@ fn check_mutual_termination_with_hints(
                 if let Some(hint) = *rec_arg_hint {
                     if hint < candidates.len() && !candidates[hint] {
                         let ind_name = ind_names[hint].clone().unwrap_or_default();
-                        let hint_ctx = TerminationCtx::new(hint, ind_name);
+                        let hint_ctx = TerminationCtx::new(hint, ind_name, num_params);
                         check_mutual_recursive_calls(
                             env,
                             def_name,
@@ -2049,35 +2379,66 @@ fn check_mutual_termination_with_hints(
             hint_positions.sort_unstable();
             hint_positions.dedup();
 
-            let group_rec_arg = if hint_positions.len() > 1 {
-                None
+            let group_positions: Vec<usize> = if hint_positions.len() > 1 {
+                Vec::new()
             } else if let Some(hint) = hint_positions.first().copied() {
                 if hint < group_candidates.len() && group_candidates[hint] {
-                    Some(hint)
+                    vec![hint]
                 } else {
-                    None
+                    Vec::new()
                 }
             } else {
-                first_true(&group_candidates)
+                (0..group_candidates.len())
+                    .filter(|pos| group_candidates[*pos])
+                    .collect()
             };
 
+            // As for a single definition, inference over-approximates: the first shared
+            // position at which every definition of the group passes the checking pass is the
+            // decreasing argument; when none does, report the first position's error.
+            let check_group_at = |pos: usize| -> Result<(), TypeError> {
+                for info in &infos {
+                    let inner_body = open_binders(&info.body, info.num_params);
+                    let ind_name = info.ind_names[pos].clone().unwrap_or_default();
+                    let ctx = TerminationCtx::new(pos, ind_name, info.num_params);
+                    check_mutual_recursive_calls(
+                        env,
+                        &info.name,
+                        group.as_slice(),
+                        &inner_body,
+                        &ctx,
+                    )?;
+                }
+                Ok(())
+            };
+            let mut group_rec_arg = None;
+            let mut first_err = None;
+            for pos in group_positions {
+                match check_group_at(pos) {
+                    Ok(()) => {
+                        group_rec_arg = Some(pos);
+                        break;
+                    }
+                    Err(err) => {
+                        if first_err.is_none() {
+                            first_err = Some(err);
+                        }
+                    }
+                }
+            }
             let group_rec_arg = match group_rec_arg {
                 Some(pos) => pos,
                 None => {
-                    return Err(TypeError::TerminationError {
+                    return Err(first_err.unwrap_or_else(|| TypeError::TerminationError {
                         def_name: group.join(", "),
                         details: TerminationErrorDetails::MutualRecursionError {
                             functions: group.iter().map(|s| s.to_string()).collect(),
                         },
-                    });
+                    }));
                 }
             };
 
             for info in &infos {
-                let inner_body = peel_lambdas(&info.body, info.num_params);
-                let ind_name = info.ind_names[group_rec_arg].clone().unwrap_or_default();
-                let ctx = TerminationCtx::new(group_rec_arg, ind_name);
-                check_mutual_recursive_calls(env, &info.name, group.as_slice(), &inner_body, &ctx)?;
                 results.push((info.name.clone(), Some(group_rec_arg)));
             }
         }
@@ -2273,19 +2634,7 @@ fn check_mutual_recursive_calls(
             for mutual_name in mutual_names {
                 if let Some(args) = extract_app_to_const(t, mutual_name) {
                     // Verify the recursive argument is smaller
-                    if ctx.rec_arg_pos < args.len() {
-                        let rec_arg_term = &args[ctx.rec_arg_pos];
-                        if !is_smaller(rec_arg_term, ctx) {
-                            return Err(TypeError::TerminationError {
-                                def_name: def_name.to_string(),
-                                details: TerminationErrorDetails::NonSmallerArgument {
-                                    arg_term: rec_arg_term.clone(),
-                                    arg_position: ctx.rec_arg_pos,
-                                    smaller_vars: ctx.smaller_vars.clone(),
-                                },
-                            });
-                        }
-                    }
+                    check_decreasing_argument(def_name, &args, ctx)?;
                     // Check args recursively
                     for arg in &args {
                         check_mutual_recursive_calls(env, def_name, mutual_names, arg, ctx)?;
@@ -2296,19 +2645,7 @@ fn check_mutual_recursive_calls(
 
             if let Some((var_idx, args)) = extract_app_to_var(t) {
                 if ctx.is_recursive_alias(var_idx) {
-                    if ctx.rec_arg_pos < args.len() {
-                        let rec_arg_term = &args[ctx.rec_arg_pos];
-                        if !is_smaller(rec_arg_term, ctx) {
-                            return Err(TypeError::TerminationError {
-                                def_name: def_name.to_string(),
-                                details: TerminationErrorDetails::NonSmallerArgument {
-                                    arg_term: rec_arg_term.clone(),
-                                    arg_position: ctx.rec_arg_pos,
-                                    smaller_vars: ctx.smaller_vars.clone(),
-                                },
-                            });
-                        }
-                    }
+                    check_decreasing_argument(def_name, &args, ctx)?;
                     for arg in &args {
                         check_mutual_recursive_calls(env, def_name, mutual_names, arg, ctx)?;
                     }
@@ -2428,6 +2765,66 @@ fn get_head(t: &Rc<Term>) -> Rc<Term> {
     }
 }
 
+/// `t` (a function of at least `n` arguments) as a term under `n` binders: its first `n` leading
+/// lambdas are peeled and, when it has fewer (`k`), the rest is applied to the remaining
+/// `n - k` bound variables (eta-expansion). The termination checker reads `Var(i)` in the result
+/// as the `i`-th innermost of the `n` binders; with only `peel_lambdas`, a definition body or a
+/// minor premise with fewer leading lambdas than binders was analysed at the wrong depth, so
+/// the variables marked as smaller (or as the decreasing argument) were not the intended ones.
+fn open_binders(t: &Rc<Term>, n: usize) -> Rc<Term> {
+    let mut peeled = 0;
+    let mut curr = t.clone();
+    while peeled < n {
+        let next = match &*curr {
+            Term::Lam(_, body, _, _) => body.clone(),
+            _ => break,
+        };
+        curr = next;
+        peeled += 1;
+    }
+    let missing = n - peeled;
+    if missing == 0 {
+        return curr;
+    }
+    let mut expanded = curr.shift(0, missing);
+    for j in 0..missing {
+        expanded = Term::app(expanded, Term::var(missing - 1 - j));
+    }
+    expanded
+}
+
+/// A recursive call (to the function or a member of its mutual group) must supply the
+/// decreasing argument, and that argument must be structurally smaller.
+fn check_decreasing_argument(
+    def_name: &str,
+    args: &[Rc<Term>],
+    ctx: &TerminationCtx,
+) -> Result<(), TypeError> {
+    let Some(rec_arg_term) = args.get(ctx.rec_arg_pos) else {
+        // A partial application that stops before the decreasing argument is a function that
+        // can later be applied to any value; accepting it (as this check once did) admitted
+        // non-terminating total definitions.
+        return Err(TypeError::TerminationError {
+            def_name: def_name.to_string(),
+            details: TerminationErrorDetails::MissingDecreasingArgument {
+                arg_position: ctx.rec_arg_pos,
+                supplied: args.len(),
+            },
+        });
+    };
+    if !is_smaller(rec_arg_term, ctx) {
+        return Err(TypeError::TerminationError {
+            def_name: def_name.to_string(),
+            details: TerminationErrorDetails::NonSmallerArgument {
+                arg_term: rec_arg_term.clone(),
+                arg_position: ctx.rec_arg_pos,
+                smaller_vars: ctx.smaller_vars.clone(),
+            },
+        });
+    }
+    Ok(())
+}
+
 /// Peel n lambdas from a term, returning the body
 fn peel_lambdas(t: &Rc<Term>, n: usize) -> Rc<Term> {
     if n == 0 {
@@ -2496,19 +2893,7 @@ fn check_recursive_calls_ctx(
             // Check if this is a recursive call
             if let Some(args) = extract_app_to_const(t, def_name) {
                 // Verify the recursive argument is smaller
-                if ctx.rec_arg_pos < args.len() {
-                    let rec_arg_term = &args[ctx.rec_arg_pos];
-                    if !is_smaller(rec_arg_term, ctx) {
-                        return Err(TypeError::TerminationError {
-                            def_name: def_name.to_string(),
-                            details: TerminationErrorDetails::NonSmallerArgument {
-                                arg_term: rec_arg_term.clone(),
-                                arg_position: ctx.rec_arg_pos,
-                                smaller_vars: ctx.smaller_vars.clone(),
-                            },
-                        });
-                    }
-                }
+                check_decreasing_argument(def_name, &args, ctx)?;
                 // Check arguments for nested recursive calls
                 for arg in &args {
                     check_recursive_calls_ctx(env, def_name, arg, ctx)?;
@@ -2517,19 +2902,7 @@ fn check_recursive_calls_ctx(
             } else if let Some((var_idx, args)) = extract_app_to_var(t) {
                 if ctx.is_recursive_alias(var_idx) {
                     // Verify the recursive argument is smaller
-                    if ctx.rec_arg_pos < args.len() {
-                        let rec_arg_term = &args[ctx.rec_arg_pos];
-                        if !is_smaller(rec_arg_term, ctx) {
-                            return Err(TypeError::TerminationError {
-                                def_name: def_name.to_string(),
-                                details: TerminationErrorDetails::NonSmallerArgument {
-                                    arg_term: rec_arg_term.clone(),
-                                    arg_position: ctx.rec_arg_pos,
-                                    smaller_vars: ctx.smaller_vars.clone(),
-                                },
-                            });
-                        }
-                    }
+                    check_decreasing_argument(def_name, &args, ctx)?;
                     for arg in &args {
                         check_recursive_calls_ctx(env, def_name, arg, ctx)?;
                     }
@@ -2619,11 +2992,37 @@ fn recursor_major_arg(decl: &InductiveDecl, args: &[Rc<Term>]) -> Option<Rc<Term
     args.get(major_idx).cloned()
 }
 
+/// The recursive fields bound by a recursor's minor premises are structurally smaller than the
+/// decreasing argument only when the recursor is applied to a major premise that is the
+/// decreasing argument itself or is already smaller than it. Marking them smaller for every
+/// recursor application admitted non-terminating total definitions: a recursor whose major
+/// premise is not the decreasing argument (`Rec .. (succ n)`), and a recursor applied to no
+/// major premise that is later applied to an arbitrary value.
+fn recursor_fields_are_smaller(
+    decl: &InductiveDecl,
+    rec_args: &[Rc<Term>],
+    ctx: &TerminationCtx,
+) -> bool {
+    let Some(major) = recursor_major_arg(decl, rec_args) else {
+        return false;
+    };
+    match &*major {
+        Term::Var(v) => ctx.inferring || ctx.decreasing_var == Some(*v) || is_smaller(&major, ctx),
+        _ => is_smaller(&major, ctx),
+    }
+}
+
+/// Peel the binders of a minor premise and mark its recursive fields as smaller when
+/// `fields_smaller` holds (`recursor_fields_are_smaller`). The induction hypothesis bound after
+/// a recursive field is never smaller: it is the recursor's result on that field, not a subterm
+/// of the major premise (treating it as smaller admitted a total definition that recursed on its
+/// own result).
 fn build_minor_premise_ctx(
     decl: &InductiveDecl,
     ctor_idx: usize,
     minor: &Rc<Term>,
     ctx: &TerminationCtx,
+    fields_smaller: bool,
 ) -> Option<(Rc<Term>, TerminationCtx)> {
     let ctor = decl.ctors.get(ctor_idx)?;
 
@@ -2638,15 +3037,16 @@ fn build_minor_premise_ctx(
 
     while let Term::Pi(dom, body, _, _) = &**curr {
         let is_rec = is_recursive_field(dom, &decl.name);
-        binders_smaller.push(is_rec);
+        binders_smaller.push(is_rec && fields_smaller);
         if is_rec {
-            binders_smaller.push(true);
+            // The induction hypothesis.
+            binders_smaller.push(false);
         }
         curr = body;
     }
 
     let total_bindings = binders_smaller.len();
-    let body = peel_lambdas(minor, total_bindings);
+    let body = open_binders(minor, total_bindings);
 
     let mut new_ctx = ctx.clone();
     for _ in 0..total_bindings {
@@ -2663,9 +3063,11 @@ fn build_minor_premise_ctx(
     Some((body, new_ctx))
 }
 
-/// Check a recursor application for termination
-/// Rec applications are inherently terminating because the recursor
-/// encodes structural recursion - minor premises receive strictly smaller arguments
+/// Check a recursor application for termination.
+/// The recursor itself is terminating; recursive calls of the definition inside its minor
+/// premises may use the recursive fields as smaller arguments only when the major premise is
+/// the decreasing argument or smaller than it (`recursor_fields_are_smaller`), and never the
+/// induction hypotheses (`build_minor_premise_ctx`).
 fn check_rec_app(
     env: &Env,
     def_name: &str,
@@ -2688,6 +3090,7 @@ fn check_rec_app(
     // Skip params and motive
     let minor_start = num_params + 1;
     let minor_end = minor_start + num_ctors;
+    let fields_smaller = recursor_fields_are_smaller(decl, args, ctx);
 
     // Check each minor premise
     for (ctor_idx, minor) in args
@@ -2696,7 +3099,7 @@ fn check_rec_app(
         .skip(minor_start)
         .enumerate()
     {
-        check_minor_premise(env, def_name, decl, ctor_idx, minor, ctx)?;
+        check_minor_premise(env, def_name, decl, ctor_idx, minor, ctx, fields_smaller)?;
     }
 
     // Check the major premise (the thing being recursed on)
@@ -2725,6 +3128,7 @@ fn check_rec_app_mutual(
 
     let minor_start = decl.num_params + 1;
     let minor_end = minor_start + decl.ctors.len();
+    let fields_smaller = recursor_fields_are_smaller(decl, args, ctx);
 
     for (ctor_idx, minor) in args
         .iter()
@@ -2732,7 +3136,16 @@ fn check_rec_app_mutual(
         .skip(minor_start)
         .enumerate()
     {
-        check_minor_premise_mutual(env, def_name, mutual_names, decl, ctor_idx, minor, ctx)?;
+        check_minor_premise_mutual(
+            env,
+            def_name,
+            mutual_names,
+            decl,
+            ctor_idx,
+            minor,
+            ctx,
+            fields_smaller,
+        )?;
     }
 
     if args.len() > minor_end {
@@ -2752,8 +3165,10 @@ fn check_minor_premise(
     ctor_idx: usize,
     minor: &Rc<Term>,
     ctx: &TerminationCtx,
+    fields_smaller: bool,
 ) -> Result<(), TypeError> {
-    let (body, new_ctx) = match build_minor_premise_ctx(decl, ctor_idx, minor, ctx) {
+    let (body, new_ctx) = match build_minor_premise_ctx(decl, ctor_idx, minor, ctx, fields_smaller)
+    {
         Some(res) => res,
         None => return Ok(()),
     };
@@ -2761,6 +3176,7 @@ fn check_minor_premise(
     check_recursive_calls_ctx(env, def_name, &body, &new_ctx)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_minor_premise_mutual(
     env: &Env,
     def_name: &str,
@@ -2769,8 +3185,10 @@ fn check_minor_premise_mutual(
     ctor_idx: usize,
     minor: &Rc<Term>,
     ctx: &TerminationCtx,
+    fields_smaller: bool,
 ) -> Result<(), TypeError> {
-    let (body, new_ctx) = match build_minor_premise_ctx(decl, ctor_idx, minor, ctx) {
+    let (body, new_ctx) = match build_minor_premise_ctx(decl, ctor_idx, minor, ctx, fields_smaller)
+    {
         Some(res) => res,
         None => return Ok(()),
     };
@@ -2829,16 +3247,10 @@ fn extract_app_to_var(t: &Rc<Term>) -> Option<(usize, Vec<Rc<Term>>)> {
 fn is_smaller(t: &Rc<Term>, ctx: &TerminationCtx) -> bool {
     match &**t {
         Term::Var(v) => ctx.smaller_vars.contains(v),
-        // Applications of projections from smaller things are also smaller
-        Term::App(_, _, _) => {
-            if let Some(args) = extract_app_to_const(t, "proj") {
-                // proj applications from smaller things
-                args.first().map_or(false, |arg| is_smaller(arg, ctx))
-            } else {
-                false
-            }
-        }
-        Term::Meta(_) => false,
+        // Only variables bound to structurally smaller fields count. (An earlier version also
+        // accepted any application of a constant named `proj` to a smaller term, by name alone;
+        // no such projection exists, and a user definition of that name made a non-terminating
+        // total definition pass the check.)
         _ => false,
     }
 }
@@ -3334,36 +3746,85 @@ fn level_is_zero(level: &Level) -> bool {
     matches!(reduce_level(level.clone()), Level::Zero)
 }
 
+/// `left <= right` for EVERY assignment of the universe-level parameters (sound, not complete:
+/// `false` means "not provably"). Both sides are normalised first (`normalize_level` keeps
+/// `imax a b` symbolic unless `b` is provably zero or provably nonzero). The comparison is the
+/// one of Lean 4's kernel (`is_geq`): `max`/`imax` on either side, then levels of the form
+/// `succ^k base` compared by offset (`u + 1 <= max u v + 1` holds, `1 <= imax 1 u` does not,
+/// since `u` may be 0). `normalize_level` writes `max (succ a) (succ b)` as `succ (max a b)`,
+/// while Lean's normal form distributes `succ` over `max`; the comparison therefore first
+/// rewrites `succ^k (max a b)` (k > 0) on either side to `max (succ^k a) (succ^k b)` (equal for
+/// every assignment), so that e.g. `u + 1 <= max u v + 2` holds.
 fn level_leq(left: &Level, right: &Level) -> bool {
-    let left_norm = reduce_level(left.clone());
-    let right_norm = reduce_level(right.clone());
+    level_geq_normalized(&reduce_level(right.clone()), &reduce_level(left.clone()))
+}
 
-    if left_norm == right_norm {
+/// `succ^k (max a b)` with `k > 0` rewritten to `max (succ^k a) (succ^k b)`; `None` for any other
+/// level. Both forms are equal for every assignment of the level parameters.
+fn distribute_succ_over_max(level: &Level) -> Option<Level> {
+    let (base, k) = level_offset(level);
+    match base {
+        Level::Max(a, b) if k > 0 => {
+            let lift = |inner: &Level| {
+                let mut lifted = inner.clone();
+                for _ in 0..k {
+                    lifted = Level::Succ(Box::new(lifted));
+                }
+                lifted
+            };
+            Some(Level::Max(Box::new(lift(a)), Box::new(lift(b))))
+        }
+        _ => None,
+    }
+}
+
+/// `l1 >= l2` for normalised levels (see `level_leq`).
+fn level_geq_normalized(l1: &Level, l2: &Level) -> bool {
+    if l1 == l2 || matches!(l2, Level::Zero) {
         return true;
     }
-
-    match &left_norm {
-        Level::Zero => return true,
-        Level::Max(a, b) => {
-            return level_leq(a, &right_norm) && level_leq(b, &right_norm);
-        }
-        _ => {}
+    if let Some(l2) = distribute_succ_over_max(l2) {
+        return level_geq_normalized(l1, &l2);
     }
-
-    match &right_norm {
-        Level::Max(a, b) => {
-            return level_leq(&left_norm, a) || level_leq(&left_norm, b);
-        }
-        Level::Succ(b) => {
-            return level_leq(&left_norm, b);
-        }
-        _ => {}
+    if let Some(l1) = distribute_succ_over_max(l1) {
+        return level_geq_normalized(&l1, l2);
     }
-
-    match (&left_norm, &right_norm) {
-        (Level::Succ(a), Level::Succ(b)) => level_leq(a, b),
-        _ => false,
+    if let Level::Max(a, b) = l2 {
+        return level_geq_normalized(l1, a) && level_geq_normalized(l1, b);
     }
+    if let Level::Max(a, b) = l1 {
+        if level_geq_normalized(a, l2) || level_geq_normalized(b, l2) {
+            return true;
+        }
+    }
+    // imax a b <= max a b
+    if let Level::IMax(a, b) = l2 {
+        return level_geq_normalized(l1, a) && level_geq_normalized(l1, b);
+    }
+    // imax a b >= b
+    if let Level::IMax(_, b) = l1 {
+        return level_geq_normalized(b, l2);
+    }
+    let (base1, k1) = level_offset(l1);
+    let (base2, k2) = level_offset(l2);
+    if base1 == base2 || matches!(base2, Level::Zero) {
+        return k1 >= k2;
+    }
+    if k1 == k2 && k1 > 0 {
+        return level_geq_normalized(base1, base2);
+    }
+    false
+}
+
+/// Splits `succ^k base` (with `base` not a `succ`) into `(base, k)`.
+fn level_offset(level: &Level) -> (&Level, usize) {
+    let mut base = level;
+    let mut k = 0usize;
+    while let Level::Succ(inner) = base {
+        base = inner;
+        k += 1;
+    }
+    (base, k)
 }
 
 /// Extract the universe level from a Sort term, or return None if not a Sort
@@ -3470,17 +3931,14 @@ pub fn compute_recursor_type(decl: &InductiveDecl, univ_levels: &[Level]) -> Rc<
     result_body = Term::pi(major_ty, result_body, crate::ast::BinderInfo::Default);
 
     // Bind Indices
-    for (ty, info) in index_binders.iter().rev() {
-        // Ty refers to Params (outer) and previous Indices.
-        // Previous Indices are valid.
-        // Params need shifting?
-        // In `decl.ty`, params are outside.
-        // In Rec, params are outside Minors/Motive.
-        // When checking `ty` of Index k, context is [Params] [PreviousIndices].
-        // Here context is [Params] [Motive] [Minors] [PreviousIndices].
-        // So we shift Params references by (Motive + Minors).
-        // Shift amount = 1 + minors.len().
-        result_body = Term::pi(ty.shift(0, 1 + minor_types.len()), result_body, *info);
+    for (k, (ty, info)) in index_binders.iter().enumerate().rev() {
+        // In `decl.ty` the type of index k is written over [Params] [I_0 .. I_{k-1}].
+        // Here its context is [Params] [Motive] [Minors] [I_0 .. I_{k-1}].
+        // References to the k earlier indices (Var(i), i < k) are unchanged; references to
+        // the parameters (Var(i), i >= k) move outward by the motive and the minors.
+        // (A cutoff of 0 also shifted references to earlier indices, so an index whose type
+        // depends on an earlier index was typed by the motive, a minor or another index.)
+        result_body = Term::pi(ty.shift(k, 1 + minor_types.len()), result_body, *info);
     }
 
     // Bind Minors
@@ -3517,13 +3975,40 @@ fn extract_pi_binders(term: &Rc<Term>) -> (Vec<(Rc<Term>, BinderInfo)>, Option<L
     }
 }
 
+/// Lift a term written over `[outer][f_0 .. f_{j-1}]` (the constructor's own telescope, with the
+/// first `j` fields bound) into the minor premise telescope, where the induction hypothesis of
+/// every recursive field `f_m` is bound right after `f_m`. `rec_fields[m]` says whether `f_m` is
+/// recursive (only `m < j` is consulted).
+///
+/// Inserting the binder `ih_m` right after `f_m` moves every variable that refers to `f_m` or to
+/// a binder outside it (`Var(k)` with `k >= j - 1 - m`) one step outward, and leaves references to
+/// the later fields `f_{m+1} .. f_{j-1}` unchanged. The insertions are applied from the outermost
+/// field inward, so the cutoff `j - 1 - m` of each later insertion is still the index of `f_m`.
+/// (Shifting every free variable by the total number of induction hypotheses, as this function
+/// replaced, mis-indexed references to fields that follow a recursive field: the minor premise
+/// then bound a field at a type other than its declared one, and the kernel admitted closed
+/// proofs of `False`.)
+fn lift_over_induction_hypotheses(term: &Rc<Term>, rec_fields: &[bool], j: usize) -> Rc<Term> {
+    let mut lifted = term.clone();
+    for (m, is_rec) in rec_fields.iter().enumerate().take(j) {
+        if *is_rec {
+            lifted = lifted.shift(j - 1 - m, 1);
+        }
+    }
+    lifted
+}
+
 /// Compute the type of a minor premise for a constructor.
 /// This handles constructors with arbitrary arguments and recursive arguments.
 ///
-/// For a constructor `ctor : (x1 : A1) -> ... -> (xn : An) -> Ind`:
-/// The minor premise is:
-/// `(x1 : A1) -> ... -> (xn : An) -> (ih_j : Cxj)* -> C (ctor x1 ... xn)`
-/// where `ih_j` are induction hypotheses for recursive arguments.
+/// For a constructor `ctor : (x1 : A1) -> ... -> (xn : An) -> Ind is` the minor premise binds the
+/// fields at their declared types, each recursive field immediately followed by its induction
+/// hypothesis, and ends in the motive applied to the constructor:
+/// `(x1 : A1) -> [ih1 : C js1 x1] -> ... -> (xn : An) -> [ihn : C jsn xn] -> C is (ctor x1 ... xn)`
+/// (`[..]` only for recursive fields; `jsk` are the indices of `xk`'s type). Every type in this
+/// telescope is the constructor's one, lifted over the induction hypotheses bound before it
+/// (`lift_over_induction_hypotheses`). This is the order in which iota reduction
+/// (`nbe::try_reduce_rec`) applies a minor premise: field, then its IH.
 fn compute_minor_premise_type(
     ind_name: &str,
     ctor_idx: usize,
@@ -3612,22 +4097,30 @@ fn compute_minor_premise_type(
     }
 
     let mut binders: Vec<Binder> = Vec::new();
-    let mut ih_count = 0usize;
+    // `rec_fields[m]` records whether field `m` is recursive, i.e. is followed by its induction
+    // hypothesis in the minor premise telescope.
+    let mut rec_fields: Vec<bool> = Vec::with_capacity(ctor_args.len());
 
     for (arg_idx, (arg_ty, arg_info)) in ctor_args.iter().enumerate() {
-        let shifted_arg_ty = arg_ty.shift(0, ih_count);
+        // `arg_ty` is written over `[outer][f_0 .. f_{arg_idx-1}]`; the minor premise binds an
+        // IH right after every earlier recursive field, so lift it over exactly those binders.
         binders.push(Binder {
-            ty: shifted_arg_ty,
+            ty: lift_over_induction_hypotheses(arg_ty, &rec_fields, arg_idx),
             info: *arg_info,
             is_arg_idx: Some(arg_idx),
         });
 
-        if let Some(rec_indices) = extract_inductive_indices(arg_ty, ind_name, num_params) {
+        let rec_indices = extract_inductive_indices(arg_ty, ind_name, num_params);
+        rec_fields.push(rec_indices.is_some());
+        if let Some(rec_indices) = rec_indices {
             let c_idx = binders.len() + ctor_idx;
             let mut ih_ty = Term::var(c_idx);
             for idx_term in rec_indices.iter() {
-                let shifted_idx = idx_term.shift(0, ih_count + 1);
-                ih_ty = Term::app(ih_ty, shifted_idx);
+                // Same context as the field's type, then one more binder: the field itself.
+                let lifted_idx =
+                    lift_over_induction_hypotheses(idx_term, &rec_fields[..arg_idx], arg_idx)
+                        .shift(0, 1);
+                ih_ty = Term::app(ih_ty, lifted_idx);
             }
             ih_ty = Term::app(ih_ty, Term::var(0));
 
@@ -3636,7 +4129,6 @@ fn compute_minor_premise_type(
                 info: *arg_info,
                 is_arg_idx: None,
             });
-            ih_count += 1;
         }
     }
 
@@ -3646,8 +4138,9 @@ fn compute_minor_premise_type(
 
     let mut result_ty = Term::var(c_idx_final);
     for idx_term in result_indices.iter() {
-        let shifted_idx = idx_term.shift(0, ih_count);
-        result_ty = Term::app(result_ty, shifted_idx);
+        // Result indices are written over `[outer][f_0 .. f_{n-1}]`.
+        let lifted_idx = lift_over_induction_hypotheses(idx_term, &rec_fields, ctor_args.len());
+        result_ty = Term::app(result_ty, lifted_idx);
     }
 
     let ctor_term = Rc::new(Term::Ctor(ind_name.to_string(), ctor_idx, vec![]));
@@ -3850,6 +4343,9 @@ fn map_nbe_error(err: nbe::NbeError) -> TypeError {
         },
         nbe::NbeError::FixUnfoldDisallowed => TypeError::DefEqFixUnfold,
         nbe::NbeError::NonFunctionApplication => TypeError::NbeNonFunctionApplication,
+        nbe::NbeError::DepthLimitExceeded { limit } => {
+            TypeError::NormalizationDepthExceeded { limit }
+        }
     }
 }
 
@@ -3863,18 +4359,27 @@ fn map_nbe_defeq_error(err: nbe::NbeError, context: DefEqFuelContext) -> TypeErr
         }
         nbe::NbeError::FixUnfoldDisallowed => TypeError::DefEqFixUnfold,
         nbe::NbeError::NonFunctionApplication => TypeError::NbeNonFunctionApplication,
+        nbe::NbeError::DepthLimitExceeded { limit } => {
+            TypeError::NormalizationDepthExceeded { limit }
+        }
     }
 }
 
-/// Weak Head Normal Form reduction (via NbE)
+/// Normal form of `t` for type checking (despite the name, a full normal form, via NbE).
+///
+/// Like conversion, it never unfolds a fixpoint (`fix` is general recursion; applying one reports
+/// `DefEqFixUnfold`, K0049), and one fuel budget covers the evaluation and the read-back
+/// together; exhausting it reports `DefEqFuelExhausted` (K0048), and nesting deeper than
+/// `nbe::MAX_EVAL_DEPTH` reports `NormalizationDepthExceeded` (K0056). (Before, the type checker's
+/// normalisation unfolded fixpoints although conversion does not, and the read-back restarted
+/// the budget under every binder, so it could run until the stack overflowed.)
 pub fn whnf(
     env: &Env,
     t: Rc<Term>,
     transparency: crate::Transparency,
 ) -> Result<Rc<Term>, TypeError> {
     let fuel = nbe::default_eval_fuel();
-    let val = nbe::eval_with_fuel(&t, &vec![], env, transparency, fuel).map_err(map_nbe_error)?;
-    nbe::quote_with_fuel(val, 0, env, transparency, fuel).map_err(map_nbe_error)
+    nbe::normalize_for_typing(&t, &vec![], env, transparency, fuel).map_err(map_nbe_error)
 }
 
 fn eval_env_from_ctx(ctx: &Context) -> Vec<crate::nbe::Value> {
@@ -3885,6 +4390,8 @@ fn eval_env_from_ctx(ctx: &Context) -> Vec<crate::nbe::Value> {
     eval_env
 }
 
+/// [`whnf`] for a term in the typing context `ctx` (same rules: no fixpoint unfolding, one
+/// budget, depth limit).
 pub fn whnf_in_ctx(
     env: &Env,
     ctx: &Context,
@@ -3893,8 +4400,7 @@ pub fn whnf_in_ctx(
 ) -> Result<Rc<Term>, TypeError> {
     let eval_env = eval_env_from_ctx(ctx);
     let fuel = nbe::default_eval_fuel();
-    let val = nbe::eval_with_fuel(&t, &eval_env, env, transparency, fuel).map_err(map_nbe_error)?;
-    nbe::quote_with_fuel(val, eval_env.len(), env, transparency, fuel).map_err(map_nbe_error)
+    nbe::normalize_for_typing(&t, &eval_env, env, transparency, fuel).map_err(map_nbe_error)
 }
 
 // try_iota_reduce removed
@@ -4015,9 +4521,23 @@ pub fn validate_core_term(term: &Rc<Term>) -> Result<(), TypeError> {
             validate_core_term(body)
         }
         Term::Pi(ty, body, _, _) => {
+            // The lifetime elision rule applies once per complete signature (the maximal
+            // chain of Pis), not to each curried suffix of it; the domains and the final
+            // codomain are validated on their own (they may contain further signatures).
             validate_ref_lifetime_elision_for_pi(ty, body)?;
-            validate_core_term(ty)?;
-            validate_core_term(body)
+            let mut dom = ty;
+            let mut cod = body;
+            loop {
+                validate_core_term(dom)?;
+                match &**cod {
+                    Term::Pi(next_dom, next_cod, _, _) => {
+                        dom = next_dom;
+                        cod = next_cod;
+                    }
+                    _ => break,
+                }
+            }
+            validate_core_term(cod)
         }
         Term::LetE(ty, val, body) => {
             validate_core_term(ty)?;
@@ -4235,6 +4755,10 @@ fn marker_signature_ok(ty: &Rc<Term>) -> bool {
     }
 }
 
+/// Copy(T): sorts; types, type families and proofs (erased at run time, `is_erased_type`);
+/// `Ref Shared _`; an inductive type with a Copy instance (derived or explicit) whose
+/// requirements hold for the arguments. Function types (other than proofs), `Ref Mut _`, affine
+/// and interior-mutable inductives, opaque types and type variables are not Copy.
 fn is_copy_type(env: &Env, ctx: &Context, ty: &Rc<Term>) -> Result<bool, TypeError> {
     let mut stack = Vec::new();
     is_copy_type_inner(env, ctx, ty, &mut stack)
@@ -4257,7 +4781,8 @@ fn is_copy_type_inner(
     let ty_norm = whnf_in_ctx(env, ctx, ty.clone(), crate::Transparency::Reducible)?;
     match &*ty_norm {
         Term::Sort(_) => Ok(true),
-        Term::Pi(_, _, _, _) => Ok(false),
+        // A function type is Copy only if its values are erased (a type family or a proof).
+        Term::Pi(_, _, _, _) => Ok(is_erased_type(env, ctx, &ty_norm)),
         _ => {
             let (head, args) = collect_app_spine(&ty_norm);
             if is_const_named(&head, "Ref") && args.len() == 2 {
@@ -4279,12 +4804,16 @@ fn is_copy_type_inner(
                 let mut result = false;
                 if let Some(instances) = env.copy_instances.get(&ind_name) {
                     for inst in instances {
-                        if inst.param_count != args.len() {
+                        // Derived instances are parameterised by the type's parameters only
+                        // (indices never affect Copy-ness); explicit instances bind every
+                        // argument of the type. Either way, the first `param_count` arguments
+                        // instantiate the instance.
+                        if inst.param_count > args.len() {
                             continue;
                         }
                         let mut all_ok = true;
                         for req in &inst.requirements {
-                            let req_inst = subst_params(req, &args);
+                            let req_inst = subst_params(req, &args[..inst.param_count]);
                             if !is_copy_type_inner(env, ctx, &req_inst, stack)? {
                                 all_ok = false;
                                 break;
@@ -4297,9 +4826,10 @@ fn is_copy_type_inner(
                     }
                 }
                 stack.pop();
-                Ok(result)
+                // Proofs are erased at run time and therefore duplicable.
+                Ok(result || is_erased_type(env, ctx, &ty_norm))
             } else {
-                Ok(false)
+                Ok(is_erased_type(env, ctx, &ty_norm))
             }
         }
     }
@@ -4365,6 +4895,135 @@ fn usage_mode_for_kind(kind: FunctionKind) -> UsageMode {
     }
 }
 
+// =============================================================================================
+// Ownership: erased positions, the ownership walk, and the uses analysis behind function kinds.
+//
+// The rules implemented here are written out in docs/spec/ownership_model.md (section 6.2).
+// =============================================================================================
+
+/// Whether `ty` is an arity: a sort, or a Pi type whose codomain is (after whnf) an arity.
+fn is_arity(env: &Env, ctx: &Context, ty: &Rc<Term>) -> bool {
+    let mut current_ctx = ctx.clone();
+    let mut current = ty.clone();
+    loop {
+        let Ok(norm) = whnf_in_ctx(env, &current_ctx, current.clone(), Transparency::Reducible)
+        else {
+            return false;
+        };
+        match &*norm {
+            Term::Sort(_) => return true,
+            Term::Pi(dom, body, _, _) => {
+                current_ctx = current_ctx.push(dom.clone());
+                current = body.clone();
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Whether the values of type `ty` are erased at run time: types (`ty` is a sort), type
+/// families (`ty` is an arity `Pi ... -> Sort`) and proofs (`ty` is a proposition). Erased values
+/// are Copy, and occurrences of variables inside erased terms have no ownership effect. A type
+/// the kernel cannot classify (e.g. an open term outside its context) counts as not erased.
+pub fn is_erased_type(env: &Env, ctx: &Context, ty: &Rc<Term>) -> bool {
+    if is_arity(env, ctx, ty) {
+        return true;
+    }
+    is_prop_like(env, ctx, ty).unwrap_or(false)
+}
+
+/// Borrow primitives: the argument of `borrow_shared` is read, the argument of `borrow_mut` is
+/// used mutably; neither is moved (K3: borrowing is not moving).
+fn borrow_primitive_use(head: &Rc<Term>) -> Option<UsageMode> {
+    match &**head {
+        Term::Const(name, _) if name == "borrow_shared" => Some(UsageMode::Observational),
+        Term::Const(name, _) if name == "borrow_mut" => Some(UsageMode::MutBorrow),
+        _ => None,
+    }
+}
+
+/// Erasure information along an application spine `head a1 ... an`.
+struct SpineInfo {
+    /// Whether argument `i` is in an erased position (the domain it is checked against is
+    /// erased, see [`is_erased_type`]).
+    arg_erased: Vec<bool>,
+    /// Kind of the Pi type consumed by argument `i`: how the function value is called.
+    arg_kind: Vec<FunctionKind>,
+    /// Whether the whole application is erased (it is a type, a type family or a proof).
+    result_erased: bool,
+}
+
+fn spine_info(
+    env: &Env,
+    ctx: &Context,
+    head: &Rc<Term>,
+    args: &[Rc<Term>],
+) -> Result<SpineInfo, TypeError> {
+    let mut ty = infer(env, ctx, head.clone())?;
+    let mut arg_erased = Vec::with_capacity(args.len());
+    let mut arg_kind = Vec::with_capacity(args.len());
+    for arg in args {
+        let norm = whnf_in_ctx(env, ctx, ty, Transparency::Reducible)?;
+        match &*norm {
+            Term::Pi(dom, body, _, kind) => {
+                arg_erased.push(is_erased_type(env, ctx, dom));
+                arg_kind.push(*kind);
+                ty = body.subst(0, arg);
+            }
+            _ => return Err(TypeError::ExpectedFunction(norm)),
+        }
+    }
+    Ok(SpineInfo {
+        arg_erased,
+        arg_kind,
+        result_erased: is_erased_type(env, ctx, &ty),
+    })
+}
+
+/// Role of an argument of a recursor application `Rec_I params motive minors indices major`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecArgRole {
+    Param,
+    Motive,
+    Minor(usize),
+    Index,
+    Major,
+    /// An argument beyond the major premise (applied to the result of the elimination).
+    Extra,
+}
+
+fn rec_arg_role(decl: &InductiveDecl, num_indices: usize, pos: usize) -> RecArgRole {
+    let num_params = decl.num_params;
+    let num_ctors = decl.ctors.len();
+    if pos < num_params {
+        RecArgRole::Param
+    } else if pos == num_params {
+        RecArgRole::Motive
+    } else if pos < num_params + 1 + num_ctors {
+        RecArgRole::Minor(pos - num_params - 1)
+    } else if pos < num_params + 1 + num_ctors + num_indices {
+        RecArgRole::Index
+    } else if pos == num_params + 1 + num_ctors + num_indices {
+        RecArgRole::Major
+    } else {
+        RecArgRole::Extra
+    }
+}
+
+/// Erased positions of a recursor application: parameters, motive and indices always; minors,
+/// major and extra arguments when their domain is erased (elimination into `Prop` or into a sort,
+/// or a major premise that is a proof).
+fn rec_erased_positions(decl: &InductiveDecl, num_indices: usize, info: &SpineInfo) -> Vec<bool> {
+    (0..info.arg_erased.len())
+        .map(|pos| {
+            matches!(
+                rec_arg_role(decl, num_indices, pos),
+                RecArgRole::Param | RecArgRole::Motive | RecArgRole::Index
+            ) || info.arg_erased[pos]
+        })
+        .collect()
+}
+
 fn check_ownership_in_term(
     env: &Env,
     ctx: &Context,
@@ -4372,177 +5031,678 @@ fn check_ownership_in_term(
     usage: &mut UsageContext,
     mode: UsageMode,
 ) -> Result<(), TypeError> {
-    check_ownership_in_term_with_capture(env, ctx, term, usage, mode, &[])
+    if mode == UsageMode::Observational {
+        // An erased position: no ownership effect.
+        return Ok(());
+    }
+    check_ownership_in_term_with_capture(env, ctx, term, usage, &[])
 }
 
+fn term_key(term: &Rc<Term>) -> usize {
+    Rc::as_ptr(term) as usize
+}
+
+/// The ownership walk of a term in a *runtime* position (erased subterms are never visited).
+///
+/// `usage` holds the moved state of every variable in scope; `captures` records, for each
+/// enclosing lambda inside the walked term, how that closure captures the variables bound
+/// outside it (see [`use_var_at_runtime`]).
 fn check_ownership_in_term_with_capture(
     env: &Env,
     ctx: &Context,
     term: &Rc<Term>,
     usage: &mut UsageContext,
-    mode: UsageMode,
     captures: &[CaptureContext],
 ) -> Result<(), TypeError> {
     match &**term {
-        Term::Var(idx) => {
-            if mode == UsageMode::Observational {
-                return usage
-                    .use_var(*idx, UsageMode::Observational)
-                    .map_err(TypeError::from);
-            }
-            let mut capture_mode = None;
-            for capture in captures {
-                if *idx >= capture.depth {
-                    capture_mode = Some(match capture_mode {
-                        Some(existing) => usage_mode_min(existing, capture.mode),
-                        None => capture.mode,
-                    });
+        // A variable in a runtime position is moved (a no-op for Copy variables).
+        Term::Var(idx) => use_var_at_runtime(usage, *idx, UsageMode::Consuming, captures),
+        Term::App(_, _, _) => {
+            let (head, spine) = collect_app_spine(term);
+            let args: Vec<Rc<Term>> = spine.into_iter().map(|item| item.arg).collect();
+            if let Term::Rec(ind_name, _) = &*head {
+                if let Some(decl) = env.get_inductive(ind_name) {
+                    return check_ownership_rec_app(env, ctx, &head, decl, &args, usage, captures);
                 }
             }
-            let effective_mode = capture_mode.unwrap_or(mode);
-            usage.use_var(*idx, effective_mode).map_err(TypeError::from)
-        }
-        Term::App(f, a, _) => {
-            if mode == UsageMode::Observational {
-                check_ownership_in_term_with_capture(
-                    env,
-                    ctx,
-                    f,
-                    usage,
-                    UsageMode::Observational,
-                    captures,
-                )?;
-                check_ownership_in_term_with_capture(
-                    env,
-                    ctx,
-                    a,
-                    usage,
-                    UsageMode::Observational,
-                    captures,
-                )
-            } else {
-                let f_ty = infer(env, ctx, f.clone())?;
-                let f_ty_norm = whnf_in_ctx(env, ctx, f_ty, crate::Transparency::Reducible)?;
-                let f_mode = match &*f_ty_norm {
-                    Term::Pi(_, _, _, kind) => usage_mode_for_kind(*kind),
-                    _ => mode,
-                };
-                let f_eval_mode = match (&**f, f_mode) {
-                    (Term::Var(_), UsageMode::Observational) => UsageMode::Observational,
-                    (Term::Var(_), UsageMode::MutBorrow) => UsageMode::MutBorrow,
-                    _ => UsageMode::Consuming,
-                };
-                check_ownership_in_term_with_capture(env, ctx, f, usage, f_eval_mode, captures)?;
-                check_ownership_in_term_with_capture(
-                    env,
-                    ctx,
-                    a,
-                    usage,
-                    UsageMode::Consuming,
-                    captures,
-                )
+            if let Some(borrow_mode) = borrow_primitive_use(&head) {
+                if args.len() >= 2 {
+                    // `borrow_* {A} x`: A is a type; x is read / used mutably, not moved. A
+                    // compound argument is a temporary: it is evaluated (consumed) and borrowed.
+                    match &*args[1] {
+                        Term::Var(idx) => use_var_at_runtime(usage, *idx, borrow_mode, captures)?,
+                        _ => check_ownership_in_term_with_capture(
+                            env, ctx, &args[1], usage, captures,
+                        )?,
+                    }
+                    for arg in &args[2..] {
+                        check_ownership_in_term_with_capture(env, ctx, arg, usage, captures)?;
+                    }
+                    return Ok(());
+                }
             }
+            let info = spine_info(env, ctx, &head, &args)?;
+            if info.result_erased {
+                // The application is a type, a type family or a proof.
+                return Ok(());
+            }
+            match &*head {
+                // Calling a function variable: a read (Fn), a mutable use (FnMut) or a move
+                // (FnOnce) of the variable; each requires that it has not been moved.
+                Term::Var(f_idx) => use_var_at_runtime(
+                    usage,
+                    *f_idx,
+                    usage_mode_for_kind(info.arg_kind[0]),
+                    captures,
+                )?,
+                // A compound head is evaluated to a function value and consumed by the call.
+                _ => check_ownership_in_term_with_capture(env, ctx, &head, usage, captures)?,
+            }
+            for (arg, erased) in args.iter().zip(&info.arg_erased) {
+                if !*erased {
+                    check_ownership_in_term_with_capture(env, ctx, arg, usage, captures)?;
+                }
+            }
+            Ok(())
         }
         Term::Lam(ty, body, info, kind) => {
-            check_ownership_in_term_with_capture(
-                env,
-                ctx,
-                ty,
-                usage,
-                UsageMode::Observational,
-                captures,
-            )?;
+            // The binder type is erased. Inside the body, an outer variable is used at most as
+            // strongly as the closure's kind allows (see `use_var_at_runtime`).
             let is_copy = is_copy_type(env, ctx, ty)?;
-            usage.push_with_binder(is_copy, *info);
+            usage.push_binder(is_copy, *info, Some(term_key(term)));
             let new_ctx = ctx.push(ty.clone());
             let mut body_captures = bump_captures(captures);
             body_captures.push(CaptureContext {
                 mode: usage_mode_for_kind(*kind),
                 depth: 1,
             });
-            let res = check_ownership_in_term_with_capture(
-                env,
-                &new_ctx,
-                body,
-                usage,
-                mode,
-                &body_captures,
-            );
+            let res =
+                check_ownership_in_term_with_capture(env, &new_ctx, body, usage, &body_captures);
             usage.pop();
             res
         }
-        Term::Pi(ty, body, info, _) => {
-            check_ownership_in_term_with_capture(
-                env,
-                ctx,
-                ty,
-                usage,
-                UsageMode::Observational,
-                captures,
-            )?;
-            let is_copy = is_copy_type(env, ctx, ty)?;
-            usage.push_with_binder(is_copy, *info);
-            let new_ctx = ctx.push(ty.clone());
-            let body_captures = bump_captures(captures);
-            let res = check_ownership_in_term_with_capture(
-                env,
-                &new_ctx,
-                body,
-                usage,
-                UsageMode::Observational,
-                &body_captures,
-            );
-            usage.pop();
-            res
-        }
+        // A Pi type is erased.
+        Term::Pi(_, _, _, _) => Ok(()),
         Term::LetE(ty, val, body) => {
-            check_ownership_in_term_with_capture(
-                env,
-                ctx,
-                ty,
-                usage,
-                UsageMode::Observational,
-                captures,
-            )?;
-            check_ownership_in_term_with_capture(env, ctx, val, usage, mode, captures)?;
+            // The value is evaluated unless it is erased (a type, type family or proof).
+            if !is_erased_type(env, ctx, ty) {
+                check_ownership_in_term_with_capture(env, ctx, val, usage, captures)?;
+            }
             let is_copy = is_copy_type(env, ctx, ty)?;
-            usage.push(is_copy);
+            usage.push_binder(is_copy, BinderInfo::Default, Some(term_key(term)));
             let new_ctx = ctx.push(ty.clone());
             let body_captures = bump_captures(captures);
-            let res = check_ownership_in_term_with_capture(
-                env,
-                &new_ctx,
-                body,
-                usage,
-                mode,
-                &body_captures,
-            );
+            let res =
+                check_ownership_in_term_with_capture(env, &new_ctx, body, usage, &body_captures);
             usage.pop();
             res
         }
         Term::Fix(ty, body) => {
-            check_ownership_in_term_with_capture(
-                env,
-                ctx,
-                ty,
-                usage,
-                UsageMode::Observational,
-                captures,
-            )?;
             let is_copy = is_copy_type(env, ctx, ty)?;
-            usage.push(is_copy);
+            // The fixpoint body runs once per recursive call: outer non-Copy variables may not
+            // be consumed in it.
+            usage.push_barrier();
+            usage.push_binder(is_copy, BinderInfo::Default, Some(term_key(term)));
             let new_ctx = ctx.push(ty.clone());
             let body_captures = bump_captures(captures);
-            let res = check_ownership_in_term_with_capture(
-                env,
-                &new_ctx,
-                body,
-                usage,
-                mode,
-                &body_captures,
-            );
+            let res =
+                check_ownership_in_term_with_capture(env, &new_ctx, body, usage, &body_captures);
             usage.pop();
+            usage.pop_barrier();
             res
+        }
+        Term::Rec(ind_name, _) => {
+            // A recursor value outside an application spine that supplies its minor premises.
+            Err(TypeError::OwnershipError(
+                OwnershipError::RecursorWithoutMinorPremises {
+                    ind: ind_name.clone(),
+                },
+            ))
+        }
+        Term::Const(_, _)
+        | Term::Sort(_)
+        | Term::Ind(_, _)
+        | Term::Ctor(_, _, _)
+        | Term::Meta(_) => Ok(()),
+    }
+}
+
+/// Runtime occurrence of variable `idx` in `mode` (a move, a mutable use, or — for
+/// `Observational` — a read), seen through the closures in `captures`: an occurrence inside a
+/// closure counts for the variable as the weaker of `mode` and the capture modes of the closures it
+/// is captured by (an `Fn` closure only reads its captures, an `FnMut` closure uses them mutably).
+fn use_var_at_runtime(
+    usage: &mut UsageContext,
+    idx: usize,
+    mode: UsageMode,
+    captures: &[CaptureContext],
+) -> Result<(), TypeError> {
+    let effective_mode = effective_capture_mode(idx, mode, captures);
+    match effective_mode {
+        UsageMode::Observational => usage.read_var(idx).map_err(TypeError::from),
+        _ => usage.use_var(idx, effective_mode).map_err(TypeError::from),
+    }
+}
+
+/// `mode` downgraded by the capture modes of the enclosing closures that capture variable `idx`.
+fn effective_capture_mode(idx: usize, mode: UsageMode, captures: &[CaptureContext]) -> UsageMode {
+    let mut effective_mode = mode;
+    for capture in captures {
+        if idx >= capture.depth {
+            effective_mode = usage_mode_min(effective_mode, capture.mode);
+        }
+    }
+    effective_mode
+}
+
+/// For each constructor field (binders after the parameters), whether it is a recursive field,
+/// with the same criterion as the recursor's minor-premise type (`compute_minor_premise_type`).
+fn ctor_recursive_fields(ctor_ty: &Rc<Term>, ind_name: &str, num_params: usize) -> Vec<bool> {
+    let (binders, _) = peel_pi_binders(ctor_ty);
+    binders
+        .iter()
+        .skip(num_params)
+        .map(|(dom, _)| extract_inductive_indices(dom, ind_name, num_params).is_some())
+        .collect()
+}
+
+/// Ownership walk of a recursor application `Rec_I params motive minors indices major extra...`.
+///
+/// * The application must supply the motive and every minor premise (a recursor value that
+///   receives its minor premises later, through a variable, is rejected).
+/// * Parameters, motive and indices are erased; so are minor premises, major premise and extra
+///   arguments whose domain is erased, and the whole application if its type is erased (an
+///   elimination into `Prop` or into a sort).
+/// * `I` non-recursive (no constructor has a recursive field) and the application saturated
+///   (the major premise is supplied): exactly one minor premise runs, after the major premise has
+///   been evaluated (this is also the order of MIR's inline lowering). The major premise is walked
+///   first; then every minor premise is walked from the same state (they are alternatives) and
+///   the resulting moved sets are joined.
+/// * Otherwise (`I` recursive, or the application unsaturated): the arguments are walked in order
+///   (the minor premises are built as values before any dispatch: MIR builds them as closures
+///   before it evaluates the major premise, and an unsaturated application is a function that
+///   holds them). A minor premise is *repeatable* if the application is unsaturated (the result
+///   is a function that may be called many times), if `I` is branching (some constructor has two
+///   or more recursive fields), or if its constructor has a recursive field; for an unsaturated
+///   application every minor premise is repeatable, also for a non-recursive `I`, so two minor
+///   premises may not consume the same captured value. A repeatable minor premise of a
+///   constructor with fields must be a lambda abstraction (or a global constant), and its body
+///   may not consume non-Copy variables bound outside it; a repeatable minor premise of a
+///   field-less constructor is returned for every occurrence of the constructor and must be Copy.
+/// * In every minor premise, a recursive field of non-Copy type starts out moved: the recursor
+///   evaluates the induction hypotheses eagerly, consuming the field, before running the minor
+///   premise (only the induction hypothesis may be used). A minor premise must bind such fields as
+///   lambda parameters.
+fn check_ownership_rec_app(
+    env: &Env,
+    ctx: &Context,
+    head: &Rc<Term>,
+    decl: &InductiveDecl,
+    args: &[Rc<Term>],
+    usage: &mut UsageContext,
+    captures: &[CaptureContext],
+) -> Result<(), TypeError> {
+    let ind_name = decl.name.as_str();
+    let num_params = decl.num_params;
+    let num_ctors = decl.ctors.len();
+    let num_indices = count_pi_binders(&decl.ty).saturating_sub(num_params);
+    let expected_args = num_params + 1 + num_ctors + num_indices + 1;
+    let saturated = args.len() >= expected_args;
+    if args.len() < num_params + 1 + num_ctors {
+        // Minor premises supplied later (through a variable bound to this partial application)
+        // could not be checked against how often the recursor runs them.
+        return Err(TypeError::OwnershipError(
+            OwnershipError::RecursorWithoutMinorPremises {
+                ind: ind_name.to_string(),
+            },
+        ));
+    }
+
+    let info = spine_info(env, ctx, head, args)?;
+    if info.result_erased {
+        return Ok(());
+    }
+    let erased = rec_erased_positions(decl, num_indices, &info);
+
+    let recursive_fields: Vec<Vec<bool>> = decl
+        .ctors
+        .iter()
+        .map(|ctor| ctor_recursive_fields(&ctor.ty, ind_name, num_params))
+        .collect();
+    let recursive_counts: Vec<usize> = recursive_fields
+        .iter()
+        .map(|fields| fields.iter().filter(|is_rec| **is_rec).count())
+        .collect();
+    let is_recursive = recursive_counts.iter().any(|count| *count > 0);
+    let is_branching = recursive_counts.iter().any(|count| *count >= 2);
+
+    // Whether a value of `I params ...` (hence a recursive field) is Copy. Copy-ness does not
+    // depend on indices (see `derive_copy_instance`).
+    let recursive_field_copy = if is_recursive && args.len() >= num_params {
+        let levels = match &**head {
+            Term::Rec(_, levels) => levels.clone(),
+            _ => Vec::new(),
+        };
+        let ind_levels: Vec<Level> = levels
+            .iter()
+            .take(decl.univ_params.len())
+            .cloned()
+            .collect();
+        let mut ind_ty = Rc::new(Term::Ind(ind_name.to_string(), ind_levels));
+        for param in &args[..num_params] {
+            ind_ty = Term::app(ind_ty, param.clone());
+        }
+        is_copy_type(env, ctx, &ind_ty)?
+    } else {
+        true
+    };
+
+    let walk_minor =
+        |pos: usize, ctor_idx: usize, usage: &mut UsageContext| -> Result<(), TypeError> {
+            let repeatable =
+                !saturated || (is_recursive && (is_branching || recursive_counts[ctor_idx] > 0));
+            check_ownership_minor_premise(
+                env,
+                ctx,
+                &args[pos],
+                &decl.ctors[ctor_idx].name,
+                &recursive_fields[ctor_idx],
+                repeatable,
+                recursive_field_copy,
+                usage,
+                captures,
+            )
+        };
+
+    if !is_recursive && saturated {
+        // Major premise first, then the minor premises as alternatives. An unsaturated
+        // application builds every minor premise before any dispatch, so it takes the sequential
+        // walk below (with every minor premise repeatable).
+        let major_pos = num_params + 1 + num_ctors + num_indices;
+        if major_pos < args.len() && !erased[major_pos] {
+            check_ownership_in_term_with_capture(env, ctx, &args[major_pos], usage, captures)?;
+        }
+        let before = usage.moved_state();
+        let mut joined = before.clone();
+        for ctor_idx in 0..num_ctors {
+            let pos = num_params + 1 + ctor_idx;
+            if erased[pos] {
+                continue;
+            }
+            usage.restore_moved_state(&before);
+            walk_minor(pos, ctor_idx, usage)?;
+            UsageContext::join_moved_states(&mut joined, &usage.moved_state());
+        }
+        usage.restore_moved_state(&joined);
+        for pos in (major_pos + 1)..args.len() {
+            if !erased[pos] {
+                check_ownership_in_term_with_capture(env, ctx, &args[pos], usage, captures)?;
+            }
+        }
+        return Ok(());
+    }
+
+    for (pos, arg) in args.iter().enumerate() {
+        if erased[pos] {
+            continue;
+        }
+        match rec_arg_role(decl, num_indices, pos) {
+            RecArgRole::Minor(ctor_idx) => walk_minor(pos, ctor_idx, usage)?,
+            _ => check_ownership_in_term_with_capture(env, ctx, arg, usage, captures)?,
+        }
+    }
+    Ok(())
+}
+
+/// Ownership walk of one minor premise (see `check_ownership_rec_app`).
+#[allow(clippy::too_many_arguments)]
+fn check_ownership_minor_premise(
+    env: &Env,
+    ctx: &Context,
+    minor: &Rc<Term>,
+    ctor_name: &str,
+    recursive_fields: &[bool],
+    repeatable: bool,
+    recursive_field_copy: bool,
+    usage: &mut UsageContext,
+    captures: &[CaptureContext],
+) -> Result<(), TypeError> {
+    // Binders of the minor premise: each field, followed by its induction hypothesis when the
+    // field is recursive (`compute_minor_premise_type`). `Some(true)` marks a recursive field.
+    let mut roles: Vec<Option<bool>> = Vec::new();
+    for is_rec in recursive_fields {
+        roles.push(Some(*is_rec));
+        if *is_rec {
+            roles.push(None);
+        }
+    }
+
+    if roles.is_empty() {
+        // Field-less constructor: the minor premise is the value the recursor returns for it.
+        if repeatable {
+            let minor_ty = infer(env, ctx, minor.clone())?;
+            if !is_copy_type(env, ctx, &minor_ty)? {
+                return Err(TypeError::OwnershipError(
+                    OwnershipError::RepeatedMinorValueNotCopy {
+                        ctor: ctor_name.to_string(),
+                    },
+                ));
+            }
+        }
+        return check_ownership_in_term_with_capture(env, ctx, minor, usage, captures);
+    }
+
+    if repeatable {
+        usage.push_barrier();
+    }
+    let mut pushed = 0usize;
+    let mut current = minor.clone();
+    let mut current_ctx = ctx.clone();
+    let mut current_captures = captures.to_vec();
+    let mut role_idx = 0usize;
+    let result = loop {
+        if role_idx == roles.len() {
+            break check_ownership_in_term_with_capture(
+                env,
+                &current_ctx,
+                &current,
+                usage,
+                &current_captures,
+            );
+        }
+        match &*current {
+            Term::Lam(ty, body, info, kind) => {
+                // The binder type is erased.
+                let is_copy = match is_copy_type(env, &current_ctx, ty) {
+                    Ok(is_copy) => is_copy,
+                    Err(err) => break Err(err),
+                };
+                if roles[role_idx] == Some(true) {
+                    usage.push_recursive_field(is_copy, *info, Some(term_key(&current)));
+                } else {
+                    usage.push_binder(is_copy, *info, Some(term_key(&current)));
+                }
+                pushed += 1;
+                current_ctx = current_ctx.push(ty.clone());
+                current_captures = bump_captures(&current_captures);
+                current_captures.push(CaptureContext {
+                    mode: usage_mode_for_kind(*kind),
+                    depth: 1,
+                });
+                let next = body.clone();
+                current = next;
+                role_idx += 1;
+            }
+            _ => {
+                let unbound_recursive_field =
+                    roles[role_idx..].iter().any(|role| *role == Some(true));
+                if unbound_recursive_field && !recursive_field_copy {
+                    break Err(TypeError::OwnershipError(
+                        OwnershipError::MinorMustBindRecursiveField {
+                            ctor: ctor_name.to_string(),
+                        },
+                    ));
+                }
+                if repeatable
+                    && pushed == 0
+                    && !matches!(&*current, Term::Const(_, _) | Term::Ctor(_, _, _))
+                {
+                    break Err(TypeError::OwnershipError(
+                        OwnershipError::RepeatedMinorNotLambda {
+                            ctor: ctor_name.to_string(),
+                        },
+                    ));
+                }
+                break check_ownership_in_term_with_capture(
+                    env,
+                    &current_ctx,
+                    &current,
+                    usage,
+                    &current_captures,
+                );
+            }
+        }
+    };
+    for _ in 0..pushed {
+        usage.pop();
+    }
+    if repeatable {
+        usage.pop_barrier();
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------------------------
+// Uses analysis: how a term uses the variables free in it (stateless; same positions as the walk)
+// ---------------------------------------------------------------------------------------------
+
+/// How `body` uses each variable free in it: for a variable with de Bruijn index `i` in `ctx`
+/// (the context of `body`), the strongest use of it in `body` — `Consuming` (moved),
+/// `MutBorrow` (used mutably) or `Observational` (read, or only occurring in erased positions).
+/// Variables that do not occur are absent.
+///
+/// The positions are those of the ownership walk: erased positions count as `Observational`;
+/// a variable in a runtime position is `Consuming`; the head of a call is used according to the
+/// kind of the called function (Fn: read, FnMut: mutable use, FnOnce: move); the argument of
+/// `borrow_shared` / `borrow_mut` is read / used mutably; inside a nested lambda of kind `k`, a
+/// use counts as the weaker of the use and `k`'s capture mode (Fn: read, FnMut: mutable use,
+/// FnOnce: move).
+///
+/// This one analysis computes the function kind a lambda requires (kernel, [`TypeError::FunctionKindTooSmall`]),
+/// the elaborator's capture analysis and MIR's required capture modes.
+pub fn term_variable_uses(
+    env: &Env,
+    ctx: &Context,
+    body: &Rc<Term>,
+) -> Result<HashMap<usize, UsageMode>, TypeError> {
+    let mut uses = VariableUses::default();
+    collect_term_uses(env, ctx, body, 0, &[], &mut uses)?;
+    Ok(uses.modes)
+}
+
+/// The variables free in `term` that occur in at least one runtime (non-erased) position, by de
+/// Bruijn index in `ctx`. A free variable outside this set occurs only in erased positions
+/// (types, proofs, motives, indices, parameters): its value is not needed at run time.
+pub fn term_runtime_variables(
+    env: &Env,
+    ctx: &Context,
+    term: &Rc<Term>,
+) -> Result<HashSet<usize>, TypeError> {
+    let mut uses = VariableUses::default();
+    collect_term_uses(env, ctx, term, 0, &[], &mut uses)?;
+    Ok(uses.runtime)
+}
+
+#[derive(Default)]
+struct VariableUses {
+    /// Strongest use of each free variable.
+    modes: HashMap<usize, UsageMode>,
+    /// Free variables with a runtime occurrence.
+    runtime: HashSet<usize>,
+}
+
+/// The capture modes of the closure `λx. body` from the uses of the variables free in `body`
+/// (`ctx` is the context of `body`, so index 0 is `x`, which is not a capture): a captured
+/// variable of Copy type is always read (`Observational`: the closure works on its own copy);
+/// otherwise it is moved into the closure (`Consuming`) if the body consumes it, mutably borrowed
+/// (`MutBorrow`) if the body uses it mutably or consumes a `Ref Mut` value, and read
+/// (`Observational`) otherwise. Keys are indices outside the lambda (body index minus 1).
+pub fn capture_modes_from_uses(
+    env: &Env,
+    ctx: &Context,
+    uses: &HashMap<usize, UsageMode>,
+) -> Result<CaptureModes, TypeError> {
+    let mut modes = CaptureModes::new();
+    for (idx, mode) in uses {
+        if *idx == 0 {
+            continue;
+        }
+        let mut capture_mode = *mode;
+        if capture_mode != UsageMode::Observational {
+            if let Some(ty) = ctx.get(*idx) {
+                let shifted_ty = ty.shift(0, idx + 1);
+                if capture_mode == UsageMode::Consuming && is_mut_ref_type(env, ctx, &shifted_ty)? {
+                    // Consuming a captured `Ref Mut` reborrows it.
+                    capture_mode = UsageMode::MutBorrow;
+                } else if is_copy_type(env, ctx, &shifted_ty)? {
+                    // The closure holds its own copy: moving or mutably borrowing it does not
+                    // affect the captured variable.
+                    capture_mode = UsageMode::Observational;
+                }
+            }
+        }
+        modes.insert(idx - 1, capture_mode);
+    }
+    Ok(modes)
+}
+
+/// The function kind a closure with these capture modes requires: `FnOnce` if it moves a
+/// capture, else `FnMut` if it uses one mutably, else `Fn`.
+pub fn required_kind_from_capture_modes(modes: &CaptureModes) -> FunctionKind {
+    let mut required = FunctionKind::Fn;
+    for mode in modes.values() {
+        required = match mode {
+            UsageMode::Observational => required,
+            UsageMode::MutBorrow => function_kind_max(required, FunctionKind::FnMut),
+            UsageMode::Consuming => function_kind_max(required, FunctionKind::FnOnce),
+        };
+    }
+    required
+}
+
+fn record_use(
+    uses: &mut VariableUses,
+    idx: usize,
+    depth: usize,
+    mode: UsageMode,
+    captures: &[CaptureContext],
+) {
+    if idx < depth {
+        return;
+    }
+    let effective = effective_capture_mode(idx, mode, captures);
+    uses.runtime.insert(idx - depth);
+    uses.modes
+        .entry(idx - depth)
+        .and_modify(|existing| {
+            if usage_mode_rank(effective) > usage_mode_rank(*existing) {
+                *existing = effective;
+            }
+        })
+        .or_insert(effective);
+}
+
+/// Records the variables free in an erased subterm as `Observational` uses.
+fn record_erased_uses(term: &Rc<Term>, depth: usize, uses: &mut VariableUses) {
+    let mut free = HashSet::new();
+    collect_free_vars(term, depth, &mut free);
+    for idx in free {
+        uses.modes.entry(idx).or_insert(UsageMode::Observational);
+    }
+}
+
+fn collect_term_uses(
+    env: &Env,
+    ctx: &Context,
+    term: &Rc<Term>,
+    depth: usize,
+    captures: &[CaptureContext],
+    uses: &mut VariableUses,
+) -> Result<(), TypeError> {
+    match &**term {
+        Term::Var(idx) => {
+            record_use(uses, *idx, depth, UsageMode::Consuming, captures);
+            Ok(())
+        }
+        Term::App(_, _, _) => {
+            let (head, spine) = collect_app_spine(term);
+            let args: Vec<Rc<Term>> = spine.into_iter().map(|item| item.arg).collect();
+            if let Term::Rec(ind_name, _) = &*head {
+                if let Some(decl) = env.get_inductive(ind_name) {
+                    let num_indices = count_pi_binders(&decl.ty).saturating_sub(decl.num_params);
+                    let info = spine_info(env, ctx, &head, &args)?;
+                    if info.result_erased {
+                        record_erased_uses(term, depth, uses);
+                        return Ok(());
+                    }
+                    let erased = rec_erased_positions(decl, num_indices, &info);
+                    for (arg, is_erased) in args.iter().zip(erased) {
+                        if is_erased {
+                            record_erased_uses(arg, depth, uses);
+                        } else {
+                            collect_term_uses(env, ctx, arg, depth, captures, uses)?;
+                        }
+                    }
+                    return Ok(());
+                }
+            }
+            if let Some(borrow_mode) = borrow_primitive_use(&head) {
+                if args.len() >= 2 {
+                    record_erased_uses(&args[0], depth, uses);
+                    match &*args[1] {
+                        Term::Var(idx) => record_use(uses, *idx, depth, borrow_mode, captures),
+                        _ => collect_term_uses(env, ctx, &args[1], depth, captures, uses)?,
+                    }
+                    for arg in &args[2..] {
+                        collect_term_uses(env, ctx, arg, depth, captures, uses)?;
+                    }
+                    return Ok(());
+                }
+            }
+            let info = spine_info(env, ctx, &head, &args)?;
+            if info.result_erased {
+                record_erased_uses(term, depth, uses);
+                return Ok(());
+            }
+            match &*head {
+                Term::Var(f_idx) => record_use(
+                    uses,
+                    *f_idx,
+                    depth,
+                    usage_mode_for_kind(info.arg_kind[0]),
+                    captures,
+                ),
+                _ => collect_term_uses(env, ctx, &head, depth, captures, uses)?,
+            }
+            for (arg, erased) in args.iter().zip(&info.arg_erased) {
+                if *erased {
+                    record_erased_uses(arg, depth, uses);
+                } else {
+                    collect_term_uses(env, ctx, arg, depth, captures, uses)?;
+                }
+            }
+            Ok(())
+        }
+        Term::Lam(ty, body, _, kind) => {
+            record_erased_uses(ty, depth, uses);
+            let new_ctx = ctx.push(ty.clone());
+            let mut body_captures = bump_captures(captures);
+            body_captures.push(CaptureContext {
+                mode: usage_mode_for_kind(*kind),
+                depth: 1,
+            });
+            collect_term_uses(env, &new_ctx, body, depth + 1, &body_captures, uses)
+        }
+        Term::Pi(_, _, _, _) => {
+            record_erased_uses(term, depth, uses);
+            Ok(())
+        }
+        Term::LetE(ty, val, body) => {
+            record_erased_uses(ty, depth, uses);
+            if is_erased_type(env, ctx, ty) {
+                record_erased_uses(val, depth, uses);
+            } else {
+                collect_term_uses(env, ctx, val, depth, captures, uses)?;
+            }
+            let new_ctx = ctx.push(ty.clone());
+            let body_captures = bump_captures(captures);
+            collect_term_uses(env, &new_ctx, body, depth + 1, &body_captures, uses)
+        }
+        Term::Fix(ty, body) => {
+            record_erased_uses(ty, depth, uses);
+            let new_ctx = ctx.push(ty.clone());
+            let body_captures = bump_captures(captures);
+            collect_term_uses(env, &new_ctx, body, depth + 1, &body_captures, uses)
         }
         Term::Const(_, _)
         | Term::Sort(_)
@@ -4695,236 +5855,6 @@ fn is_mut_ref_type(env: &Env, ctx: &Context, ty: &Rc<Term>) -> Result<bool, Type
     }
 }
 
-fn infer_required_function_kind_in_term(
-    env: &Env,
-    ctx: &Context,
-    term: &Rc<Term>,
-    capture_depth: usize,
-    mode: UsageMode,
-    captures: &[CaptureContext],
-    outer_param_idx: Option<usize>,
-) -> Result<FunctionKind, TypeError> {
-    match &**term {
-        Term::Var(idx) => {
-            if outer_param_idx == Some(*idx) {
-                return Ok(FunctionKind::Fn);
-            }
-            let mut capture_mode = None;
-            for capture in captures {
-                if *idx >= capture.depth {
-                    capture_mode = Some(match capture_mode {
-                        Some(existing) => usage_mode_min(existing, capture.mode),
-                        None => capture.mode,
-                    });
-                }
-            }
-            let effective_mode = capture_mode.unwrap_or(mode);
-            if *idx >= capture_depth {
-                match effective_mode {
-                    UsageMode::Observational => {}
-                    UsageMode::MutBorrow => {
-                        return Ok(FunctionKind::FnMut);
-                    }
-                    UsageMode::Consuming => {
-                        if let Some(ty) = ctx.get(*idx) {
-                            let shifted_ty = ty.shift(0, idx + 1);
-                            if is_mut_ref_type(env, ctx, &shifted_ty)? {
-                                return Ok(FunctionKind::FnMut);
-                            }
-                            if !is_copy_type(env, ctx, &shifted_ty)? {
-                                return Ok(FunctionKind::FnOnce);
-                            }
-                        } else {
-                            return Ok(FunctionKind::FnOnce);
-                        }
-                    }
-                }
-            }
-            Ok(FunctionKind::Fn)
-        }
-        Term::App(f, a, _) => {
-            if mode == UsageMode::Observational {
-                let needs_f = infer_required_function_kind_in_term(
-                    env,
-                    ctx,
-                    f,
-                    capture_depth,
-                    mode,
-                    captures,
-                    outer_param_idx,
-                )?;
-                let needs_a = infer_required_function_kind_in_term(
-                    env,
-                    ctx,
-                    a,
-                    capture_depth,
-                    mode,
-                    captures,
-                    outer_param_idx,
-                )?;
-                Ok(function_kind_max(needs_f, needs_a))
-            } else {
-                let f_ty = infer(env, ctx, f.clone())?;
-                let f_ty_norm = whnf_in_ctx(env, ctx, f_ty, crate::Transparency::Reducible)?;
-                let f_mode = match &*f_ty_norm {
-                    Term::Pi(_, _, _, kind) => usage_mode_for_kind(*kind),
-                    _ => mode,
-                };
-                let f_eval_mode = match (&**f, f_mode) {
-                    (Term::Var(_), UsageMode::Observational) => UsageMode::Observational,
-                    (Term::Var(_), UsageMode::MutBorrow) => UsageMode::MutBorrow,
-                    _ => UsageMode::Consuming,
-                };
-                let needs_f = infer_required_function_kind_in_term(
-                    env,
-                    ctx,
-                    f,
-                    capture_depth,
-                    f_eval_mode,
-                    captures,
-                    outer_param_idx,
-                )?;
-                let needs_a = infer_required_function_kind_in_term(
-                    env,
-                    ctx,
-                    a,
-                    capture_depth,
-                    UsageMode::Consuming,
-                    captures,
-                    outer_param_idx,
-                )?;
-                Ok(function_kind_max(needs_f, needs_a))
-            }
-        }
-        Term::Lam(ty, body, _, kind) => {
-            let needs_ty = infer_required_function_kind_in_term(
-                env,
-                ctx,
-                ty,
-                capture_depth,
-                UsageMode::Observational,
-                captures,
-                outer_param_idx,
-            )?;
-            let new_ctx = ctx.push(ty.clone());
-            let mut body_captures = bump_captures(captures);
-            body_captures.push(CaptureContext {
-                mode: usage_mode_for_kind(*kind),
-                depth: 1,
-            });
-            let body_outer_param_idx = outer_param_idx.map(|idx| idx + 1);
-            let needs_body = infer_required_function_kind_in_term(
-                env,
-                &new_ctx,
-                body,
-                capture_depth + 1,
-                mode,
-                &body_captures,
-                body_outer_param_idx,
-            )?;
-            Ok(function_kind_max(needs_ty, needs_body))
-        }
-        Term::Pi(ty, body, _, _) => {
-            let needs_ty = infer_required_function_kind_in_term(
-                env,
-                ctx,
-                ty,
-                capture_depth,
-                UsageMode::Observational,
-                captures,
-                outer_param_idx,
-            )?;
-            let new_ctx = ctx.push(ty.clone());
-            let body_captures = bump_captures(captures);
-            let body_outer_param_idx = outer_param_idx.map(|idx| idx + 1);
-            let needs_body = infer_required_function_kind_in_term(
-                env,
-                &new_ctx,
-                body,
-                capture_depth + 1,
-                UsageMode::Observational,
-                &body_captures,
-                body_outer_param_idx,
-            )?;
-            Ok(function_kind_max(needs_ty, needs_body))
-        }
-        Term::LetE(ty, val, body) => {
-            let needs_ty = infer_required_function_kind_in_term(
-                env,
-                ctx,
-                ty,
-                capture_depth,
-                UsageMode::Observational,
-                captures,
-                outer_param_idx,
-            )?;
-            let needs_val = infer_required_function_kind_in_term(
-                env,
-                ctx,
-                val,
-                capture_depth,
-                mode,
-                captures,
-                outer_param_idx,
-            )?;
-            let new_ctx = ctx.push(ty.clone());
-            let body_captures = bump_captures(captures);
-            let body_outer_param_idx = outer_param_idx.map(|idx| idx + 1);
-            let needs_body = infer_required_function_kind_in_term(
-                env,
-                &new_ctx,
-                body,
-                capture_depth + 1,
-                mode,
-                &body_captures,
-                body_outer_param_idx,
-            )?;
-            Ok(function_kind_max(
-                needs_ty,
-                function_kind_max(needs_val, needs_body),
-            ))
-        }
-        Term::Fix(ty, body) => {
-            let needs_ty = infer_required_function_kind_in_term(
-                env,
-                ctx,
-                ty,
-                capture_depth,
-                UsageMode::Observational,
-                captures,
-                outer_param_idx,
-            )?;
-            let new_ctx = ctx.push(ty.clone());
-            let body_captures = bump_captures(captures);
-            let body_outer_param_idx = outer_param_idx.map(|idx| idx + 1);
-            let needs_body = infer_required_function_kind_in_term(
-                env,
-                &new_ctx,
-                body,
-                capture_depth + 1,
-                mode,
-                &body_captures,
-                body_outer_param_idx,
-            )?;
-            Ok(function_kind_max(needs_ty, needs_body))
-        }
-        Term::Const(_, _)
-        | Term::Sort(_)
-        | Term::Ind(_, _)
-        | Term::Ctor(_, _, _)
-        | Term::Rec(_, _)
-        | Term::Meta(_) => Ok(FunctionKind::Fn),
-    }
-}
-
-fn infer_required_function_kind(
-    env: &Env,
-    ctx: &Context,
-    body: &Rc<Term>,
-) -> Result<FunctionKind, TypeError> {
-    infer_required_function_kind_in_term(env, ctx, body, 1, UsageMode::Consuming, &[], Some(0))
-}
-
 fn result_sort_with_transparency(
     env: &Env,
     ctx: &Context,
@@ -4988,9 +5918,41 @@ pub fn is_prop_like_with_transparency(
         .map_or(false, level_is_zero))
 }
 
-/// Enforce Prop -> Type elimination restriction for inductives in Prop.
-/// Allowed only for empty inductives or singleton inductives whose non-parameter
-/// fields are all in Prop. Elimination into Prop is always allowed.
+/// Whether `ty` (a type in `ctx`) is a proposition, i.e. its own type is the sort `Prop`,
+/// so that its inhabitants are proofs.
+///
+/// Unlike [`is_prop_like_with_transparency`], this does NOT hold for the sort `Prop` itself:
+/// a binder of type `Prop` holds a proposition (data), not a proof.
+fn is_proposition_with_transparency(
+    env: &Env,
+    ctx: &Context,
+    ty: &Rc<Term>,
+    prop_ctx: PropTransparencyContext,
+) -> Result<bool, TypeError> {
+    let sort_ty = infer(env, ctx, ty.clone())?;
+    let sort_norm = whnf_in_ctx(env, ctx, sort_ty, prop_ctx.transparency())?;
+    Ok(extract_level(&sort_norm)
+        .as_ref()
+        .map_or(false, level_is_zero))
+}
+
+/// Enforce the Prop -> Type elimination restriction for inductives in Prop.
+///
+/// The restriction applies to every inductive that MAY be a proposition: its arity ends in a
+/// sort whose level is not provably nonzero for every assignment of the level parameters
+/// (`Prop`, `Sort u`, `Sort (imax 1 u)`; not `Sort (u + 1)` or `Sort (max 1 u)`), as in Lean 4.
+///
+/// Elimination into Prop is always allowed. Elimination of an inductive proposition into any
+/// other sort ("large elimination") is allowed only if
+/// * it has no constructor, or
+/// * it has exactly one constructor all of whose fields (the constructor's binders after the
+///   uniform parameters) are proofs, i.e. their types are propositions, or
+/// * it has the shape of equality (controlled exception: transport).
+///
+/// A field whose type is the sort `Prop` itself holds a proposition, not a proof; allowing
+/// large elimination for it would make `Prop` a definitional retract of a proposition, which is
+/// inconsistent with an impredicative `Prop` (Hurkens' paradox). Parameters are not fields and
+/// are not restricted.
 pub fn check_elimination_restriction(
     env: &Env,
     ind_name: &str,
@@ -5034,14 +5996,18 @@ pub fn check_elimination_restriction_with_transparency(
         return Ok(());
     }
 
-    // 3. Determine if Inductive is Prop
-    // Extract result level from decl.ty
+    // 3. Determine whether the inductive may be a proposition: its arity ends in a sort whose
+    // level is not provably nonzero (`Prop`, but also a level parameter `u` or `imax 1 u`).
+    // Such an inductive is a proposition for some assignment of its level parameters, so (as in
+    // Lean 4, which decides this once per declaration) it gets the restriction of propositions.
     let ctx = Context::new();
     let result_sort = result_sort_with_transparency(env, &ctx, &decl.ty, prop_ctx.transparency())?;
 
-    let is_prop = result_sort.as_ref().map_or(false, level_is_zero);
+    let may_be_prop = result_sort.as_ref().map_or(false, |level| {
+        !level_is_never_zero(&reduce_level(level.clone()))
+    });
 
-    if is_prop {
+    if may_be_prop {
         // Controlled exception: allow equality eliminator (transport) into Type
         // for inductives that match the shape of Eq.
         if is_equality_inductive(decl) {
@@ -5049,26 +6015,30 @@ pub fn check_elimination_restriction_with_transparency(
         }
 
         // 4. Large Elimination Restriction
-        // Allowed only if 0 constructors, OR 1 constructor where all non-parameter fields are in Prop.
+        // Allowed only if 0 constructors, OR 1 constructor all of whose fields
+        // (binders after the uniform parameters) are proofs.
 
         if decl.ctors.len() > 1 {
             return Err(TypeError::LargeElimination(ind_name.to_string()));
         }
 
         if decl.ctors.len() == 1 {
-            // Check all constructor arguments (including parameters).
-            // Large elimination is allowed only if every binder lives in Prop.
             let ctor = &decl.ctors[0];
             let mut ctx = Context::new();
             let mut curr = &ctor.ty;
+            let mut binder_idx = 0usize;
 
             while let Term::Pi(dom, body, _, _) = &**curr {
-                if !is_prop_like_with_transparency(env, &ctx, dom, prop_ctx)? {
+                // Parameters are not fields: they are fixed by the type being eliminated.
+                if binder_idx >= decl.num_params
+                    && !is_proposition_with_transparency(env, &ctx, dom, prop_ctx)?
+                {
                     return Err(TypeError::LargeElimination(ind_name.to_string()));
                 }
 
                 ctx = ctx.push(dom.clone());
                 curr = body;
+                binder_idx += 1;
             }
         }
     }
@@ -5090,6 +6060,32 @@ fn is_type_term_in_ctx(env: &Env, ctx: &Context, ty: &Rc<Term>) -> Result<bool, 
     ))
 }
 
+/// The universe level of `ty` if `ty` is a type in `ctx`, i.e. its type reduces to a sort
+/// (`Γ ⊢ ty : Sort ℓ`); `ExpectedSort` otherwise. Opaque aliases of sorts are unfolded only
+/// when the reducible normal form is not already a sort.
+fn infer_sort_level(env: &Env, ctx: &Context, ty: &Rc<Term>) -> Result<Level, TypeError> {
+    infer_sort_level_and_type(env, ctx, ty).map(|(level, _)| level)
+}
+
+/// Like [`infer_sort_level`], also returning the type of `ty` in reducible weak head normal
+/// form (a `Sort`, or an opaque alias of one).
+fn infer_sort_level_and_type(
+    env: &Env,
+    ctx: &Context,
+    ty: &Rc<Term>,
+) -> Result<(Level, Rc<Term>), TypeError> {
+    let ty_ty = infer(env, ctx, ty.clone())?;
+    let ty_ty_norm = whnf_in_ctx(env, ctx, ty_ty.clone(), crate::Transparency::Reducible)?;
+    if let Some(level) = extract_level(&ty_ty_norm) {
+        return Ok((level, ty_ty_norm));
+    }
+    let ty_ty_full = whnf_in_ctx(env, ctx, ty_ty, crate::Transparency::All)?;
+    match extract_level(&ty_ty_full) {
+        Some(level) => Ok((level, ty_ty_norm)),
+        None => Err(TypeError::ExpectedSort(ty_ty_norm)),
+    }
+}
+
 fn infer_inner(env: &Env, ctx: &Context, term: Rc<Term>) -> Result<Rc<Term>, TypeError> {
     match &*term {
         Term::Var(idx) => {
@@ -5106,12 +6102,15 @@ fn infer_inner(env: &Env, ctx: &Context, term: Rc<Term>) -> Result<Rc<Term>, Typ
             Ok(Term::sort(level_succ(l.clone())))
         }
         Term::Lam(ty, body, info, kind) => {
-            infer(env, ctx, ty.clone())?;
+            // T-Lam: the binder type must be a type.
             ensure_type_safe(env, ty)?;
+            infer_sort_level(env, ctx, ty)?;
             let new_ctx = ctx.push(ty.clone());
             let body_ty = infer(env, &new_ctx, body.clone())?;
             ensure_type_safe(env, &body_ty)?;
-            let required_kind = infer_required_function_kind(env, &new_ctx, body)?;
+            let uses = term_variable_uses(env, &new_ctx, body)?;
+            let required_kind =
+                required_kind_from_capture_modes(&capture_modes_from_uses(env, &new_ctx, &uses)?);
             if !function_kind_leq(required_kind, *kind) {
                 return Err(TypeError::FunctionKindTooSmall {
                     annotated: *kind,
@@ -5121,25 +6120,29 @@ fn infer_inner(env: &Env, ctx: &Context, term: Rc<Term>) -> Result<Rc<Term>, Typ
             Ok(Term::pi_with_kind(ty.clone(), body_ty, *info, *kind))
         }
         Term::Pi(ty, body, _, _) => {
-            // Pi (x : A) -> B has type Sort(imax(level(A), level(B)))
-            let s1 = infer(env, ctx, ty.clone())?;
-            let s1_norm = whnf_in_ctx(env, ctx, s1, crate::Transparency::Reducible)?;
+            // T-Pi: Pi (x : A) -> B has type Sort(imax(level(A), level(B))); both A and B
+            // must be types (`ExpectedSort` otherwise).
             ensure_type_safe(env, ty)?;
+            let l1 = infer_sort_level(env, ctx, ty)?;
 
             let new_ctx = ctx.push(ty.clone());
-            let s2 = infer(env, &new_ctx, body.clone())?;
-            let s2_norm = whnf_in_ctx(env, &new_ctx, s2, crate::Transparency::Reducible)?;
             ensure_type_safe(env, body)?;
+            let (l2, s2_norm) = infer_sort_level_and_type(env, &new_ctx, body)?;
 
-            // Extract levels from sorts
-            if let (Some(l1), Some(l2)) = (extract_level(&s1_norm), extract_level(&s2_norm)) {
-                // Use imax for impredicative Prop: if codomain is Prop, result is Prop
-                let result_level = reduce_level(level_imax(l1, l2));
-                Ok(Term::sort(result_level))
-            } else {
-                // If either isn't a sort, just return the codomain's sort (fallback)
-                Ok(s2_norm)
+            // Use imax for impredicative Prop: if codomain is Prop, result is Prop.
+            // If the codomain's sort is an opaque alias of Prop, the Pi lives in that same
+            // alias (keeps the alias opaque for later reducible comparisons). The alias was
+            // computed under the binder: it is returned only if it does not mention the bound
+            // variable, with its free variables lowered by one (otherwise `Prop` itself).
+            if level_is_zero(&l2) && !matches!(&*s2_norm, Term::Sort(_)) {
+                let mut free = HashSet::new();
+                collect_free_vars(&s2_norm, 0, &mut free);
+                if !free.contains(&0) {
+                    return Ok(s2_norm.subst(0, &Term::sort(Level::Zero)));
+                }
             }
+            let result_level = reduce_level(level_imax(l1, l2));
+            Ok(Term::sort(result_level))
         }
         Term::App(f, a, _) => {
             let f_ty = infer(env, ctx, f.clone())?;
@@ -5160,7 +6163,9 @@ fn infer_inner(env: &Env, ctx: &Context, term: Rc<Term>) -> Result<Rc<Term>, Typ
             }
         }
         Term::LetE(ty, v, b) => {
+            // T-Let: the annotation must be a type.
             ensure_type_safe(env, ty)?;
+            infer_sort_level(env, ctx, ty)?;
             check(env, ctx, v.clone(), ty.clone())?;
             let new_ctx = ctx.push(ty.clone());
             let b_ty = infer(env, &new_ctx, b.clone())?;
@@ -5200,27 +6205,52 @@ fn infer_inner(env: &Env, ctx: &Context, term: Rc<Term>) -> Result<Rc<Term>, Typ
             }
         }
         Term::Fix(ty, body) => {
-            // Check ty is a type
-            let _ = infer(env, ctx, ty.clone())?; // Should verify it returns a Sort?
+            // T-Fix: the type of the recursive binder must be a type.
             ensure_type_safe(env, ty)?;
-            // Usually we want to ensure ty is a type, but `infer` returns the type of ty.
-            // Strict check:
-            // let s = infer(env, ctx, ty.clone())?;
-            // if !matches!(&*whnf(env, s, Transparency::Reducible), Term::Sort(_)) { error }
-            // For now, restrict fixpoints to function types (Pi) for codegen soundness.
+            infer_sort_level(env, ctx, ty)?;
+            // Restrict fixpoints to function types (Pi) for codegen soundness.
             let ty_whnf = whnf_in_ctx(env, ctx, ty.clone(), crate::Transparency::Reducible)?;
             if !matches!(&*ty_whnf, Term::Pi(_, _, _, _)) {
                 return Err(TypeError::ExpectedFunction(ty_whnf));
             }
+            // A fixpoint may not return a proof (K0055).
+            ensure_fix_codomain_not_proof(env, ctx, &ty_whnf)?;
 
-            // Push ty to context (this is the type of the recursive variable Var(0))
+            // Push ty to context (this is the type of the recursive variable Var(0)). The body is
+            // checked against `ty` read in that extended context, i.e. lifted over the new
+            // binder: T-Fix is `Γ, f : A ⊢ t : A` with `A` weakened by one. (Checking against
+            // the unlifted `ty` read every free variable of the annotation as the next binder
+            // inward, so an ill-typed body was accepted and a well-typed one rejected.)
             let new_ctx = ctx.push(ty.clone());
-            // Check body has type ty
-            check(env, &new_ctx, body.clone(), ty.clone())?;
+            check(env, &new_ctx, body.clone(), ty.shift(0, 1))?;
             Ok(ty.clone())
         }
         Term::Meta(id) => Err(TypeError::UnresolvedMeta(*id)),
     }
+}
+
+/// T-Fix side condition: the result type at the end of the fixpoint's Pi telescope must not be a
+/// proposition (a type whose sort may be `Prop`). Proofs are erased at run time, so a fixpoint
+/// returning a proof would never run: a looping `fix` would stand for a proof of any proposition,
+/// e.g. of `Eq Nat (succ zero) zero`, and transport along that "proof" would re-type a value in
+/// compiled partial code. `ty_whnf` is the annotation in reducible normal form (a Pi); each
+/// codomain is normalised to expose further Pis, and the final codomain's sort is inspected.
+fn ensure_fix_codomain_not_proof(
+    env: &Env,
+    ctx: &Context,
+    ty_whnf: &Rc<Term>,
+) -> Result<(), TypeError> {
+    let mut ctx = ctx.clone();
+    let mut cur = ty_whnf.clone();
+    while let Term::Pi(dom, cod, _, _) = &*cur {
+        ctx = ctx.push(dom.clone());
+        cur = whnf_in_ctx(env, &ctx, cod.clone(), crate::Transparency::Reducible)?;
+    }
+    let level = infer_sort_level(env, &ctx, &cur)?;
+    if !level_is_never_zero(&level) {
+        return Err(TypeError::FixProofCodomain { codomain: cur });
+    }
+    Ok(())
 }
 
 // =============================================================================
@@ -5251,7 +6281,8 @@ pub fn contains_partial_def(env: &Env, t: &Rc<Term>) -> Option<String> {
     }
 }
 
-fn contains_fix(t: &Rc<Term>) -> bool {
+/// Whether `t` contains a fixpoint (`fix`, general recursion) anywhere.
+pub fn contains_fix(t: &Rc<Term>) -> bool {
     match &**t {
         Term::Fix(_, _) => true,
         Term::App(f, a, _) => contains_fix(f) || contains_fix(a),
@@ -5416,6 +6447,49 @@ fn contains_const(t: &Rc<Term>, name: &str) -> bool {
     }
 }
 
+/// `t` with every `let` expanded (zeta-reduced): `let x : A := v in b` becomes `b[v/x]`.
+/// Zeta is part of definitional equality, so the result is definitionally equal to `t`.
+/// Inductive declarations are zeta-expanded before their syntactic checks (`add_inductive`).
+fn zeta_expand(t: &Rc<Term>) -> Rc<Term> {
+    zeta_expand_changed(t).unwrap_or_else(|| t.clone())
+}
+
+/// `Some(expansion)` if `t` contains a `let`, `None` if `t` is let-free (and so unchanged).
+fn zeta_expand_changed(t: &Rc<Term>) -> Option<Rc<Term>> {
+    fn pair(
+        a: &Rc<Term>,
+        b: &Rc<Term>,
+        rebuild: impl FnOnce(Rc<Term>, Rc<Term>) -> Term,
+    ) -> Option<Rc<Term>> {
+        let (a2, b2) = (zeta_expand_changed(a), zeta_expand_changed(b));
+        if a2.is_none() && b2.is_none() {
+            return None;
+        }
+        Some(Rc::new(rebuild(
+            a2.unwrap_or_else(|| a.clone()),
+            b2.unwrap_or_else(|| b.clone()),
+        )))
+    }
+    match &**t {
+        Term::LetE(_, val, body) => Some(zeta_expand(body).subst(0, &zeta_expand(val))),
+        Term::App(f, a, label) => pair(f, a, |f, a| Term::App(f, a, label.clone())),
+        Term::Lam(ty, body, info, kind) => {
+            pair(ty, body, |ty, body| Term::Lam(ty, body, *info, *kind))
+        }
+        Term::Pi(ty, body, info, kind) => {
+            pair(ty, body, |ty, body| Term::Pi(ty, body, *info, *kind))
+        }
+        Term::Fix(ty, body) => pair(ty, body, Term::Fix),
+        Term::Var(_)
+        | Term::Sort(_)
+        | Term::Const(_, _)
+        | Term::Ind(_, _)
+        | Term::Ctor(_, _, _)
+        | Term::Rec(_, _)
+        | Term::Meta(_) => None,
+    }
+}
+
 /// Check whether a constructor field contains a nested recursive occurrence.
 /// Direct recursive fields are allowed only when the inductive is the head and
 /// is fully applied to its parameters, with no nested occurrences in arguments.
@@ -5449,9 +6523,11 @@ fn contains_nested_inductive(term: &Rc<Term>, ind_name: &str) -> bool {
             contains_nested_inductive(dom, ind_name) || contains_nested_inductive(body, ind_name)
         }
         Term::LetE(ty, val, body) => {
+            // Zeta: the let-bound variable stands for `val`, so look at the body with `val`
+            // substituted (`let X := I in List X` is the nested occurrence `List I`).
             contains_nested_inductive(ty, ind_name)
                 || contains_nested_inductive(val, ind_name)
-                || contains_nested_inductive(body, ind_name)
+                || contains_nested_inductive(&body.subst(0, val), ind_name)
         }
         Term::Var(_)
         | Term::Sort(_)
@@ -5462,19 +6538,14 @@ fn contains_nested_inductive(term: &Rc<Term>, ind_name: &str) -> bool {
     }
 }
 
+/// Where a subterm of a constructor field type sits: `Positive` = reachable from the field type
+/// through Pi codomains, applications and binders only; `Negative` = inside the domain of some
+/// Pi (at any depth). Strict positivity forbids every occurrence of the inductive in a
+/// `Negative` position; there is no flipping back (see `check_strict_positivity`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Polarity {
     Positive,
     Negative,
-}
-
-impl Polarity {
-    fn flip(self) -> Self {
-        match self {
-            Polarity::Positive => Polarity::Negative,
-            Polarity::Negative => Polarity::Positive,
-        }
-    }
 }
 
 fn check_inductive_params(
@@ -5511,7 +6582,13 @@ fn check_inductive_params(
     Ok(())
 }
 
-/// Strict positivity check with polarity tracking for a constructor argument type.
+/// Strict positivity check for a constructor argument type (as in Lean 4 and Coq): the
+/// inductive may occur only as the head of the field type, or of the codomain of a Pi in it,
+/// applied to its parameters; it must not occur in the domain of any Pi, at any depth. So
+/// `(I -> X) -> I` is rejected, and so is `((I -> X) -> Y) -> I`: that occurrence is positive
+/// but not strictly positive, and with an impredicative Prop it gives a proof of False
+/// (Coquand-Paulin: `intro : ((A -> Prop) -> Prop) -> A`). A `let` is zeta-reduced, so a
+/// let-bound variable cannot hide an occurrence (`add_inductive` also expands lets up front).
 fn check_strict_positivity(
     ind_name: &str,
     num_params: usize,
@@ -5562,7 +6639,9 @@ fn check_strict_positivity(
             Ok(())
         }
         Term::Pi(dom, body, _, _) => {
-            check_strict_positivity(ind_name, num_params, dom, depth, polarity.flip())?;
+            // Everything inside a domain is negative for good: a second arrow does not make
+            // an occurrence strictly positive again.
+            check_strict_positivity(ind_name, num_params, dom, depth, Polarity::Negative)?;
             check_strict_positivity(ind_name, num_params, body, depth + 1, polarity)
         }
         Term::Lam(dom, body, _, _) | Term::Fix(dom, body) => {
@@ -5570,9 +6649,11 @@ fn check_strict_positivity(
             check_strict_positivity(ind_name, num_params, body, depth + 1, polarity)
         }
         Term::LetE(ty, val, body) => {
+            // Zeta: the let-bound variable stands for `val`, so check the body with `val`
+            // substituted (a negative use of the variable is a negative use of `val`).
             check_strict_positivity(ind_name, num_params, ty, depth, polarity)?;
             check_strict_positivity(ind_name, num_params, val, depth, polarity)?;
-            check_strict_positivity(ind_name, num_params, body, depth + 1, polarity)
+            check_strict_positivity(ind_name, num_params, &body.subst(0, val), depth, polarity)
         }
         Term::Const(_, _)
         | Term::Sort(_)
@@ -5684,12 +6765,44 @@ fn collect_level_params_in_term(term: &Rc<Term>, out: &mut HashSet<String>) {
     }
 }
 
-/// Check universe levels for an inductive type
+/// Universe rule for inductive declarations (as in Lean 4 and Coq).
+///
+/// Let the arity of `decl` end in `Sort u` (read through aliases, transparent or opaque).
+/// * If `u` is `Prop` (level zero) nothing is checked here: an inductive proposition may have
+///   fields of any universe; what it may be eliminated into is governed by the elimination
+///   restriction (`check_elimination_restriction`).
+/// * Otherwise every constructor FIELD must have a type whose own sort is at most `u`: for a
+///   field `(x : A)`, `Γ ⊢ A : Sort v` with `v ≤ u`. The fields are the binders of the
+///   constructor type after its first `decl.num_params` binders (constructor types repeat the
+///   uniform parameters as their leading binders; the parameters are fixed by the type of the
+///   value and are not fields). The level `v` is computed uniformly as the sort of the inferred
+///   type of `A` (`infer_sort_level`), so a field of type `Sort l` has level `l + 1` and a field
+///   of type `Π x : Nat, Sort 1` has level 2. Accepting `v = l` for a field of type `Sort l`
+///   (the rule before this one) made `Sort 1` a definitional retract of a type in `Sort 1`
+///   (`El (mkU A) ≡ A`, the setting of Hurkens' paradox for `Type : Type`).
+/// * Parameters and indices of the arity are not constrained (Lean 4 and Coq do not constrain
+///   them either): a parameter is never stored, and an index is determined by the type of the
+///   value, so neither lets a value of the inductive carry a larger universe. E.g.
+///   `(inductive T (pi A (sort 1) (sort 1)) (ctor mkT (T Nat)))` lives in `Sort 1`.
+///
+/// Universe-level parameters must be declared in `decl.univ_params`. Levels are compared with
+/// `level_leq`, which holds only when `v <= u` for every assignment of the level parameters
+/// (Lean 4's comparison; sound but not complete). Surface programs only write concrete levels,
+/// for which the comparison is exact.
 fn check_universe_levels(env: &Env, decl: &InductiveDecl) -> Result<(), String> {
-    let (_decl_binders, result_sort) = extract_pi_binders(&decl.ty);
+    // The result sort may be written through an alias (e.g. an opaque alias of a sort): use
+    // its unfolded level, so that such an arity does not bypass the check.
+    let result_sort =
+        result_sort_with_transparency(env, &Context::new(), &decl.ty, crate::Transparency::All)
+            .map_err(|err| format!("inductive {} arity: {:?}", decl.name, err))?;
     let ind_level = match result_sort {
         Some(level) => reduce_level(level),
-        None => return Ok(()),
+        None => {
+            return Err(format!(
+                "inductive {} arity does not end in a sort",
+                decl.name
+            ))
+        }
     };
 
     let mut used_params = HashSet::new();
@@ -5708,67 +6821,34 @@ fn check_universe_levels(env: &Env, decl: &InductiveDecl) -> Result<(), String> 
         return Ok(());
     }
 
-    let (binders, _) = extract_pi_binders(&decl.ty);
-    let mut decl_ctx = Context::new();
-    let mut param_ctx = Context::new();
-    for (idx, (ty, _)) in binders.iter().enumerate() {
-        let arg_level = match &**ty {
-            Term::Sort(level) => Some(reduce_level(level.clone())),
-            _ => {
-                let sort = infer(env, &decl_ctx, ty.clone())
-                    .map_err(|err| format!("inductive {} binder {}: {:?}", decl.name, idx, err))?;
-                let sort_norm = whnf_in_ctx(env, &decl_ctx, sort, crate::Transparency::Reducible)
-                    .map_err(|err| {
-                    format!("inductive {} binder {}: {:?}", decl.name, idx, err)
-                })?;
-                extract_level(&sort_norm).map(reduce_level)
-            }
-        };
-        if let Some(level) = arg_level {
-            if !level_leq(&level, &ind_level) {
-                return Err(format!(
-                    "inductive {} binder {} has level {:?} which is above inductive level {:?}",
-                    decl.name, idx, level, ind_level
-                ));
-            }
-        }
-        decl_ctx = decl_ctx.push(ty.clone());
-        if idx < decl.num_params {
-            param_ctx = param_ctx.push(ty.clone());
-        }
-    }
-
     for ctor in &decl.ctors {
-        let mut ctx = param_ctx.clone();
+        // Constructor types are closed: each binder type is well scoped in the context of
+        // the constructor's own preceding binders (parameters first), starting from empty.
+        let mut ctx = Context::new();
         let mut curr = ctor.ty.clone();
-        let mut arg_idx = 0usize;
+        let mut binder_idx = 0usize;
 
         while let Term::Pi(dom, body, _, _) = &*curr {
-            let arg_level = match &**dom {
-                Term::Sort(level) => Some(reduce_level(level.clone())),
-                _ => {
-                    let sort = infer(env, &ctx, dom.clone()).map_err(|err| {
-                        format!("constructor {} argument {}: {:?}", ctor.name, arg_idx, err)
-                    })?;
-                    let sort_norm = whnf_in_ctx(env, &ctx, sort, crate::Transparency::Reducible)
-                        .map_err(|err| {
-                            format!("constructor {} argument {}: {:?}", ctor.name, arg_idx, err)
-                        })?;
-                    extract_level(&sort_norm).map(reduce_level)
-                }
-            };
-            if let Some(level) = arg_level {
+            if binder_idx >= decl.num_params {
+                let field_idx = binder_idx - decl.num_params;
+                let level = infer_sort_level(env, &ctx, dom).map_err(|err| {
+                    format!(
+                        "constructor {} field {} (argument {}): {:?}",
+                        ctor.name, field_idx, binder_idx, err
+                    )
+                })?;
+                let level = reduce_level(level);
                 if !level_leq(&level, &ind_level) {
                     return Err(format!(
-                        "constructor {} argument {} has level {:?} which is above inductive level {:?}",
-                        ctor.name, arg_idx, level, ind_level
+                        "constructor {} field {} (argument {}) has a type in universe level {:?}, which is above inductive level {:?}",
+                        ctor.name, field_idx, binder_idx, level, ind_level
                     ));
                 }
             }
 
             ctx = ctx.push(dom.clone());
             curr = body.clone();
-            arg_idx += 1;
+            binder_idx += 1;
         }
     }
 
@@ -5808,17 +6888,6 @@ fn term_depends_on_params(term: &Rc<Term>, param_count: usize, depth: usize) -> 
         | Term::Ctor(_, _, _)
         | Term::Rec(_, _)
         | Term::Meta(_) => false,
-    }
-}
-
-fn is_self_requirement(req: &Rc<Term>, ind_name: &str, param_count: usize) -> bool {
-    let (head, args) = collect_app_spine(req);
-    match &*head {
-        Term::Ind(name, _) if name == ind_name && args.len() == param_count => args
-            .iter()
-            .enumerate()
-            .all(|(i, arg)| matches!(&*arg.arg, Term::Var(idx) if *idx == param_count - 1 - i)),
-        _ => false,
     }
 }
 
@@ -5958,7 +7027,30 @@ fn remap_copy_requirement(
     }
 }
 
+/// Derives the structural `Copy` instance of an inductive type, if it has one.
+///
+/// The instance is parameterised by the uniform *parameters* of the type (`decl.num_params`)
+/// only. Every constructor binder after the parameters is a runtime field, including binders that
+/// occur as index arguments of the constructor's result type: indices are not parameters, so an
+/// index binder of a constructor is stored like any other field. Each field adds the requirement
+/// "the field's type is Copy", expressed over the parameters:
+/// - a recursive field (the type itself, applied to its parameters and any indices) adds nothing,
+///   because whether a value of the type is Copy does not depend on its indices; this is what makes
+///   indexed families such as `Vec A n` Copy exactly when `A` is;
+/// - for a field whose type is another inductive family, only that family's parameter arguments
+///   are kept (its derived instance depends on parameters only);
+/// - a field whose type depends on an earlier field in any other way cannot be expressed over the
+///   parameters, and derivation fails (the type is then not Copy);
+/// - a non-uniform recursive occurrence (the type applied to other parameters) also makes
+///   derivation fail.
 fn derive_copy_instance(env: &mut Env, decl: &InductiveDecl) -> Result<(), String> {
+    let inst = compute_derived_copy_instance(env, decl)?;
+    env.push_copy_instance(inst);
+    Ok(())
+}
+
+/// The Copy instance the kernel derives for `decl` (no registration), or why none exists.
+fn compute_derived_copy_instance(env: &Env, decl: &InductiveDecl) -> Result<CopyInstance, String> {
     if env
         .marker_registry
         .has_marker(&decl.markers, TypeMarker::InteriorMutable)
@@ -5966,59 +7058,64 @@ fn derive_copy_instance(env: &mut Env, decl: &InductiveDecl) -> Result<(), Strin
     {
         return Err("interior-mutable types do not derive Copy".to_string());
     }
+    if env
+        .marker_registry
+        .has_marker(&decl.markers, TypeMarker::Affine)
+        .map_err(|e| e.to_string())?
+    {
+        return Err("affine types do not derive Copy".to_string());
+    }
 
-    let param_count = count_pi_binders(&decl.ty);
+    let param_count = decl.num_params;
     let mut requirements = Vec::new();
 
     for ctor in &decl.ctors {
-        let (binder_count, args) =
-            ctor_return_inductive_args(&decl.name, &ctor.name, &ctor.ty, param_count)
-                .map_err(|e| format!("constructor {}: {}", ctor.name, e))?;
-
-        let mut body_to_param = HashMap::new();
-        for (param_pos, arg) in args.iter().enumerate() {
-            match &**arg {
-                Term::Var(idx) => {
-                    body_to_param.entry(*idx).or_insert(param_pos);
-                }
-                _ => {
-                    return Err(format!(
-                        "constructor {} return args must be variables",
-                        ctor.name
-                    ));
-                }
-            }
+        let binder_count = count_pi_binders(&ctor.ty);
+        if binder_count < param_count {
+            return Err(format!(
+                "constructor {} binds fewer than {} parameters",
+                ctor.name, param_count
+            ));
         }
+        // The first `param_count` binders of a constructor are the type's parameters.
+        let body_to_param: HashMap<usize, usize> = (0..param_count)
+            .map(|param_pos| (binder_count - 1 - param_pos, param_pos))
+            .collect();
 
         let mut curr = ctor.ty.clone();
         let mut pos = 0usize;
-        let mut field_idx = 0usize;
         while let Term::Pi(dom, body, _, _) = &*curr {
-            let body_index = binder_count - 1 - pos;
-            if !body_to_param.contains_key(&body_index) {
-                let remapped =
-                    remap_copy_requirement(dom, 0, pos, binder_count, param_count, &body_to_param)
+            if pos >= param_count {
+                let field_idx = pos - param_count;
+                match self_occurrence(dom, &decl.name, param_count, pos) {
+                    SelfOccurrence::Uniform => {}
+                    SelfOccurrence::NonUniform => {
+                        return Err(format!(
+                            "constructor {} field {} is a non-uniform recursive occurrence",
+                            ctor.name, field_idx
+                        ));
+                    }
+                    SelfOccurrence::None => {
+                        let field_ty = drop_family_indices(env, dom);
+                        let remapped = remap_copy_requirement(
+                            &field_ty,
+                            0,
+                            pos,
+                            binder_count,
+                            param_count,
+                            &body_to_param,
+                        )
                         .ok_or_else(|| {
                             format!(
-                                "constructor {} field {} depends on non-parameter arguments",
+                                "constructor {} field {} depends on other constructor fields",
                                 ctor.name, field_idx
                             )
                         })?;
-
-                if is_self_requirement(&remapped, &decl.name, param_count) {
-                    // Recursive self fields do not add extra Copy requirements here.
-                    // Parametric requirements are collected from the other fields
-                    // (for example the element type in List T).
-                    field_idx += 1;
-                    pos += 1;
-                    curr = body.clone();
-                    continue;
+                        if !requirements.iter().any(|req| req == &remapped) {
+                            requirements.push(remapped);
+                        }
+                    }
                 }
-
-                if !requirements.iter().any(|req| req == &remapped) {
-                    requirements.push(remapped);
-                }
-                field_idx += 1;
             }
             pos += 1;
             curr = body.clone();
@@ -6026,42 +7123,133 @@ fn derive_copy_instance(env: &mut Env, decl: &InductiveDecl) -> Result<(), Strin
     }
 
     // If any requirement is closed and not Copy, derivation fails.
-    if param_count == 0 {
-        let ctx = Context::new();
-        for req in &requirements {
-            if !is_copy_type(env, &ctx, req).map_err(|e| format!("Copy check failed: {}", e))? {
-                return Err(format!("field requirement {:?} is not Copy", req));
-            }
-        }
-    } else {
-        let ctx = Context::new();
-        for req in &requirements {
-            if !term_depends_on_params(req, param_count, 0)
-                && !is_copy_type(env, &ctx, req).map_err(|e| format!("Copy check failed: {}", e))?
-            {
-                return Err(format!("field requirement {:?} is not Copy", req));
-            }
+    let ctx = Context::new();
+    for req in &requirements {
+        if !term_depends_on_params(req, param_count, 0)
+            && !is_copy_type(env, &ctx, req).map_err(|e| format!("Copy check failed: {}", e))?
+        {
+            return Err(format!("field requirement {:?} is not Copy", req));
         }
     }
 
-    let inst = CopyInstance {
+    Ok(CopyInstance {
         ind_name: decl.name.clone(),
         param_count,
         requirements,
         source: CopyInstanceSource::Derived,
         is_unsafe: false,
-    };
-    env.add_copy_instance(inst).map_err(|e| e.to_string())?;
+    })
+}
+
+/// How a constructor field type refers to the inductive type being declared.
+enum SelfOccurrence {
+    /// The field type does not have the declared type as its head.
+    None,
+    /// The declared type applied to its own parameters (in order) and any index arguments.
+    Uniform,
+    /// The declared type applied to anything else in parameter position.
+    NonUniform,
+}
+
+/// Classifies a field type `dom` found at constructor binder position `pos` (so the parameter
+/// binder `i` is `Var(pos - 1 - i)` in `dom`'s context).
+fn self_occurrence(
+    dom: &Rc<Term>,
+    ind_name: &str,
+    param_count: usize,
+    pos: usize,
+) -> SelfOccurrence {
+    let (head, args) = collect_app_spine(dom);
+    match &*head {
+        Term::Ind(name, _) if name == ind_name => {
+            if args.len() < param_count {
+                return SelfOccurrence::NonUniform;
+            }
+            let uniform = args
+                .iter()
+                .take(param_count)
+                .enumerate()
+                .all(|(i, arg)| matches!(&*arg.arg, Term::Var(idx) if *idx + 1 + i == pos));
+            if uniform {
+                SelfOccurrence::Uniform
+            } else {
+                SelfOccurrence::NonUniform
+            }
+        }
+        _ => SelfOccurrence::None,
+    }
+}
+
+/// If `ty` is an inductive family applied to more arguments than it has parameters, drops the
+/// index arguments (Copy instances are derived over parameters only, see `derive_copy_instance`).
+fn drop_family_indices(env: &Env, ty: &Rc<Term>) -> Rc<Term> {
+    let (head, args) = collect_app_spine(ty);
+    if let Term::Ind(name, _) = &*head {
+        if let Some(decl) = env.get_inductive(name) {
+            if args.len() > decl.num_params {
+                let mut out = head.clone();
+                for item in args.iter().take(decl.num_params) {
+                    out = Rc::new(Term::App(out, item.arg.clone(), item.label.clone()));
+                }
+                return out;
+            }
+        }
+    }
+    ty.clone()
+}
+
+/// The arity of `decl` must be a type of the form `Π (x1 : A1) ... (xn : An). S` whose
+/// binders are written out and whose result `S` is a sort or (an alias that unfolds to) a sort,
+/// and every constructor type must be a type (`ExpectedSort` otherwise). Binders hidden behind
+/// an alias are rejected: the parameter/index count, the recursor and the constructor checks
+/// read the telescope syntactically. Expects the inductive itself to be registered (as a
+/// placeholder) in `env`.
+fn check_inductive_arity_and_ctor_types(env: &Env, decl: &InductiveDecl) -> Result<(), TypeError> {
+    let ctx = Context::new();
+    infer_sort_level(env, &ctx, &decl.ty)?;
+    let mut tail = decl.ty.clone();
+    let mut tail_ctx = ctx.clone();
+    while let Term::Pi(dom, body, _, _) = &*tail {
+        tail_ctx = tail_ctx.push(dom.clone());
+        tail = body.clone();
+    }
+    if !matches!(&*tail, Term::Sort(_)) {
+        let tail_norm = whnf_in_ctx(env, &tail_ctx, tail.clone(), crate::Transparency::All)?;
+        if !matches!(&*tail_norm, Term::Sort(_)) {
+            return Err(TypeError::ExpectedSort(tail_norm));
+        }
+    }
+    for ctor in &decl.ctors {
+        infer_sort_level(env, &ctx, &ctor.ty)?;
+    }
     Ok(())
 }
 
 pub fn check_inductive_soundness(env: &Env, decl: &InductiveDecl) -> Result<(), TypeError> {
-    // 0. Constructor return type must be the inductive applied to all params/indices
+    // 0. Constructor return type must be the inductive applied to all params/indices, and
+    //    these arguments may not mention the inductive itself (as in Lean 4 and Coq): an
+    //    occurrence in an index of the result, e.g. `base : T (T Tru -> False)`, is not a
+    //    strictly positive occurrence, and the recursor's motive would be applied to it.
     let total_binders = count_pi_binders(&decl.ty);
     for ctor in &decl.ctors {
-        let (_binder_count, _args) =
+        let (_binder_count, args) =
             ctor_return_inductive_args(&decl.name, &ctor.name, &ctor.ty, total_binders)?;
+        if let Some(arg) = args.iter().position(|arg| contains_const(arg, &decl.name)) {
+            return Err(TypeError::InductiveInCtorResultArg {
+                ind: decl.name.clone(),
+                ctor: ctor.name.clone(),
+                arg,
+            });
+        }
     }
+
+    // 0b. Well-formedness of the declaration (premises of T-Ind / T-Ctor): the arity is a
+    //     telescope of types written out, ending in a sort or an alias of one (the checks
+    //     below and the recursor read the telescope syntactically), and every
+    //     constructor type is a type, i.e. its binder types are types and its result applies
+    //     the inductive to arguments of the arity's binder types. Without this, an arity such
+    //     as an empty proposition made `Ind` itself a closed proof of it.
+    check_inductive_arity_and_ctor_types(env, decl)?;
 
     // 1. Check strict positivity with polarity tracking
     for ctor in &decl.ctors {
@@ -6163,6 +7351,29 @@ pub fn check_inductive_soundness(env: &Env, decl: &InductiveDecl) -> Result<(), 
     }
 
     Ok(())
+}
+
+/// Whether some subterm of `t` (including `t`) satisfies `pred`.
+fn term_mentions(t: &Rc<Term>, pred: &dyn Fn(&Term) -> bool) -> bool {
+    if pred(t) {
+        return true;
+    }
+    match &**t {
+        Term::App(f, a, _) => term_mentions(f, pred) || term_mentions(a, pred),
+        Term::Lam(ty, body, _, _) | Term::Pi(ty, body, _, _) | Term::Fix(ty, body) => {
+            term_mentions(ty, pred) || term_mentions(body, pred)
+        }
+        Term::LetE(ty, val, body) => {
+            term_mentions(ty, pred) || term_mentions(val, pred) || term_mentions(body, pred)
+        }
+        Term::Var(_)
+        | Term::Sort(_)
+        | Term::Const(_, _)
+        | Term::Ind(_, _)
+        | Term::Ctor(_, _, _)
+        | Term::Rec(_, _)
+        | Term::Meta(_) => false,
+    }
 }
 
 fn collect_axioms_rec(
@@ -6555,10 +7766,8 @@ mod tests {
             check_ownership_in_term(&env, &ctx, &implicit_val, &mut usage, UsageMode::Consuming);
 
         match result {
-            Err(TypeError::OwnershipError(OwnershipError::ImplicitNonCopyUse {
-                index, ..
-            })) => {
-                assert_eq!(index, 0);
+            Err(TypeError::OwnershipError(OwnershipError::ImplicitNonCopyUse { var, .. })) => {
+                assert_eq!(var.index, 0);
             }
             other => panic!("Expected implicit binder ownership error, got {:?}", other),
         }
@@ -6850,9 +8059,69 @@ mod tests {
         let classical = classical_axiom_dependencies(&env, uses_bad);
         assert_eq!(classical, vec!["AxTy".to_string()]);
 
-        // Recursor usage should also inherit inductive axiom deps.
-        let rec_ty = compute_recursor_type(&bad_decl, &[Level::Zero]);
-        let rec_term = Rc::new(Term::Rec("Bad".to_string(), vec![Level::Zero]));
+        // Recursor usage should also inherit inductive axiom deps. The recursor is applied to
+        // its motive and minor premise in place (a bare recursor value is rejected by the
+        // ownership check, see `check_ownership_rec_app`):
+        //   bad_rec : Π (P : Bad → Prop). Π^FnOnce (m : Π^FnOnce (x : AxTy), P (mk x)).
+        //             Π^FnOnce (b : Bad), P b
+        //   bad_rec := λ P. λ^FnOnce m. λ^FnOnce b. Rec Bad P m b
+        let ax_ty = Rc::new(Term::Const("AxTy".to_string(), vec![]));
+        let motive_ty = Term::pi(bad_ty.clone(), Term::sort(Level::Zero), BinderInfo::Default);
+        // In context [P]: Π^FnOnce (x : AxTy), P (mk x)
+        let minor_ty = Term::pi_with_kind(
+            ax_ty,
+            Term::app(
+                Term::var(1),
+                Term::app(
+                    Rc::new(Term::Ctor("Bad".to_string(), 0, vec![])),
+                    Term::var(0),
+                ),
+            ),
+            BinderInfo::Default,
+            FunctionKind::FnOnce,
+        );
+        // In context [P, m]: Π^FnOnce (b : Bad), P b
+        let result_ty = Term::pi_with_kind(
+            bad_ty.clone(),
+            Term::app(Term::var(2), Term::var(0)),
+            BinderInfo::Default,
+            FunctionKind::FnOnce,
+        );
+        let rec_ty = Term::pi(
+            motive_ty.clone(),
+            Term::pi_with_kind(
+                minor_ty.clone(),
+                result_ty,
+                BinderInfo::Default,
+                FunctionKind::FnOnce,
+            ),
+            BinderInfo::Default,
+        );
+        let rec_app = Term::app(
+            Term::app(
+                Term::app(
+                    Rc::new(Term::Rec("Bad".to_string(), vec![Level::Zero])),
+                    Term::var(2),
+                ),
+                Term::var(1),
+            ),
+            Term::var(0),
+        );
+        let rec_term = Term::lam(
+            motive_ty,
+            Rc::new(Term::Lam(
+                minor_ty,
+                Rc::new(Term::Lam(
+                    bad_ty.clone(),
+                    rec_app,
+                    BinderInfo::Default,
+                    FunctionKind::FnOnce,
+                )),
+                BinderInfo::Default,
+                FunctionKind::FnOnce,
+            )),
+            BinderInfo::Default,
+        );
         let mut bad_rec_def = Definition::total("bad_rec".to_string(), rec_ty, rec_term);
         bad_rec_def.noncomputable = true;
         env.add_definition(bad_rec_def).unwrap();

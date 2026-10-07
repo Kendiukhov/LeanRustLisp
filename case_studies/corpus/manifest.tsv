@@ -1,0 +1,54 @@
+# Ownership validation corpus manifest (see README.md). Tab-separated; lines starting with '#' are comments.
+# stage: elaborator (F02xx) | kernel (Kxxxx) | MIR (Mxxx) | macro_boundary (F0104) | accepted. fragment: text that must occur in the
+# `run` output (negatives, accepted macro_only files) or in the output of the `compile --backend dynamic` binary (positives).
+class	kind	file	twin	stage	code	fragment	twin_stage	twin_code	twin_fragment	description
+01	negative	01_double_use.lrl	01_double_use_macro.lrl	kernel	K0021	[UseAfterMove]: variable 't'	kernel	K0021	[UseAfterMove]: variable 't'	double use of an affine value
+02	negative	02_use_after_move_into_fn.lrl	02_use_after_move_into_fn_macro.lrl	kernel	K0021	[UseAfterMove]: variable 't'	kernel	K0021	[UseAfterMove]: variable 't'	use after moving into a function
+03	negative	03_call_moved_function.lrl	03_call_moved_function_macro.lrl	kernel	K0021	[UseAfterMove]: variable 'f'	kernel	K0021	[UseAfterMove]: variable 'f'	calling a moved function value (read after move)
+04	negative	04_fnonce_called_twice.lrl	04_fnonce_called_twice_macro.lrl	kernel	K0021	[UseAfterMove]: variable 'f'	kernel	K0021	[UseAfterMove]: variable 'f'	FnOnce closure called twice
+05	negative	05_fn_closure_consumes_capture.lrl	05_fn_closure_consumes_capture_macro.lrl	elaborator	F0207	Annotated function kind Fn is too small; requires FnOnce	elaborator	F0207	Annotated function kind Fn is too small; requires FnOnce	closure annotated #[fn] that consumes a capture
+06	negative	06_repeated_case_consumes_capture.lrl	06_repeated_case_consumes_capture_macro.lrl	kernel	K0021	[ConsumedInRepeatedScope]: non-Copy variable 'k'	kernel	K0021	[ConsumedInRepeatedScope]: non-Copy variable 'k'	repeated (succ) case consuming a captured owned value
+07	negative	07_recursive_field_after_ih.lrl	07_recursive_field_after_ih_macro.lrl	kernel	K0021	[RecursiveFieldConsumedByIh]: recursive field 'rest'	kernel	K0021	[RecursiveFieldConsumedByIh]: recursive field 'rest'	recursive field used after its IH consumed it
+08	negative	08_partial_recursor.lrl	08_partial_recursor_macro.lrl	kernel	K0021	[RecursorWithoutMinorPremises]	kernel	K0021	[RecursorWithoutMinorPremises]	partially applied recursor
+09	negative	09_fix_consumes_capture.lrl	09_fix_consumes_capture_macro.lrl	kernel	K0021	[ConsumedInRepeatedScope]: non-Copy variable 'k'	kernel	K0021	[ConsumedInRepeatedScope]: non-Copy variable 'k'	fix body consuming a capture
+10	negative	10_implicit_noncopy_consumed.lrl	10_implicit_noncopy_consumed_macro.lrl	elaborator	F0209	Implicit binder of non-Copy type used in consuming position	elaborator	F0209	Implicit binder of non-Copy type used in consuming position	implicit non-Copy binder consumed
+11	negative	11_wrong_protocol_state.lrl	11_wrong_protocol_state_macro.lrl	elaborator	F0214	St.closed vs St.opened	elaborator	F0214	St.closed vs St.opened	wrong protocol state (type error)
+12	negative	12_two_live_mut.lrl	12_two_live_mut_macro.lrl	MIR	M200	already borrowed as Mut	MIR	M200	already borrowed as Mut	two live &mut of one value (curried call)
+13	negative	13_move_while_borrowed.lrl	13_move_while_borrowed_macro.lrl	MIR	M201	because it is borrowed as Shared	MIR	M201	because it is borrowed as Shared	move while shared-borrowed
+14	negative	14_reference_escapes.lrl	14_reference_escapes_macro.lrl	MIR	M203	borrowed value does not live long enough	MIR	M203	borrowed value does not live long enough	reference escaping its referent
+15	negative	15_ref_in_ctor_outlives_owner.lrl	15_ref_in_ctor_outlives_owner_macro.lrl	MIR	M201	because it is borrowed as Shared	MIR	M201	because it is borrowed as Shared	reference stored in a constructor, owner moved while the struct is live
+16	negative	16_effect_violation.lrl	16_effect_violation_macro.lrl	kernel	K0022	EffectError("Total", "Unsafe", "raw_peek")	kernel	K0022	EffectError("Total", "Unsafe", "raw_peek")	effect violation: total definition calls an unsafe definition
+17	macro_only	17_macro_axiom.lrl	17_macro_axiom_macro.lrl	accepted	-	Axiom 'zero_is_one' declared	macro_boundary	F0104	produced macro boundary form(s): axiom	axiom injected by a macro (hand-written axiom is accepted with a warning)
+18	negative	18_affine_copy_conflict.lrl	18_affine_copy_conflict_macro.lrl	kernel	K0052	is marked affine and cannot be Copy	kernel	K0052	is marked affine and cannot be Copy	affine marker together with an explicit copy request
+19	negative	19_ref_in_ctor_escapes.lrl	19_ref_in_ctor_escapes_macro.lrl	MIR	M203	borrowed value does not live long enough	MIR	M203	borrowed value does not live long enough	reference stored in a constructor escapes its referent
+20	negative	20_two_mut_in_ctors.lrl	20_two_mut_in_ctors_macro.lrl	MIR	M200	already borrowed as Mut	MIR	M200	already borrowed as Mut	two &mut of one value stored in two live structs
+21	macro_only	21_macro_unsafe_def.lrl	21_macro_unsafe_def_macro.lrl	accepted	-	-	macro_boundary	F0104	produced macro boundary form(s): unsafe	unsafe definition injected by a macro (hand-written unsafe def is accepted)
+22	negative	22_minor_must_bind_recursive_field.lrl	22_minor_must_bind_recursive_field_macro.lrl	kernel	K0021	[MinorMustBindRecursiveField]	kernel	K0021	[MinorMustBindRecursiveField]	minor premise does not bind the non-Copy recursive field
+23	negative	23_repeated_minor_not_lambda.lrl	23_repeated_minor_not_lambda_macro.lrl	kernel	K0021	[RepeatedMinorNotLambda]	kernel	K0021	[RepeatedMinorNotLambda]	repeated minor premise given as a let-bound closure
+24	negative	24_repeated_minor_value_not_copy.lrl	24_repeated_minor_value_not_copy_macro.lrl	kernel	K0021	[RepeatedMinorValueNotCopy]	kernel	K0021	[RepeatedMinorValueNotCopy]	leaf case of a branching type returns a non-Copy value
+25	negative	25_borrow_after_move.lrl	25_borrow_after_move_macro.lrl	kernel	K0021	[UseAfterMove]: variable 't'	kernel	K0021	[UseAfterMove]: variable 't'	borrowing a moved value
+26	negative	26_use_after_branch_consumed.lrl	26_use_after_branch_consumed_macro.lrl	kernel	K0021	[UseAfterMove]: variable 'k'	kernel	K0021	[UseAfterMove]: variable 'k'	value consumed in one branch used after the match
+27	negative	27_fn_type_closure_consumes.lrl	27_fn_type_closure_consumes_macro.lrl	elaborator	F0206	Function kind mismatch: expected Fn, got FnOnce	elaborator	F0206	Function kind mismatch: expected Fn, got FnOnce	Fn function type, closure consumes its capture
+28	negative	28_affine_on_prop.lrl	28_affine_on_prop_macro.lrl	kernel	K0052	is marked affine and cannot be Copy	kernel	K0052	is marked affine and cannot be Copy	affine marker on a proposition
+29	negative	29_use_after_capture.lrl	29_use_after_capture_macro.lrl	kernel	K0021	[UseAfterMove]: variable 't'	kernel	K0021	[UseAfterMove]: variable 't'	value used after a closure captured it by move
+31	negative	31_total_calls_partial.lrl	31_total_calls_partial_macro.lrl	kernel	K0022	EffectError("Total", "Partial", "spin")	kernel	K0022	EffectError("Total", "Partial", "spin")	effect violation: total definition calls a partial definition
+32	negative	32_two_base_cases_consume.lrl	32_two_base_cases_consume_macro.lrl	kernel	K0021	[UseAfterMove]: variable 't'	kernel	K0021	[UseAfterMove]: variable 't'	two base cases of a recursive type consume the same captured token
+P01	positive	p01_consume_in_both_branches.lrl	p01_consume_in_both_branches_macro.lrl	accepted	-	Result: Nat(2)	accepted	-	Result: Nat(2)	consume the same token in both branches of a Bool match
+P02	positive	p02_borrow_dead_before_move.lrl	p02_borrow_dead_before_move_macro.lrl	accepted	-	Result: Nat(3)	accepted	-	Result: Nat(3)	borrow dead before the move (NLL)
+P03	positive	p03_two_shared_borrows.lrl	p03_two_shared_borrows_macro.lrl	accepted	-	Result: Nat(2)	accepted	-	Result: Nat(2)	two live shared borrows
+P04	positive	p04_fn_closure_called_twice.lrl	p04_fn_closure_called_twice_macro.lrl	accepted	-	Result: Nat(4)	accepted	-	Result: Nat(4)	Fn closure (borrowing its capture) called twice, then the capture moved
+P05	positive	p05_base_case_consumes_once.lrl	p05_base_case_consumes_once_macro.lrl	accepted	-	Result: Nat(1)	accepted	-	Result: Nat(1)	base case of a linear recursion consumes a capture once
+P06	positive	p06_call_then_move_function.lrl	p06_call_then_move_function_macro.lrl	accepted	-	Result: Nat(1)	accepted	-	Result: Nat(1)	function value called before it is moved
+P07	positive	p07_fnonce_called_once.lrl	p07_fnonce_called_once_macro.lrl	accepted	-	Result: Nat(8)	accepted	-	Result: Nat(8)	FnOnce closure consuming a capture called once
+P08	positive	p08_protocol_in_order.lrl	p08_protocol_in_order_macro.lrl	accepted	-	Result: Nat(1)	accepted	-	Result: Nat(1)	protocol operations in the right order
+P09	positive	p09_sequential_mut_borrows.lrl	p09_sequential_mut_borrows_macro.lrl	accepted	-	Result: Nat(4)	accepted	-	Result: Nat(4)	two &mut borrows that are not live at the same time, then a move
+P10	positive	p10_use_inside_proof_does_not_move.lrl	p10_use_inside_proof_does_not_move_macro.lrl	accepted	-	Result: Nat(3)	accepted	-	Result: Nat(3)	value mentioned inside a proof is not moved
+P11	positive	p11_borrow_in_ctor_dead_before_move.lrl	p11_borrow_in_ctor_dead_before_move_macro.lrl	accepted	-	Result: Nat(3)	accepted	-	Result: Nat(3)	struct holding a borrow is dead before the owner is moved
+P12	positive	p12_repeated_case_reads_function.lrl	p12_repeated_case_reads_function_macro.lrl	accepted	-	Result: Nat(3)	accepted	-	Result: Nat(3)	repeated case calls (reads) a captured Fn function
+P13	positive	p13_affine_value_dropped.lrl	p13_affine_value_dropped_macro.lrl	accepted	-	Result: Nat(0)	accepted	-	Result: Nat(0)	affine value dropped unused (affine, not linear: accepted)
+P14	positive	p14_copy_type_used_twice.lrl	p14_copy_type_used_twice_macro.lrl	accepted	-	Result: Nat(14)	accepted	-	Result: Nat(14)	same as class 01 without the affine marker (derived Copy)
+P15	positive	p15_hygienic_binder.lrl	p15_hygienic_binder_macro.lrl	accepted	-	Result: Nat(5)	accepted	-	Result: Nat(5)	macro binder and user variable with the same name are distinct (hygiene)
+P16	positive	p16_copy_recursive_field_with_ih.lrl	p16_copy_recursive_field_with_ih_macro.lrl	accepted	-	Result: Nat(3)	accepted	-	Result: Nat(3)	Copy recursive field used together with its IH
+P17	positive	p17_implicit_noncopy_read.lrl	p17_implicit_noncopy_read_macro.lrl	accepted	-	Result: Nat(1)	accepted	-	Result: Nat(1)	implicit non-Copy binder borrowed (read), not consumed
+P18	positive	p18_fix_reads_capture.lrl	p18_fix_reads_capture_macro.lrl	accepted	-	Result: Comp(Unit)	accepted	-	Result: Comp(Unit)	fixpoint body calls (reads) a captured Fn function
+P19	positive	30_proof_closure_duplicated.lrl	30_proof_closure_duplicated_macro.lrl	accepted	-	Result: Nat(0)	accepted	-	Result: Nat(0)	FnOnce closure with a proof result passed twice (a proof: erased and Copy; formerly class 30, MIR M100)

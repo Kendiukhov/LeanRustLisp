@@ -1,0 +1,29 @@
+;; Q6 (positive): typestate. A channel's type records its protocol state (`Chan Open` /
+;; `Chan Closed`); `send` needs an open channel and returns it open with the message added to
+;; its log (a `List Nat`), `close` turns an open channel into a closed one, `finish` consumes a
+;; closed channel and returns its log. Channels are `affine`, so an old state cannot be reused.
+;; `main` sends 1 and 2, closes, finishes and prints the log.
+(inductive State (sort 1) (ctor Open State) (ctor Closed State))
+(inductive (affine) Chan (pi s State (sort 1)) (ctor mk_chan (pi {s State} (pi log (List Nat) (Chan s)))))
+
+(def new_chan (Chan Open) (mk_chan nil))
+
+(def send (pi x Nat (pi c (Chan Open) (Chan Open)))
+  (lam x Nat (lam c (Chan Open)
+    (match c (Chan Open) (case (mk_chan log) (mk_chan (cons x log)))))))
+
+(def close (pi c (Chan Open) (Chan Closed))
+  (lam c (Chan Open) (match c (Chan Closed) (case (mk_chan log) (mk_chan log)))))
+
+(def finish (pi c (Chan Closed) (List Nat))
+  (lam c (Chan Closed) (match c (List Nat) (case (mk_chan log) log))))
+
+;; prints the elements of a list (the log, newest first) and returns their number
+(def lprint (pi l (List Nat) Nat)
+  (lam l (List Nat)
+    ((match l (pi c Nat Nat)
+       (case (nil) (lam c Nat c))
+       (case (cons h t ih) (lam c Nat (let p Nat (print_nat h) (ih (succ c))))))
+     zero)))
+
+(def main Nat (lprint (finish (close (send 2 (send 1 new_chan))))))

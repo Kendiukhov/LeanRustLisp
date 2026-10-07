@@ -1,0 +1,15 @@
+;; Positive control P04 (macro twin) - `peek-fn` expands to
+;; `(lam u Nat (look (& t)))`.
+;; Expected: accepted; main = 4.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+(def eat (pi t Tok Nat) (lam t Tok (succ (succ zero))))
+
+(defmacro peek-fn (v) `(lam u Nat (look (& ,v))))
+
+(def reread (pi t Tok Nat)
+  (lam t Tok
+    (let g (pi u Nat Nat) (peek-fn t)
+      (add (add (g zero) (g zero)) (eat t)))))
+
+(def main Nat (reread (mk_tok 0)))

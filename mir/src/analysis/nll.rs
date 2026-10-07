@@ -2,7 +2,7 @@ use crate::analysis::liveness::{compute_liveness, LocalSet};
 use crate::errors::{
     BorrowError, BorrowErrorContext, BorrowLoanContext, MirSpan, RegionConstraintChain,
 };
-use crate::types::{IMKind, MirType, Region};
+use crate::types::{AdtId, IMKind, MirType, Region};
 use crate::{
     BasicBlock, Body, BorrowKind, CallOperand, Literal, Local, Operand, Place, PlaceElem,
     RuntimeCheckKind, Rvalue, Statement, Terminator,
@@ -1049,8 +1049,8 @@ impl<'a> NllChecker<'a> {
                 // Is place conflicting?
                 if self.places_conflict_at(loan, place, loc) {
                     match access {
-                        AccessKind::Read => {
-                            if loan.kind == BorrowKind::Shared {
+                        AccessKind::Read | AccessKind::Move => {
+                            if loan.kind == BorrowKind::Shared && access == AccessKind::Read {
                                 continue;
                             }
                             self.errors.push(BorrowError::UseWhileBorrowed {
@@ -1109,7 +1109,15 @@ impl<'a> NllChecker<'a> {
 
     fn check_operand_access(&mut self, op: &Operand, loc: Location) {
         match op {
-            Operand::Copy(p) | Operand::Move(p) => self.check_access(p, AccessKind::Read, loc),
+            Operand::Copy(p) => self.check_access(p, AccessKind::Read, loc),
+            Operand::Move(p) => {
+                let access = if self.is_consuming_move(p) {
+                    AccessKind::Move
+                } else {
+                    AccessKind::Read
+                };
+                self.check_access(p, access, loc)
+            }
             Operand::Constant(c) => {
                 if let Some(captures) = c.literal.capture_operands() {
                     for cap in captures {
@@ -1118,6 +1126,22 @@ impl<'a> NllChecker<'a> {
                 }
             }
         }
+    }
+
+    /// Whether `Operand::Move(place)` really moves a value: the place is a non-Copy local (or a
+    /// projection of one) that is not a function value (moving an `Fn`/`FnMut` function value
+    /// does not consume it, see the ownership analysis).
+    fn is_consuming_move(&self, place: &Place) -> bool {
+        let Some(decl) = self.body.local_decls.get(place.local.index()) else {
+            return false;
+        };
+        if decl.is_copy {
+            return false;
+        }
+        !matches!(
+            decl.ty,
+            MirType::Fn(..) | MirType::FnItem(..) | MirType::Closure(..)
+        )
     }
 
     fn check_call_operand_access(&mut self, op: &CallOperand, loc: Location) {
@@ -1172,8 +1196,8 @@ impl<'a> NllChecker<'a> {
             statement_index: loc.statement_index,
         });
         match access {
-            AccessKind::Read => {
-                if kind == BorrowKind::Mut {
+            AccessKind::Read | AccessKind::Move => {
+                if kind == BorrowKind::Mut || access == AccessKind::Move {
                     self.errors.push(BorrowError::UseWhileBorrowed {
                         place: place.clone(),
                         borrow_kind: kind,
@@ -1584,19 +1608,8 @@ impl<'a> NllChecker<'a> {
                 if id1 != id2 || args1.len() != args2.len() {
                     return;
                 }
-                for (a1, a2) in args1.iter().zip(args2.iter()) {
-                    match (a1, a2) {
-                        (MirType::IndexTerm(t1), MirType::IndexTerm(t2)) => {
-                            if t1 != t2 {
-                                return;
-                            }
-                        }
-                        (MirType::IndexTerm(_), _) | (_, MirType::IndexTerm(_)) => {
-                            return;
-                        }
-                        _ => {}
-                    }
-                }
+                // Indices are erased from MIR types, so ADTs of the same family are
+                // related argument-wise whatever their (kernel-level) indices.
                 for (a1, a2) in args1.iter().zip(args2.iter()) {
                     self.relate_types(a1, a2);
                 }
@@ -1700,6 +1713,122 @@ impl<'a> NllChecker<'a> {
                         changed = true;
                     }
                 }
+                if let Some(Terminator::Call {
+                    func,
+                    args,
+                    destination,
+                    ..
+                }) = &bb.terminator
+                {
+                    if self.place_has_deref(destination) {
+                        continue;
+                    }
+                    let Some(captures) = self.captures_from_call(func, args, destination) else {
+                        continue;
+                    };
+                    if self.union_capture_types(destination.local, captures) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// A call whose result is a function value (a partial application of a curried function,
+    /// or a function returning a closure) may keep its arguments, and whatever the callee
+    /// captured, inside that function value. The destination therefore holds their regions:
+    /// loans passed as earlier arguments of a curried call stay live while the partially
+    /// applied function is live (otherwise `f (&mut x) (&mut x)` would hold two live mutable
+    /// loans of `x` unnoticed).
+    ///
+    /// The same holds for a call whose result is a value that may contain a reference
+    /// ([`Self::type_may_hold_loans`]): a constructor application stores its arguments, and a
+    /// function returning such a value may return the references it was given. Inductive types
+    /// have no region parameters, so a reference stored in a constructor field (or captured by a
+    /// closure stored in one) is invisible in the value's type; the destination keeps the
+    /// argument loans live instead (otherwise `(rb (& t))` followed by a move of `t` and a use of
+    /// the structure, or a structure holding a reference to a local returned from its function,
+    /// would go unnoticed).
+    fn captures_from_call(
+        &self,
+        func: &CallOperand,
+        args: &[Operand],
+        destination: &Place,
+    ) -> Option<Vec<MirType>> {
+        let dest_ty = self.local_types.get(&destination.local)?;
+        if !matches!(
+            dest_ty,
+            MirType::Fn(..) | MirType::FnItem(..) | MirType::Closure(..)
+        ) && !(matches!(dest_ty, MirType::Adt(..) | MirType::Opaque { .. })
+            && self.type_may_hold_loans(dest_ty))
+        {
+            return None;
+        }
+        let mut captures = Vec::new();
+        for arg in args {
+            self.collect_capture_payload_types(arg, &mut captures);
+        }
+        let callee_place = match func {
+            CallOperand::Operand(Operand::Copy(place))
+            | CallOperand::Operand(Operand::Move(place))
+            | CallOperand::Borrow(_, place) => Some(place),
+            CallOperand::Operand(Operand::Constant(_)) => None,
+        };
+        if let Some(place) = callee_place {
+            if let Some(callee_captures) = self.capture_types_for_place(place) {
+                captures.extend(callee_captures);
+            }
+        }
+        if captures.is_empty() {
+            None
+        } else {
+            Some(captures)
+        }
+    }
+
+    /// Whether a value of type `ty` may contain a reference at run time: references, function
+    /// values (a closure may capture references), opaque values, and inductive values whose type
+    /// arguments or constructor fields may contain one.
+    fn type_may_hold_loans(&self, ty: &MirType) -> bool {
+        let mut visiting = HashSet::new();
+        self.type_may_hold_loans_inner(ty, &mut visiting)
+    }
+
+    fn type_may_hold_loans_inner(&self, ty: &MirType, visiting: &mut HashSet<AdtId>) -> bool {
+        match ty {
+            MirType::Unit | MirType::Bool | MirType::Nat => false,
+            MirType::Ref(..)
+            | MirType::Fn(..)
+            | MirType::Closure(..)
+            | MirType::Opaque { .. }
+            | MirType::RawPtr(..) => true,
+            // A function item captures nothing.
+            MirType::FnItem(..) => false,
+            MirType::InteriorMutable(inner, _) => self.type_may_hold_loans_inner(inner, visiting),
+            // Type parameters of a constructor field are covered by the type's arguments.
+            MirType::Param(_) => false,
+            MirType::Adt(adt, args) => {
+                if args
+                    .iter()
+                    .any(|arg| self.type_may_hold_loans_inner(arg, visiting))
+                {
+                    return true;
+                }
+                if !visiting.insert(adt.clone()) {
+                    return false;
+                }
+                let fields_may_hold = match self.body.adt_layouts.get(adt) {
+                    Some(layout) => layout.variants.iter().any(|variant| {
+                        variant
+                            .fields
+                            .iter()
+                            .any(|field| self.type_may_hold_loans_inner(field, visiting))
+                    }),
+                    // Without a layout nothing is known about the fields.
+                    None => true,
+                };
+                visiting.remove(adt);
+                fields_may_hold
             }
         }
     }
@@ -2112,9 +2241,12 @@ impl<'a> NllChecker<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AccessKind {
     Read,
+    /// Moving a non-Copy value out of a place: conflicts with every live loan of the place,
+    /// shared or mutable (the borrow would outlive the value it points to).
+    Move,
     Write,
     Borrow(BorrowKind),
 }
@@ -2163,7 +2295,6 @@ mod tests {
     use super::*;
     use crate::types::{AdtId, Mutability};
     use crate::{BasicBlockData, Constant, Literal, LocalDecl};
-    use kernel::ast::Term;
 
     #[test]
     fn test_renumber() {
@@ -2220,34 +2351,39 @@ mod tests {
     }
 
     #[test]
-    fn relate_types_skips_mismatched_indices() {
+    fn relate_types_relates_args_of_same_indexed_family() {
+        // MIR types erase indices (docs/spec/mir/typing.md): `Vec (&'1 Nat) 0` and
+        // `Vec (&'2 Nat) 1` are both `Vec<&Nat>`, so assigning one to the other must still
+        // relate the element regions (before index erasure this relation was skipped).
         let body = Body::new(0);
         let mut checker = NllChecker::new(&body);
-
-        let zero = Term::ctor("Nat".to_string(), 0);
-        let one = Term::app(Term::ctor("Nat".to_string(), 1), zero.clone());
         let adt_id = AdtId::new("Vec");
 
         let ty_a = MirType::Adt(
             adt_id.clone(),
-            vec![
-                MirType::Ref(Region(1), Box::new(MirType::Nat), Mutability::Not),
-                MirType::IndexTerm(zero),
-            ],
+            vec![MirType::Ref(
+                Region(1),
+                Box::new(MirType::Nat),
+                Mutability::Not,
+            )],
         );
         let ty_b = MirType::Adt(
             adt_id,
-            vec![
-                MirType::Ref(Region(2), Box::new(MirType::Nat), Mutability::Not),
-                MirType::IndexTerm(one),
-            ],
+            vec![MirType::Ref(
+                Region(2),
+                Box::new(MirType::Nat),
+                Mutability::Not,
+            )],
         );
 
         checker.relate_types(&ty_a, &ty_b);
 
         assert!(
-            checker.context.constraints.is_empty(),
-            "Expected no constraints for index-mismatched ADTs, got {:?}",
+            checker
+                .context
+                .constraints
+                .contains(&Constraint::Outlives(Region(2), Region(1))),
+            "Expected '2: '1 for same-family ADTs, got {:?}",
             checker.context.constraints
         );
     }

@@ -1,10 +1,10 @@
 use crate::errors::MirSpan;
-use crate::types::{IMKind, MirType, Mutability, Region};
+use crate::types::{AdtId, IMKind, MirType, Mutability, Region};
 use crate::{
     BasicBlock, Body, BorrowKind, CallOperand, Operand, Place, PlaceElem, RuntimeCheckKind, Rvalue,
     Statement, SwitchTargets, Terminator,
 };
-use kernel::ast::{FunctionKind, Term};
+use kernel::ast::FunctionKind;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -361,7 +361,9 @@ impl<'a> TypingChecker<'a> {
         } else if base_is_copy {
             true
         } else {
-            place_ty.is_copy()
+            // A field projected out of a non-Copy value (e.g. a `List Nat` field of an
+            // `affine` value) is Copy if its type is, by the inductives' Copy instances.
+            self.body.adt_layouts.type_is_copy(&place_ty)
         };
         if !is_copy {
             self.errors.push(TypingError::new(
@@ -616,7 +618,6 @@ impl<'a> TypingChecker<'a> {
             MirType::InteriorMutable(inner, kind) => {
                 MirType::InteriorMutable(Box::new(Self::substitute_regions(inner, map)), *kind)
             }
-            MirType::IndexTerm(term) => MirType::IndexTerm(term.clone()),
             _ => ty.clone(),
         }
     }
@@ -673,7 +674,6 @@ impl<'a> TypingChecker<'a> {
             MirType::InteriorMutable(inner, kind) => {
                 MirType::InteriorMutable(Box::new(Self::substitute_type_params(inner, map)), *kind)
             }
-            MirType::IndexTerm(term) => MirType::IndexTerm(term.clone()),
             MirType::Opaque { reason } => MirType::Opaque {
                 reason: reason.clone(),
             },
@@ -708,11 +708,11 @@ impl<'a> TypingChecker<'a> {
             return true;
         }
 
+        if self.stuck_type_meets_loan_free_type(&expected, &actual) {
+            return true;
+        }
+
         if matches!(expected, MirType::Unit) || matches!(actual, MirType::Unit) {
-            if matches!(expected, MirType::IndexTerm(_)) || matches!(actual, MirType::IndexTerm(_))
-            {
-                return false;
-            }
             return matches!(
                 (&expected, &actual),
                 (MirType::Unit, MirType::Opaque { .. }) | (MirType::Opaque { .. }, MirType::Unit)
@@ -739,10 +739,6 @@ impl<'a> TypingChecker<'a> {
                 MirType::InteriorMutable(e_inner, e_kind),
                 MirType::InteriorMutable(a_inner, a_kind),
             ) => e_kind == a_kind && self.types_compatible_call(e_inner, a_inner, map),
-            (MirType::IndexTerm(e_term), MirType::IndexTerm(a_term)) => {
-                self.call_index_terms_compatible(e_term, a_term)
-            }
-            (MirType::IndexTerm(_), _) | (_, MirType::IndexTerm(_)) => false,
             (MirType::Adt(e_id, e_args), MirType::Adt(a_id, a_args)) => {
                 e_id == a_id
                     && e_args.len() == a_args.len()
@@ -769,24 +765,15 @@ impl<'a> TypingChecker<'a> {
         }
     }
 
-    fn call_index_terms_compatible(
-        &self,
-        expected: &std::rc::Rc<Term>,
-        actual: &std::rc::Rc<Term>,
-    ) -> bool {
-        expected == actual || matches!(&**expected, Term::Var(_))
-    }
-
     fn types_compatible(&self, expected: &MirType, actual: &MirType) -> bool {
         self.types_compatible_inner(expected, actual, false)
     }
 
     fn types_compatible_inner(&self, expected: &MirType, actual: &MirType, _in_ref: bool) -> bool {
+        if self.stuck_type_meets_loan_free_type(expected, actual) {
+            return true;
+        }
         if matches!(expected, MirType::Unit) || matches!(actual, MirType::Unit) {
-            if matches!(expected, MirType::IndexTerm(_)) || matches!(actual, MirType::IndexTerm(_))
-            {
-                return false;
-            }
             return !matches!(expected, MirType::Opaque { .. })
                 && !matches!(actual, MirType::Opaque { .. });
         }
@@ -810,8 +797,6 @@ impl<'a> TypingChecker<'a> {
                 MirType::InteriorMutable(e_inner, e_kind),
                 MirType::InteriorMutable(a_inner, a_kind),
             ) => e_kind == a_kind && self.types_compatible_inner(e_inner, a_inner, false),
-            (MirType::IndexTerm(e_term), MirType::IndexTerm(a_term)) => e_term == a_term,
-            (MirType::IndexTerm(_), _) | (_, MirType::IndexTerm(_)) => false,
             (MirType::Adt(e_id, e_args), MirType::Adt(a_id, a_args)) => {
                 e_id == a_id
                     && e_args.len() == a_args.len()
@@ -836,6 +821,71 @@ impl<'a> TypingChecker<'a> {
                     false
                 }
             }
+        }
+    }
+
+    /// A value of a *stuck* type (`MirType::is_stuck_type`: a type computed at run time, e.g. by
+    /// a large elimination on an unknown index) may flow to or from a place whose type is known,
+    /// provided the known type cannot hold a reference: the kernel has checked that the two LRL
+    /// types are equal for the run-time value, the backends represent stuck values uniformly
+    /// (the typed backend boxes and unboxes them, see docs/spec/codegen/typed-backend.md), and
+    /// as no loan can be carried through such a flow, the borrow checker, which cannot see
+    /// regions inside a stuck type, loses nothing. Other `Opaque` types (opaque nominal types)
+    /// are compared by reason. See docs/spec/mir/typing.md, "Types Computed at Run Time".
+    fn stuck_type_meets_loan_free_type(&self, expected: &MirType, actual: &MirType) -> bool {
+        (expected.is_stuck_type() && self.is_loan_free_type(actual))
+            || (actual.is_stuck_type() && self.is_loan_free_type(expected))
+    }
+
+    /// Whether no value of `ty` can contain a reference or a function value (which may capture
+    /// one): `Unit`, `Bool`, `Nat`, and inductive types whose type arguments and constructor
+    /// fields are loan-free. Type parameters, references, functions, raw pointers, interior
+    /// mutability and opaque types are not (conservatively).
+    fn is_loan_free_type(&self, ty: &MirType) -> bool {
+        let mut visiting = HashSet::new();
+        self.is_loan_free_type_inner(ty, false, &mut visiting)
+    }
+
+    fn is_loan_free_type_inner(
+        &self,
+        ty: &MirType,
+        in_layout: bool,
+        visiting: &mut HashSet<AdtId>,
+    ) -> bool {
+        match ty {
+            MirType::Unit | MirType::Bool | MirType::Nat => true,
+            // Inside a constructor's field layout, a parameter stands for a type argument of the
+            // inductive, which is checked at the use.
+            MirType::Param(_) => in_layout,
+            MirType::Adt(adt, args) => {
+                if !args
+                    .iter()
+                    .all(|arg| self.is_loan_free_type_inner(arg, in_layout, visiting))
+                {
+                    return false;
+                }
+                if !visiting.insert(adt.clone()) {
+                    return true;
+                }
+                let fields_loan_free = match self.body.adt_layouts.get(adt) {
+                    Some(layout) => layout.variants.iter().all(|variant| {
+                        variant
+                            .fields
+                            .iter()
+                            .all(|field| self.is_loan_free_type_inner(field, true, visiting))
+                    }),
+                    None => false,
+                };
+                visiting.remove(adt);
+                fields_loan_free
+            }
+            MirType::Ref(..)
+            | MirType::Fn(..)
+            | MirType::FnItem(..)
+            | MirType::Closure(..)
+            | MirType::RawPtr(..)
+            | MirType::InteriorMutable(..)
+            | MirType::Opaque { .. } => false,
         }
     }
 
@@ -880,7 +930,6 @@ fn max_region_in_type(ty: &MirType) -> usize {
     match ty {
         MirType::Ref(region, inner, _) => region.0.max(max_region_in_type(inner)),
         MirType::Adt(_, args) => args.iter().map(max_region_in_type).max().unwrap_or(0),
-        MirType::IndexTerm(_) => 0,
         MirType::Fn(_, region_params, args, ret)
         | MirType::FnItem(_, _, region_params, args, ret) => {
             let mut max_region = region_params.iter().map(|r| r.0).max().unwrap_or(0);
@@ -1225,34 +1274,23 @@ mod tests {
     }
 
     #[test]
-    fn typing_accepts_call_with_index_var_and_erased_opaque_arg() {
+    fn typing_accepts_call_returning_indexed_family_at_param() {
+        // `Eq A x y` is represented as `Eq<A, ()>`: the index `y` is erased and the value
+        // parameter `x` is the `Unit` placeholder (docs/spec/mir/typing.md). A generic
+        // `fn(T) -> Eq<T, ()>` therefore returns into an `Eq<Unit, ()>` destination.
         let eq_id = AdtId::new("Eq");
         let unit_id = AdtId::new("Unit");
-        let unit_ctor = Term::ctor("Unit".to_string(), 0);
         let mut body = body_with_locals(vec![
             MirType::Adt(
                 eq_id.clone(),
-                vec![
-                    MirType::Adt(unit_id.clone(), vec![]),
-                    MirType::Opaque {
-                        reason: "ctor Unit".to_string(),
-                    },
-                    MirType::IndexTerm(unit_ctor.clone()),
-                ],
+                vec![MirType::Adt(unit_id.clone(), vec![]), MirType::Unit],
             ), // _0: destination Eq Unit unit unit
             MirType::Fn(
                 FunctionKind::Fn,
                 Vec::new(),
                 vec![MirType::Param(0)],
-                Box::new(MirType::Adt(
-                    eq_id,
-                    vec![
-                        MirType::Param(0),
-                        MirType::Unit,
-                        MirType::IndexTerm(Term::var(0)),
-                    ],
-                )),
-            ), // _1: fn(T) -> Eq T unit v0
+                Box::new(MirType::Adt(eq_id, vec![MirType::Param(0), MirType::Unit])),
+            ), // _1: fn(T) -> Eq T x y
             MirType::Adt(unit_id, vec![]), // _2: argument Unit
         ]);
 
@@ -1274,7 +1312,7 @@ mod tests {
         checker.check();
         assert!(
             checker.errors().is_empty(),
-            "Expected call typing to accept index var + erased opaque compatibility, got {:?}",
+            "Expected call typing to accept an indexed family returned at a type parameter, got {:?}",
             checker.errors()
         );
     }
@@ -1482,19 +1520,44 @@ mod tests {
     }
 
     #[test]
-    fn typing_rejects_index_mismatch() {
-        let zero = Term::ctor("Nat".to_string(), 0);
-        let succ_zero = Term::app(Term::ctor("Nat".to_string(), 1), zero.clone());
+    fn typing_accepts_assignment_between_indexed_family_instances() {
+        // Indices are erased from MIR types: a `Vec Nat 1` may flow into a place declared
+        // with another (kernel-convertible) index expression, e.g. `Vec Nat (succ n)` vs
+        // `Vec Nat (add 1 n)`. Both are `Vec<Nat>` in MIR; the kernel has checked the
+        // indices. (Before index erasure this was an M300 "Assignment type mismatch".)
         let vec_id = AdtId::new("Vec");
-        let vec_zero = MirType::Adt(vec_id.clone(), vec![MirType::Nat, MirType::IndexTerm(zero)]);
-        let vec_succ = MirType::Adt(vec_id, vec![MirType::Nat, MirType::IndexTerm(succ_zero)]);
-
-        let mut body = body_with_locals(vec![vec_zero, vec_succ]);
+        let vec_nat = MirType::Adt(vec_id.clone(), vec![MirType::Nat]);
+        let mut body = body_with_locals(vec![vec_nat.clone(), vec_nat]);
 
         body.basic_blocks.push(BasicBlockData {
             statements: vec![Statement::Assign(
                 Place::from(Local(0)),
-                Rvalue::Use(Operand::Copy(Place::from(Local(1)))),
+                Rvalue::Use(Operand::Move(Place::from(Local(1)))),
+            )],
+            terminator: Some(Terminator::Return),
+        });
+
+        let mut checker = TypingChecker::new(&body);
+        checker.check();
+        assert!(
+            checker.errors().is_empty(),
+            "Expected assignment between index instances to type-check, got {:?}",
+            checker.errors()
+        );
+    }
+
+    #[test]
+    fn typing_rejects_indexed_family_type_param_mismatch() {
+        // Erasing indices does not erase type parameters: `Vec<Nat>` vs `Vec<Bool>` differ.
+        let vec_id = AdtId::new("Vec");
+        let vec_nat = MirType::Adt(vec_id.clone(), vec![MirType::Nat]);
+        let vec_bool = MirType::Adt(vec_id, vec![MirType::Bool]);
+        let mut body = body_with_locals(vec![vec_nat, vec_bool]);
+
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![Statement::Assign(
+                Place::from(Local(0)),
+                Rvalue::Use(Operand::Move(Place::from(Local(1)))),
             )],
             terminator: Some(Terminator::Return),
         });
@@ -1506,7 +1569,7 @@ mod tests {
                 .errors()
                 .iter()
                 .any(|e| e.to_string().contains("Assignment type mismatch")),
-            "Expected index assignment mismatch error, got {:?}",
+            "Expected parameter mismatch error, got {:?}",
             checker.errors()
         );
     }
@@ -1586,6 +1649,117 @@ mod tests {
         );
     }
 
+    fn assignment_errors(dest: MirType, source: MirType) -> Vec<String> {
+        let mut body = body_with_locals(vec![dest, source]);
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![Statement::Assign(
+                Place::from(Local(0)),
+                Rvalue::Use(Operand::Move(Place::from(Local(1)))),
+            )],
+            terminator: Some(Terminator::Return),
+        });
+        let mut checker = TypingChecker::new(&body);
+        checker.check();
+        checker.errors().iter().map(|e| e.to_string()).collect()
+    }
+
+    /// A stuck type (computed at run time, e.g. by a large elimination) meets known loan-free
+    /// types in both directions, also inside a type argument (docs/spec/mir/typing.md, "Types
+    /// Computed at Run Time").
+    #[test]
+    fn typing_accepts_stuck_type_against_loan_free_types() {
+        let stuck = MirType::Opaque {
+            reason: crate::types::STUCK_TYPE_REASON.to_string(),
+        };
+        assert!(stuck.is_stuck_type());
+        assert!(assignment_errors(stuck.clone(), MirType::Nat).is_empty());
+        assert!(assignment_errors(MirType::Bool, stuck.clone()).is_empty());
+        assert!(assignment_errors(MirType::Unit, stuck.clone()).is_empty());
+        // An inductive whose fields are loan-free (`Box` holding a `Token`) is loan-free.
+        let mut env = Env::new();
+        let sort1 = Term::sort(Level::Succ(Box::new(Level::Zero)));
+        env.add_inductive(InductiveDecl::new(
+            "Token".to_string(),
+            sort1.clone(),
+            vec![Constructor {
+                name: "mkToken".to_string(),
+                ty: Term::ind("Token".to_string()),
+            }],
+        ))
+        .expect("add Token");
+        env.add_inductive(InductiveDecl::new(
+            "Box".to_string(),
+            sort1,
+            vec![Constructor {
+                name: "mkBox".to_string(),
+                ty: Term::pi(
+                    Term::ind("Token".to_string()),
+                    Term::ind("Box".to_string()),
+                    BinderInfo::Default,
+                ),
+            }],
+        ))
+        .expect("add Box");
+        let ids = IdRegistry::from_env(&env);
+        let box_id = ids.adt_id("Box").expect("Box id");
+        let mut body = body_with_locals(vec![stuck.clone(), MirType::Adt(box_id, vec![])]);
+        body.adt_layouts = ids.adt_layouts().clone();
+        body.basic_blocks.push(BasicBlockData {
+            statements: vec![Statement::Assign(
+                Place::from(Local(0)),
+                Rvalue::Use(Operand::Move(Place::from(Local(1)))),
+            )],
+            terminator: Some(Terminator::Return),
+        });
+        let mut checker = TypingChecker::new(&body);
+        checker.check();
+        assert!(
+            checker.errors().is_empty(),
+            "expected stuck = Box (loan-free) to type-check, got {:?}",
+            checker.errors()
+        );
+    }
+
+    /// A stuck type does not meet a type that may carry a loan (a reference, a function value, a
+    /// type parameter, an inductive without a known layout): the borrow checker cannot see
+    /// regions inside a stuck type. Opaque nominal types keep comparing by reason.
+    #[test]
+    fn typing_rejects_stuck_type_against_types_that_may_hold_loans() {
+        let stuck = MirType::Opaque {
+            reason: crate::types::STUCK_TYPE_REASON.to_string(),
+        };
+        let shared_ref = MirType::Ref(Region(1), Box::new(MirType::Nat), Mutability::Not);
+        let function = MirType::Fn(
+            FunctionKind::Fn,
+            Vec::new(),
+            vec![MirType::Nat],
+            Box::new(MirType::Nat),
+        );
+        for known in [
+            shared_ref,
+            function,
+            MirType::Param(0),
+            MirType::Adt(AdtId::new("Unknown"), vec![]),
+        ] {
+            let errors = assignment_errors(stuck.clone(), known.clone());
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.contains("Assignment type mismatch")),
+                "expected a mismatch between a stuck type and {:?}, got {:?}",
+                known,
+                errors
+            );
+        }
+        let nominal = MirType::Opaque {
+            reason: "const Handle".to_string(),
+        };
+        assert!(!nominal.is_stuck_type());
+        assert!(assignment_errors(nominal, MirType::Nat)
+            .iter()
+            .any(|e| e.contains("Assignment type mismatch")));
+    }
+
     #[test]
     fn typing_rejects_copy_of_opaque() {
         let opaque = MirType::Opaque {
@@ -1617,8 +1791,27 @@ mod tests {
     fn typing_rejects_copy_of_noncopy_field() {
         let mut env = Env::new();
         let sort1 = Term::sort(Level::Succ(Box::new(Level::Zero)));
+        // `Token` must be genuinely non-Copy: the kernel derives Copy for an unmarked
+        // field-free inductive, and MIR follows the kernel's Copy instances.
+        env.set_allow_reserved_primitives(true);
+        for marker in [
+            kernel::ast::TypeMarker::InteriorMutable,
+            kernel::ast::TypeMarker::MayPanicOnBorrowViolation,
+            kernel::ast::TypeMarker::ConcurrencyPrimitive,
+            kernel::ast::TypeMarker::AtomicPrimitive,
+            kernel::ast::TypeMarker::Indexable,
+        ] {
+            env.add_definition(kernel::ast::Definition::axiom_with_tags(
+                kernel::ast::marker_name(marker).to_string(),
+                sort1.clone(),
+                vec![kernel::ast::AxiomTag::Unsafe],
+            ))
+            .expect("marker definition");
+        }
+        env.set_allow_reserved_primitives(false);
+        env.init_marker_registry().expect("marker registry");
 
-        let token_decl = InductiveDecl::new(
+        let mut token_decl = InductiveDecl::new(
             "Token".to_string(),
             sort1.clone(),
             vec![Constructor {
@@ -1626,6 +1819,7 @@ mod tests {
                 ty: Term::ind("Token".to_string()),
             }],
         );
+        token_decl.markers = vec![kernel::ast::marker_def_id(kernel::ast::TypeMarker::Affine)];
         env.add_inductive(token_decl).expect("add Token");
 
         let box_ctor_ty = Term::pi(

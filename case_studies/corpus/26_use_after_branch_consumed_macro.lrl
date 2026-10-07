@@ -1,0 +1,13 @@
+;; Class 26 (macro twin) - `maybe-keep` expands to the match on `b`; the
+;; caller then uses `k` again.
+;; Expected: kernel K0021 [UseAfterMove] naming `k`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive TL (sort 1) (ctor tnil TL) (ctor tcons (pi h Tok (pi t TL TL))))
+
+(defmacro maybe-keep (flag tok)
+  `(match ,flag TL (case (true) (tcons ,tok tnil)) (case (false) tnil)))
+
+(def route (pi k Tok (pi #[once] b Bool TL))
+  (lam k Tok (lam #[once] b Bool
+    (let r TL (maybe-keep b k)
+      (tcons k r)))))

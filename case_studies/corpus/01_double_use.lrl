@@ -1,0 +1,10 @@
+;; Class 01 - double use of an affine value.
+;; `Tok` is marked affine, so it is not Copy although its only field is a Nat.
+;; `dup` puts the same token into both fields of a pair: the second occurrence
+;; uses `t` after the first one moved it.
+;; Expected: kernel K0021 [UseAfterMove] naming `t`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive TP (sort 1) (ctor mk_tp (pi a Tok (pi b Tok TP))))
+
+(def dup (pi t Tok TP)
+  (lam t Tok (mk_tp t t)))

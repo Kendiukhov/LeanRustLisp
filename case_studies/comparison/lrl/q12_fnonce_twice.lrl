@@ -1,0 +1,18 @@
+;; Q12 (positive): a once-only closure. `consume` captures the affine token `t` and consumes it
+;; when called, so it must have the once-only function kind #[once] (FnOnce); it is called once.
+;; `apply_once` takes a once-only function as an argument and calls it once. `burn` consumes a
+;; token and returns its id plus an offset.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def burn (pi u Nat (pi t Tok Nat))
+  (lam u Nat (lam t Tok (match t Nat (case (mk_tok id) (add id u))))))
+
+(def apply_once (pi #[once] f (pi #[once] u Nat Nat) Nat)
+  (lam #[once] f (pi #[once] u Nat Nat) (f 2)))
+
+(def main Nat
+  (let t Tok (mk_tok 5)
+    (let consume (pi #[once] u Nat Nat) (lam #[once] u Nat (burn u t))
+      (add (print_nat (consume 1))                                            ;; 6
+           (let t2 Tok (mk_tok 5)
+             (print_nat (apply_once (lam #[once] u Nat (burn u t2)))))))))  ;; 7

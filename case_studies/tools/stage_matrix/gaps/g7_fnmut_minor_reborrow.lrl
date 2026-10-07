@@ -1,0 +1,20 @@
+;; MIR-independence probe for the stage matrix (case_studies/tools/run_stage_matrix.sh, set `mir_gaps`).
+;; Direction: the kernel ACCEPTS, MIR rejects (safe, but incomplete). An FnMut closure `g` built inside
+;; the succ case of a match on Nat reborrows the captured mutable reference `m` (the paper's widening
+;; exception inside a repeatable minor premise; the FnOnce version is rejected by the kernel with
+;; K0021 ConsumedInRepeatedScope).
+;; Two lowering bugs on this program are fixed (mir/src/lower.rs): a variable held through a borrowed
+;; capture was re-captured by borrowing the capture local (`&mut &mut Tok`, M300), and closure bodies
+;; restarted region numbering at 1, so their regions coincided with those of their captured types
+;; (spurious M206/M200). Still open (MIR rejects `f`):
+;;   M100: the succ minor-premise closure holds `&mut m` (not Copy) and is used twice: passed to the
+;;         recursor for the induction hypothesis and called directly (closure-based lowering of
+;;         recursive eliminations, docs/spec/mir/index.md "Recursor Lowering and Its Limits");
+;;   M203: the minor's outer lambda returns the inner closure holding `&mut (*_3)`, a reborrow through
+;;         the captured reference; the NLL checker treats StorageDead(_3) as invalidating loans of `*_3`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def poke (pi r (Ref #[r] Mut Tok) Nat) (lam r (Ref #[r] Mut Tok) (succ zero)))
+(def f (pi n Nat (pi t Tok Nat)) (lam n Nat (lam t Tok (let m (Ref #[r] Mut Tok) (&mut t)
+  (match n Nat
+    (case (zero) zero)
+    (case (succ p ih) (let g (pi #[mut] u Nat Nat) (lam #[mut] u Nat (poke m)) (add (g 0) ih))))))))

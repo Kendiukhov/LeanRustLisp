@@ -1,0 +1,26 @@
+;; Q5 (negative): the channel is used again after `send` consumed it. Identical to
+;; q05_single_use_channel.lrl except for `main` (marked CHANGED).
+;; Expected: rejected before running (use after move).
+(inductive (affine) Chan (sort 1) (ctor mk_chan (pi log (List Nat) Chan)))
+(inductive Receipt (sort 1) (ctor receipt (pi log (List Nat) Receipt)))
+
+(def open_chan Chan (mk_chan nil))
+
+(def send (pi x Nat (pi c Chan Receipt))
+  (lam x Nat (lam c Chan
+    (match c Receipt (case (mk_chan log) (receipt (cons x log)))))))
+
+(def receipt_log (pi r Receipt (List Nat)) (lam r Receipt (match r (List Nat) (case (receipt log) log))))
+
+;; prints the elements of a list (the log, newest first) and returns their number
+(def lprint (pi l (List Nat) Nat)
+  (lam l (List Nat)
+    ((match l (pi c Nat Nat)
+       (case (nil) (lam c Nat c))
+       (case (cons h t ih) (lam c Nat (let p Nat (print_nat h) (ih (succ c))))))
+     zero)))
+
+(def main Nat
+  (let c Chan open_chan
+    (let r Receipt (send 7 c)
+      (lprint (receipt_log (send 8 c))))))   ;; CHANGED: second send on the consumed channel c

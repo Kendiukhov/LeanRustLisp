@@ -1,0 +1,9 @@
+;; Class 03 - calling a function value after it was moved (a read after a move).
+;; Function types are not Copy. `use_after` first stores `f` in a box
+;; (a move) and then calls it (a read of a moved variable).
+;; Expected: kernel K0021 [UseAfterMove] naming `f`.
+(inductive FBox (sort 1) (ctor mk_fbox (pi f (pi x Nat Nat) FBox)))
+(inductive R (sort 1) (ctor mk_r (pi b FBox (pi n Nat R))))
+
+(def use_after (pi f (pi x Nat Nat) R)
+  (lam f (pi x Nat Nat) (mk_r (mk_fbox f) (f zero))))

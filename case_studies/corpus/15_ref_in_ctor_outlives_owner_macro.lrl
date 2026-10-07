@@ -1,0 +1,17 @@
+;; Class 15 (macro twin) - `boxed-borrow` expands to `(rb (& t))`; the rest of
+;; the program is the same as 15_ref_in_ctor_outlives_owner.lrl.
+;; Expected: MIR M201 (UseWhileBorrowed).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok n) n))))
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+
+(inductive RB (sort 1) (ctor rb (pi r (Ref #[r] Shared Tok) RB)))
+(def lookb (pi b RB Nat) (lam b RB (match b Nat (case (rb r) (look r)))))
+
+(defmacro boxed-borrow (v) `(rb (& ,v)))
+
+(def f (pi t Tok Nat)
+  (lam t Tok
+    (let b RB (boxed-borrow t)
+      (let n Nat (burn t)
+        (add n (lookb b))))))

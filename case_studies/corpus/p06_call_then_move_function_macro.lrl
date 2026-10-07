@@ -1,0 +1,14 @@
+;; Positive control P06 (macro twin) - `call-then-box` expands to
+;; `(mk_r2 (f zero) (mk_fbox f))`.
+;; Expected: accepted; main = 1.
+(inductive FBox (sort 1) (ctor mk_fbox (pi f (pi x Nat Nat) FBox)))
+(inductive R2 (sort 1) (ctor mk_r2 (pi n Nat (pi b FBox R2))))
+
+(defmacro call-then-box (g) `(mk_r2 (,g zero) (mk_fbox ,g)))
+
+(def read_then_move (pi f (pi x Nat Nat) R2)
+  (lam f (pi x Nat Nat) (call-then-box f)))
+
+(def first (pi r R2 Nat) (lam r R2 (match r Nat (case (mk_r2 n b) n))))
+
+(def main Nat (first (read_then_move succ)))

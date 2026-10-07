@@ -1,0 +1,14 @@
+;; Class 11 (macro twin) - `close-twice` expands to `(close (close d))`.
+;; Expected: the same elaborator type error as 11_wrong_protocol_state.lrl.
+(inductive St (sort 1) (ctor opened St) (ctor closed St))
+(inductive (affine) Door (pi s St (sort 1))
+  (ctor mk_open (Door opened))
+  (ctor mk_closed (Door closed)))
+
+(def open_door (Door opened) mk_open)
+(def close (pi d (Door opened) (Door closed))
+  (lam d (Door opened) mk_closed))
+
+(defmacro close-twice (d) `(close (close ,d)))
+
+(def bad (Door closed) (close-twice open_door))

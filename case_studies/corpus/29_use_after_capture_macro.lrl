@@ -1,0 +1,11 @@
+;; Class 29 (macro twin) - `delay-burn` expands to `(lam #[once] u Nat (burn t))`.
+;; Expected: kernel K0021 [UseAfterMove] naming `t`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok i) i))))
+
+(defmacro delay-burn (v) `(lam #[once] u Nat (burn ,v)))
+
+(def cap (pi t Tok Nat)
+  (lam t Tok
+    (let g (pi #[once] u Nat Nat) (delay-burn t)
+      (add (g zero) (burn t)))))

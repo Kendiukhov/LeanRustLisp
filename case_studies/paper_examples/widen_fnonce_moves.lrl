@@ -1,0 +1,10 @@
+;; Paper, subsection "What is proved" (sec:own:meta, paper/jot_r1/sections/ownership.tex),
+;; the paragraph after Lemma "Kind widening" (lem:widening): the same closure
+;; as in widen_fnmut_reborrow.lrl annotated FnOnce (`#[once]`) takes the captured mutable reference
+;; by move, so the later use of `r` is a use after move.
+;; Expected: K0021 Ownership violation [UseAfterMove]: variable 'r' is used after it was moved.
+(def poke (pi r (Ref #[r] Mut Nat) Nat) (lam r (Ref #[r] Mut Nat) zero))
+(def f (pi r (Ref #[r] Mut Nat) Nat)
+  (lam r (Ref #[r] Mut Nat)
+    (let g (pi #[once] u Nat Nat) (lam #[once] u Nat (poke r))
+      (let a Nat (g zero) (poke r)))))

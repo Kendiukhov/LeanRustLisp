@@ -1,0 +1,9 @@
+;; Paper, subsections "Hygiene" (sec:macros:hygiene) and "The phase barrier"
+;; (sec:macros:barrier), paper/jot_r1/sections/macros.tex: with
+;; (defmacro with-zero (e) (let x Nat zero e)), the call (lam x Nat (with-zero x)) returns the
+;; caller's x, not zero: the template's binder `x` does not capture the argument `x`.
+;; Expected: accepted; `main` (not printed in the paper) applies the function to 3 and the dynamic
+;; binary prints `Result: Nat(3)`. Compare with_zero_by_hand.lrl.
+(defmacro with-zero (e) (let x Nat zero e))
+(def f (pi x Nat Nat) (lam x Nat (with-zero x)))
+(def main Nat (f (succ (succ (succ zero)))))

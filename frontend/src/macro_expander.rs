@@ -41,6 +41,19 @@ pub enum ExpansionError {
 }
 
 impl ExpansionError {
+    /// Whether the expander has already recorded a diagnostic (with the macro-expansion stack)
+    /// for this error in its pending diagnostics: boundary violations, expansion limits and
+    /// cycles. Callers that drain the pending diagnostics need not report the error again.
+    pub fn is_reported_as_pending_diagnostic(&self) -> bool {
+        matches!(
+            self,
+            ExpansionError::MacroBoundaryDenied { .. }
+                | ExpansionError::ExpansionStepLimitExceeded { .. }
+                | ExpansionError::ExpansionDepthLimitExceeded { .. }
+                | ExpansionError::MacroExpansionCycle { .. }
+        )
+    }
+
     pub fn diagnostic_code(&self) -> &'static str {
         match self {
             ExpansionError::TransformationError(_) => CODE_EXPANSION_TRANSFORMATION,
@@ -258,6 +271,11 @@ pub struct Expander {
     expansion_cache_env_fingerprint: Option<String>,
     active_macro_keys: BTreeSet<String>,
     macro_call_stack: Vec<MacroCallFrame>,
+    /// Every macro call expanded since the last `take_expanded_call_sites` (name, call-site
+    /// span, nesting depth). Unlike `expansion_trace`, entries are not popped when a call
+    /// finishes, so diagnostics reported after expansion (elaboration, kernel, MIR) can be
+    /// related to the macro calls that produced the code.
+    expanded_call_sites: Vec<MacroTraceEntry>,
     pub verbose: bool,
     pub trace_verbose: bool,
 }
@@ -287,6 +305,7 @@ impl Expander {
             expansion_cache_env_fingerprint: None,
             active_macro_keys: BTreeSet::new(),
             macro_call_stack: Vec::new(),
+            expanded_call_sites: Vec::new(),
             verbose: false,
             trace_verbose: false,
         };
@@ -612,6 +631,19 @@ impl Expander {
             .collect();
         self.expansion_trace.clear();
         trace
+    }
+
+    /// The macro calls expanded since the previous call (see `expanded_call_sites`).
+    pub fn take_expanded_call_sites(&mut self) -> Vec<MacroTraceEntry> {
+        std::mem::take(&mut self.expanded_call_sites)
+    }
+
+    fn record_expanded_call_site(&mut self, name: &str, span: Span, depth: usize) {
+        self.expanded_call_sites.push(MacroTraceEntry {
+            name: name.to_string(),
+            span,
+            depth,
+        });
     }
 
     pub fn take_pending_diagnostics(&mut self) -> Vec<Diagnostic> {
@@ -1324,15 +1356,21 @@ impl Expander {
                         }
                         let expanded =
                             self.expand_quasiquote_internal(&list[1], limit, state, depth)?;
-                        if let Some(expanded_syntax) = expanded.as_ref() {
-                            let mut hits = BTreeSet::new();
-                            Self::collect_macro_boundary_hits(expanded_syntax, &mut hits);
-                            if !hits.is_empty() {
-                                self.report_macro_boundary_violation(
-                                    "quasiquote",
-                                    syntax.span,
-                                    &hits,
-                                )?;
+                        // A quasiquote that is the template (or part of the template) of a macro
+                        // call is checked, and reported under the macro's name, by the
+                        // boundary check of that call (`check_macro_boundary` below); only a
+                        // quasiquote outside any macro call is checked here.
+                        if self.macro_call_stack.is_empty() {
+                            if let Some(expanded_syntax) = expanded.as_ref() {
+                                let mut hits = BTreeSet::new();
+                                Self::collect_macro_boundary_hits(expanded_syntax, &mut hits);
+                                if !hits.is_empty() {
+                                    self.report_macro_boundary_violation(
+                                        "quasiquote",
+                                        syntax.span,
+                                        &hits,
+                                    )?;
+                                }
                             }
                         }
                         return Ok(expanded);
@@ -1400,6 +1438,7 @@ impl Expander {
 
                         if limit == ExpansionLimit::Full {
                             if let Some(cached) = self.expansion_cache.get(&call_key).cloned() {
+                                self.record_expanded_call_site(s, syntax.span, depth);
                                 if state.trace_enabled {
                                     state.trace.push(MacroTraceEntry {
                                         name: s.clone(),
@@ -1432,6 +1471,7 @@ impl Expander {
                         }
 
                         self.expansion_trace.push((s.clone(), syntax.span));
+                        self.record_expanded_call_site(s, syntax.span, depth);
                         self.active_macro_keys.insert(call_key.clone());
                         self.macro_call_stack.push(MacroCallFrame {
                             key: call_key.clone(),
@@ -1595,7 +1635,7 @@ impl Expander {
             subst_env.insert(arg_name.clone(), args[i].clone());
         }
 
-        let substituted = Self::substitute_rec_with_scope(&def.body, &subst_env, macro_scope)?;
+        let substituted = Self::substitute_rec_with_scope(&def.body, &subst_env, macro_scope, 0)?;
         Ok(Self::remap_spans_for_scope(
             &substituted,
             macro_scope,
@@ -1603,15 +1643,24 @@ impl Expander {
         ))
     }
 
+    /// Substitutes the macro arguments for the parameters in a template. `quasi_depth` is the
+    /// number of enclosing `quasiquote`s not cancelled by an `unquote`/`unquote-splicing`: a
+    /// parameter is replaced where it is evaluated, i.e. outside any quasiquote (a plain
+    /// template) or inside an unquote of the outermost quasiquote. A symbol under a quasiquote
+    /// is literal text (`(ctor ,ctor ...)`: the keyword stays, the unquoted parameter is
+    /// replaced).
     fn substitute_rec_with_scope(
         syntax: &Syntax,
         subst_env: &HashMap<String, Syntax>,
         macro_scope: ScopeId,
+        quasi_depth: usize,
     ) -> Result<Syntax, ExpansionError> {
         match &syntax.kind {
             SyntaxKind::Symbol(s) => {
-                if let Some(replacement) = subst_env.get(s) {
-                    return Ok(replacement.clone());
+                if quasi_depth == 0 {
+                    if let Some(replacement) = subst_env.get(s) {
+                        return Ok(replacement.clone());
+                    }
                 }
                 Ok(Syntax {
                     kind: SyntaxKind::Symbol(s.clone()),
@@ -1620,9 +1669,41 @@ impl Expander {
                 })
             }
             SyntaxKind::List(list) => {
+                let head = match list.first().map(|item| &item.kind) {
+                    Some(SyntaxKind::Symbol(head)) if list.len() == 2 => Some(head.as_str()),
+                    _ => None,
+                };
+                let inner_depth = match head {
+                    Some("quasiquote") => Some(quasi_depth + 1),
+                    Some("unquote") | Some("unquote-splicing") if quasi_depth > 0 => {
+                        Some(quasi_depth - 1)
+                    }
+                    _ => None,
+                };
+                if let Some(inner_depth) = inner_depth {
+                    let head = Self::substitute_rec_with_scope(
+                        &list[0],
+                        &HashMap::new(),
+                        macro_scope,
+                        quasi_depth,
+                    )?;
+                    let inner = Self::substitute_rec_with_scope(
+                        &list[1],
+                        subst_env,
+                        macro_scope,
+                        inner_depth,
+                    )?;
+                    return Ok(Syntax {
+                        kind: SyntaxKind::List(vec![head, inner]),
+                        span: syntax.span,
+                        scopes: scopes_with(&syntax.scopes, macro_scope),
+                    });
+                }
                 let new_list = list
                     .iter()
-                    .map(|item| Self::substitute_rec_with_scope(item, subst_env, macro_scope))
+                    .map(|item| {
+                        Self::substitute_rec_with_scope(item, subst_env, macro_scope, quasi_depth)
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(Syntax {
@@ -1634,7 +1715,9 @@ impl Expander {
             SyntaxKind::BracedList(list) => {
                 let new_list = list
                     .iter()
-                    .map(|item| Self::substitute_rec_with_scope(item, subst_env, macro_scope))
+                    .map(|item| {
+                        Self::substitute_rec_with_scope(item, subst_env, macro_scope, quasi_depth)
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(Syntax {
@@ -1644,8 +1727,10 @@ impl Expander {
                 })
             }
             SyntaxKind::Index(base, index) => {
-                let new_base = Self::substitute_rec_with_scope(base, subst_env, macro_scope)?;
-                let new_index = Self::substitute_rec_with_scope(index, subst_env, macro_scope)?;
+                let new_base =
+                    Self::substitute_rec_with_scope(base, subst_env, macro_scope, quasi_depth)?;
+                let new_index =
+                    Self::substitute_rec_with_scope(index, subst_env, macro_scope, quasi_depth)?;
                 Ok(Syntax {
                     kind: SyntaxKind::Index(Box::new(new_base), Box::new(new_index)),
                     span: syntax.span,
@@ -1702,6 +1787,67 @@ mod tests {
         let mut nodes = parser.parse().expect("parse should succeed");
         assert_eq!(nodes.len(), 1, "expected a single syntax node");
         nodes.remove(0)
+    }
+
+    fn symbols(syntax: &Syntax, out: &mut Vec<String>) {
+        match &syntax.kind {
+            SyntaxKind::Symbol(s) => out.push(s.clone()),
+            SyntaxKind::List(items) | SyntaxKind::BracedList(items) => {
+                for item in items {
+                    symbols(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Under a quasiquote, a macro parameter is replaced only where it is unquoted: the
+    /// parameter `ctor` must not replace the keyword `ctor` of the generated `inductive`
+    /// (corpus bug W_C_corpus_3: the expansion was `(inductive Chan (sort 1) (mk_chan mk_chan ...))`).
+    /// Outside a quasiquote every occurrence is replaced, as before.
+    #[test]
+    fn quasiquoted_template_substitutes_only_unquoted_parameters() {
+        let mut expander = Expander::new();
+        expander.add_macro(
+            "defchan".to_string(),
+            vec!["name".to_string(), "ctor".to_string()],
+            parse_single("`(inductive ,name (sort 1) (ctor ,ctor (pi id Nat ,name)))"),
+        );
+        let expanded = expander
+            .expand_all_macros(parse_single("(defchan Chan mk_chan)"))
+            .expect("macro expansion should succeed")
+            .expect("macro call should produce syntax");
+        let mut names = Vec::new();
+        symbols(&expanded, &mut names);
+        assert_eq!(
+            names,
+            vec![
+                "inductive",
+                "Chan",
+                "sort",
+                "ctor",
+                "mk_chan",
+                "pi",
+                "id",
+                "Nat",
+                "Chan"
+            ],
+            "unexpected expansion {:?}",
+            expanded
+        );
+
+        expander.add_macro(
+            "plain".to_string(),
+            vec!["x".to_string()],
+            parse_single("(add x x)"),
+        );
+        let expanded = expander
+            .expand_all_macros(parse_single("(plain one)"))
+            .expect("macro expansion should succeed")
+            .expect("macro call should produce syntax");
+        let mut names = Vec::new();
+        symbols(&expanded, &mut names);
+        assert_eq!(names, vec!["add", "one", "one"]);
     }
 
     #[test]

@@ -1,0 +1,11 @@
+;; Class 29 - a value moved into a closure (captured by a consuming use) is
+;; used again after the closure was built. The capture moves `t` at the point
+;; where the closure is created.
+;; Expected: kernel K0021 [UseAfterMove] naming `t`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def burn (pi t Tok Nat) (lam t Tok (match t Nat (case (mk_tok i) i))))
+
+(def cap (pi t Tok Nat)
+  (lam t Tok
+    (let g (pi #[once] u Nat Nat) (lam #[once] u Nat (burn t))
+      (add (g zero) (burn t)))))

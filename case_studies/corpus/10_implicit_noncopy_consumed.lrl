@@ -1,0 +1,11 @@
+;; Class 10 - an implicit binder of a non-Copy type is consumed. Implicit
+;; arguments are inferred and may be duplicated by elaboration, so they may
+;; only be read, never moved.
+;; Expected: elaborator F0209 (ImplicitNonCopyUse).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def burn (pi t Tok Nat)
+  (lam t Tok (match t Nat (case (mk_tok i) i))))
+
+(def burn_implicit (pi {t Tok} Nat)
+  (lam {t} Tok (burn t)))

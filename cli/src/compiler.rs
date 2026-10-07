@@ -35,6 +35,38 @@ pub struct CompileOptions {
     pub backend: BackendMode,
 }
 
+/// Why a `compile*` entry point did not produce a binary. The corresponding diagnostics have
+/// already been printed when this is returned; the CLI only uses it to exit with a non-zero
+/// status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompileFailure {
+    /// Reading the source or a prelude file, or writing build files, failed.
+    Io,
+    /// The prelude stack failed to load.
+    Prelude,
+    /// The program was rejected by the pipeline (parse, macro expansion, elaboration, kernel,
+    /// MIR checks, axiom gating, marker registry).
+    Rejected,
+    /// The selected backend refused to generate code for the program.
+    Backend,
+    /// rustc could not be run, or rejected the generated Rust code (for `--backend auto`: also
+    /// after the dynamic fallback).
+    Rustc,
+}
+
+impl std::fmt::Display for CompileFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            CompileFailure::Io => "I/O error",
+            CompileFailure::Prelude => "prelude failed to load",
+            CompileFailure::Rejected => "program rejected",
+            CompileFailure::Backend => "backend refused to generate code",
+            CompileFailure::Rustc => "rustc failed",
+        };
+        f.write_str(text)
+    }
+}
+
 pub const PRELUDE_API_PATH: &str = "stdlib/prelude_api.lrl";
 pub const PRELUDE_STD_CORE_NAT_PATH: &str = "stdlib/std/core/nat.lrl";
 pub const PRELUDE_STD_CORE_NAT_LITERALS_PATH: &str = "stdlib/std/core/nat_literals.lrl";
@@ -208,6 +240,16 @@ fn span_for_mir_location(location: Option<MirSpan>, span_table: &MirSpanMap) -> 
         .map(to_frontend_span)
 }
 
+/// Source span of a borrow error: its own location, or else the location where the offending
+/// loan was issued (see `driver::span_for_borrow_error`).
+fn span_for_borrow_error(
+    error: &mir::errors::BorrowError,
+    span_table: &MirSpanMap,
+) -> Option<Span> {
+    span_for_mir_location(error.location(), span_table)
+        .or_else(|| span_for_mir_location(error.loan_location(), span_table))
+}
+
 fn write_diagnostic_fallback<W: Write>(
     writer: &mut W,
     filename: &str,
@@ -228,13 +270,17 @@ fn write_diagnostic_fallback<W: Write>(
     }
 }
 
-pub fn compile_file(path: &str, output_path: Option<String>, options: CompileOptions) {
+pub fn compile_file(
+    path: &str,
+    output_path: Option<String>,
+    options: CompileOptions,
+) -> Result<(), CompileFailure> {
     compile_with_mir(
         path,
         output_path,
         options,
         prelude_stack_for_backend(options.backend),
-    );
+    )
 }
 
 pub fn compile_file_with_prelude(
@@ -242,18 +288,18 @@ pub fn compile_file_with_prelude(
     output_path: Option<String>,
     options: CompileOptions,
     prelude_path: &str,
-) {
-    compile_with_mir(path, output_path, options, &[prelude_path]);
+) -> Result<(), CompileFailure> {
+    compile_with_mir(path, output_path, options, &[prelude_path])
 }
 
 // Deprecated alias
-pub fn compile_file_to_mir(path: &str, options: CompileOptions) {
+pub fn compile_file_to_mir(path: &str, options: CompileOptions) -> Result<(), CompileFailure> {
     compile_with_mir(
         path,
         None,
         options,
         prelude_stack_for_backend(options.backend),
-    );
+    )
 }
 
 // Deprecated alias
@@ -261,13 +307,13 @@ pub fn compile_file_to_mir_with_output(
     path: &str,
     output_path: Option<String>,
     options: CompileOptions,
-) {
+) -> Result<(), CompileFailure> {
     compile_with_mir(
         path,
         output_path,
         options,
         prelude_stack_for_backend(options.backend),
-    );
+    )
 }
 
 fn compile_with_mir(
@@ -275,7 +321,7 @@ fn compile_with_mir(
     output_path: Option<String>,
     compile_options: CompileOptions,
     prelude_paths: &[&str],
-) {
+) -> Result<(), CompileFailure> {
     let mut env = Env::new();
     let mut expander = Expander::new();
     expander.trace_verbose = compile_options.trace_macros;
@@ -357,7 +403,7 @@ fn compile_with_mir(
             Ok(content) => content,
             Err(err) => {
                 println!("Error reading prelude {}: {:?}", prelude_path, err);
-                return;
+                return Err(CompileFailure::Io);
             }
         };
         let prelude_module = crate::driver::module_id_for_source(prelude_path);
@@ -382,14 +428,14 @@ fn compile_with_mir(
         if diagnostics.has_errors() {
             print_diagnostics(&diagnostics, prelude_path, &content);
             println!("Prelude compilation failed.");
-            return;
+            return Err(CompileFailure::Prelude);
         }
         prelude_modules.push(prelude_module);
     }
     if !prelude_modules.is_empty() {
         if let Err(err) = env.init_marker_registry() {
             println!("Failed to initialize marker registry: {}", err);
-            return;
+            return Err(CompileFailure::Prelude);
         }
         expander.set_default_imports(prelude_modules);
     }
@@ -401,7 +447,7 @@ fn compile_with_mir(
         Ok(c) => c,
         Err(e) => {
             println!("Error reading file: {} ({:?})", path, e);
-            return;
+            return Err(CompileFailure::Io);
         }
     };
 
@@ -416,14 +462,14 @@ fn compile_with_mir(
         Ok(res) => res,
         Err(_) => {
             print_diagnostics(&diagnostics, path, &content);
-            return;
+            return Err(CompileFailure::Rejected);
         }
     };
 
     if diagnostics.has_errors() {
         print_diagnostics(&diagnostics, path, &content);
         println!("Compilation aborted due to errors.");
-        return;
+        return Err(CompileFailure::Rejected);
     }
 
     if !compile_options.allow_axioms {
@@ -449,7 +495,7 @@ fn compile_with_mir(
             }
             print_diagnostics(&diagnostics, path, &content);
             println!("Compilation aborted due to axiom dependencies.");
-            return;
+            return Err(CompileFailure::Rejected);
         }
     }
 
@@ -467,7 +513,7 @@ fn compile_with_mir(
         }
         print_diagnostics(&diagnostics, path, &content);
         println!("Compilation aborted due to marker registry errors.");
-        return;
+        return Err(CompileFailure::Rejected);
     }
 
     let mut lowered_defs = Vec::new();
@@ -584,7 +630,7 @@ fn compile_with_mir(
             for e in &nll_result.errors {
                 let mut diagnostic = Diagnostic::error(format!("Borrow error in {}: {}", name, e))
                     .with_code(e.diagnostic_code());
-                if let Some(span) = span_for_mir_location(e.location(), &ctx.span_table) {
+                if let Some(span) = span_for_borrow_error(e, &ctx.span_table) {
                     diagnostic = diagnostic.with_span(span);
                 }
                 diagnostics.handle(diagnostic);
@@ -658,7 +704,7 @@ fn compile_with_mir(
                         Diagnostic::error(format!("Borrow error in {} closure {}: {}", name, i, e))
                             .with_code(e.diagnostic_code());
                     if let Some(span_table) = derived_span_tables.get(i) {
-                        if let Some(span) = span_for_mir_location(e.location(), span_table) {
+                        if let Some(span) = span_for_borrow_error(e, span_table) {
                             diagnostic = diagnostic.with_span(span);
                         }
                     }
@@ -719,6 +765,39 @@ fn compile_with_mir(
                 mir::transform::inline::optimize(body);
             }
 
+            // Safety net: the rewrite passes above must preserve the move discipline that the
+            // checks established on the unoptimised MIR. Re-run the MIR ownership analysis on the
+            // optimised bodies; a failure is a compiler bug and is reported instead of emitting
+            // code that could misbehave at run time.
+            let mut post_optimization_errors = Vec::new();
+            {
+                let mut ownership = mir::analysis::ownership::OwnershipAnalysis::new(&ctx.body);
+                ownership.analyze();
+                for e in ownership.check_structured() {
+                    post_optimization_errors.push(format!("{}: {}", name, e));
+                }
+                for (i, body) in ctx.derived_bodies.borrow().iter().enumerate() {
+                    let mut ownership = mir::analysis::ownership::OwnershipAnalysis::new(body);
+                    ownership.analyze();
+                    let errors = ownership.check_structured();
+                    if !errors.is_empty() {
+                        dump_mir_if_enabled(&format!("{}_optimized_closure_{}", name, i), body);
+                    }
+                    for e in errors {
+                        post_optimization_errors.push(format!("{} closure {}: {}", name, i, e));
+                    }
+                }
+            }
+            if !post_optimization_errors.is_empty() {
+                for message in post_optimization_errors {
+                    diagnostics.handle(Diagnostic::error(format!(
+                        "Internal compiler error: MIR optimisation broke the ownership invariant in {}",
+                        message
+                    )));
+                }
+                continue;
+            }
+
             let derived_bodies = ctx.derived_bodies.borrow().clone();
             let safe_name = sanitize_name(&name);
             lowered_defs.push(LoweredDef {
@@ -737,7 +816,7 @@ fn compile_with_mir(
     if diagnostics.has_errors() {
         print_diagnostics(&diagnostics, path, &content);
         println!("Codegen aborted due to safety errors.");
-        return;
+        return Err(CompileFailure::Rejected);
     }
 
     let backend_selection = match select_backend_code(
@@ -753,7 +832,7 @@ fn compile_with_mir(
         Err(message) => {
             diagnostics.handle(Diagnostic::error(message));
             print_diagnostics(&diagnostics, path, &content);
-            return;
+            return Err(CompileFailure::Backend);
         }
     };
     if let Some(warning) = backend_selection.warning.as_deref() {
@@ -761,41 +840,147 @@ fn compile_with_mir(
     }
 
     // Write output source to a unique file to avoid races across concurrent compiles.
-    let build_dir = Path::new("build");
-    if let Err(e) = fs::create_dir_all(build_dir) {
+    let build_dir = PathBuf::from("build");
+    if let Err(e) = fs::create_dir_all(&build_dir) {
         println!("Error creating build directory: {:?}", e);
-        return;
+        return Err(CompileFailure::Io);
     }
     let unique_tag = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let source_file = build_dir.join(format!("output_{}_{}.rs", std::process::id(), unique_tag));
-    let binary_file = output_path.unwrap_or_else(|| "output".to_string());
-    let staged_binary_file =
-        build_dir.join(format!("output_{}_{}.bin", std::process::id(), unique_tag));
-    let incremental_dir = build_dir.join("incremental");
-    if let Err(e) = fs::create_dir_all(&incremental_dir) {
-        println!("Error creating incremental cache directory: {:?}", e);
-        return;
-    }
+    let paths = NativeBuildPaths {
+        build_dir,
+        tag: format!("{}_{}", std::process::id(), unique_tag),
+        binary_file: output_path.unwrap_or_else(|| "output".to_string()),
+    };
+    let dynamic_fallback = || {
+        select_backend_code(
+            BackendMode::Dynamic,
+            compile_options.allow_axioms,
+            &env,
+            &ids,
+            &lowered_defs,
+            &axiom_stubs,
+            &main_def_name,
+        )
+    };
+    build_native_binary(
+        compile_options.backend,
+        backend_selection,
+        &dynamic_fallback,
+        &paths,
+        &mut run_rustc,
+    )
+    .map(|_| ())
+}
 
-    if let Err(e) = fs::write(&source_file, backend_selection.code) {
+/// Where `build_native_binary` writes generated sources, metadata and the binary.
+struct NativeBuildPaths {
+    /// Directory for generated Rust sources, staged binaries and rustc's incremental cache.
+    build_dir: PathBuf,
+    /// Unique tag (`<pid>_<nanos>`) that keeps concurrent compiles apart.
+    tag: String,
+    /// Final location of the binary.
+    binary_file: String,
+}
+
+/// How rustc's output is handled by `run_rustc`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RustcOutputMode {
+    /// rustc writes to the CLI's stdout/stderr directly.
+    Inherit,
+    /// rustc's output is captured (used for the typed attempt of `--backend auto`, so that a
+    /// rejection can fall back to the dynamic backend instead of failing the build).
+    Capture,
+}
+
+/// Result of one rustc invocation. Captured output is empty in `Inherit` mode.
+#[derive(Debug)]
+enum RustcOutcome {
+    Succeeded { stdout: String, stderr: String },
+    Failed { stdout: String, stderr: String },
+    SpawnFailed(io::Error),
+}
+
+fn run_rustc(
+    source: &Path,
+    output: &Path,
+    incremental_dir: &Path,
+    mode: RustcOutputMode,
+) -> RustcOutcome {
+    let mut command = std::process::Command::new("rustc");
+    command
+        .arg(source)
+        .arg("-o")
+        .arg(output)
+        .arg("-C")
+        .arg(format!("incremental={}", incremental_dir.display()));
+    match mode {
+        RustcOutputMode::Inherit => match command.status() {
+            Ok(status) if status.success() => RustcOutcome::Succeeded {
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            Ok(_) => RustcOutcome::Failed {
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            Err(e) => RustcOutcome::SpawnFailed(e),
+        },
+        RustcOutputMode::Capture => match command.output() {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+                let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+                if out.status.success() {
+                    RustcOutcome::Succeeded { stdout, stderr }
+                } else {
+                    RustcOutcome::Failed { stdout, stderr }
+                }
+            }
+            Err(e) => RustcOutcome::SpawnFailed(e),
+        },
+    }
+}
+
+/// One-line summary of captured rustc diagnostics, e.g.
+/// `3 error(s), first: error[E0107]: enum takes 0 generic arguments ...`.
+fn summarize_rustc_errors(output: &str) -> String {
+    let errors: Vec<&str> = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            line.starts_with("error[")
+                || (line.starts_with("error:") && !line.starts_with("error: aborting"))
+        })
+        .collect();
+    match errors.first() {
+        Some(first) => format!("{} error(s), first: {}", errors.len(), first),
+        None => "rustc exited with a failure status".to_string(),
+    }
+}
+
+/// Writes the generated Rust source for `selection` to `source_file` and, when executable axiom
+/// stubs are present, the axiom artifact metadata next to it.
+fn write_backend_sources(
+    selection: &BackendSelection,
+    source_file: &Path,
+    paths: &NativeBuildPaths,
+) -> Result<(), CompileFailure> {
+    if let Err(e) = fs::write(source_file, &selection.code) {
         println!("Error writing output file: {:?}", e);
-        return;
+        return Err(CompileFailure::Io);
     }
 
-    if !backend_selection.executable_axiom_stubs.is_empty() {
-        let artifact_file = build_dir.join(format!(
-            "output_{}_{}.artifacts.json",
-            std::process::id(),
-            unique_tag
-        ));
-        let backend_name = match backend_selection.selected_backend {
+    if !selection.executable_axiom_stubs.is_empty() {
+        let artifact_file = paths
+            .build_dir
+            .join(format!("output_{}.artifacts.json", paths.tag));
+        let backend_name = match selection.selected_backend {
             SelectedBackend::Dynamic => "dynamic",
             SelectedBackend::Typed => "typed",
         };
-        let axiom_list = backend_selection
+        let axiom_list = selection
             .executable_axiom_stubs
             .iter()
             .map(|name| format!("\"{}\"", escape_json_string(name)))
@@ -818,34 +1003,120 @@ fn compile_with_mir(
             );
         }
     }
+    Ok(())
+}
 
-    println!("Compiling {} to {}...", source_file.display(), binary_file);
-    let status = std::process::Command::new("rustc")
-        .arg(&source_file)
-        .arg("-o")
-        .arg(&staged_binary_file)
-        .arg("-C")
-        .arg(format!("incremental={}", incremental_dir.display()))
-        .status();
+/// Writes the generated Rust code, compiles it with rustc and places the binary at
+/// `paths.binary_file`. Returns the backend whose code ended up in the binary.
+///
+/// With `--backend auto`, when the typed backend's code is rejected by rustc, the build falls
+/// back to the dynamic backend (code from `dynamic_fallback`) with a warning, exactly as it does
+/// when typed code generation itself reports an unsupported construct. The rejected typed source
+/// is kept in the build directory for inspection.
+fn build_native_binary(
+    mode: BackendMode,
+    selection: BackendSelection,
+    dynamic_fallback: &dyn Fn() -> Result<BackendSelection, String>,
+    paths: &NativeBuildPaths,
+    rustc: &mut dyn FnMut(&Path, &Path, &Path, RustcOutputMode) -> RustcOutcome,
+) -> Result<SelectedBackend, CompileFailure> {
+    let incremental_dir = paths.build_dir.join("incremental");
+    if let Err(e) = fs::create_dir_all(&incremental_dir) {
+        println!("Error creating incremental cache directory: {:?}", e);
+        return Err(CompileFailure::Io);
+    }
+    let staged_binary_file = paths.build_dir.join(format!("output_{}.bin", paths.tag));
+    let source_file = paths.build_dir.join(format!("output_{}.rs", paths.tag));
+    let fallback_on_rustc_error =
+        mode == BackendMode::Auto && selection.selected_backend == SelectedBackend::Typed;
+    let mut selected_backend = selection.selected_backend;
 
-    match status {
-        Ok(s) => {
-            if s.success() {
-                if let Err(e) =
-                    move_compiled_binary(&staged_binary_file, &PathBuf::from(&binary_file))
-                {
-                    println!(
-                        "Compilation succeeded, but failed to place binary '{}': {}",
-                        binary_file, e
-                    );
-                    return;
+    write_backend_sources(&selection, &source_file, paths)?;
+    println!(
+        "Compiling {} to {}...",
+        source_file.display(),
+        paths.binary_file
+    );
+    let output_mode = if fallback_on_rustc_error {
+        RustcOutputMode::Capture
+    } else {
+        RustcOutputMode::Inherit
+    };
+    let mut outcome = rustc(
+        &source_file,
+        &staged_binary_file,
+        &incremental_dir,
+        output_mode,
+    );
+
+    if fallback_on_rustc_error {
+        if let RustcOutcome::Failed { stdout, stderr } = &outcome {
+            let mut captured = stdout.clone();
+            captured.push_str(stderr);
+            println!(
+                "Warning: rustc rejected typed backend output ({}); generated Rust kept at {}; falling back to dynamic.",
+                summarize_rustc_errors(&captured),
+                source_file.display()
+            );
+            let fallback = match dynamic_fallback() {
+                Ok(fallback) => fallback,
+                Err(message) => {
+                    println!("Error: {}", message);
+                    return Err(CompileFailure::Backend);
                 }
-                println!("Compilation successful. Binary '{}' created.", binary_file);
-            } else {
-                println!("Compilation failed.");
+            };
+            if let Some(warning) = fallback.warning.as_deref() {
+                println!("{}", warning);
             }
+            let dynamic_source = paths
+                .build_dir
+                .join(format!("output_{}_dynamic.rs", paths.tag));
+            write_backend_sources(&fallback, &dynamic_source, paths)?;
+            println!(
+                "Compiling {} to {}...",
+                dynamic_source.display(),
+                paths.binary_file
+            );
+            selected_backend = fallback.selected_backend;
+            outcome = rustc(
+                &dynamic_source,
+                &staged_binary_file,
+                &incremental_dir,
+                RustcOutputMode::Inherit,
+            );
         }
-        Err(e) => println!("Error running rustc: {:?}", e),
+    }
+
+    match outcome {
+        RustcOutcome::Succeeded { stdout, stderr } => {
+            // Re-emit captured rustc output (warnings) of a successful typed attempt.
+            print!("{}", stdout);
+            eprint!("{}", stderr);
+            if let Err(e) =
+                move_compiled_binary(&staged_binary_file, &PathBuf::from(&paths.binary_file))
+            {
+                println!(
+                    "Compilation succeeded, but failed to place binary '{}': {}",
+                    paths.binary_file, e
+                );
+                return Err(CompileFailure::Io);
+            }
+            println!(
+                "Compilation successful. Binary '{}' created.",
+                paths.binary_file
+            );
+            Ok(selected_backend)
+        }
+        RustcOutcome::Failed { stdout, stderr } => {
+            print!("{}", stdout);
+            eprint!("{}", stderr);
+            println!("Compilation failed.");
+            Err(CompileFailure::Rustc)
+        }
+        RustcOutcome::SpawnFailed(e) => {
+            println!("Error running rustc: {:?}", e);
+            Err(CompileFailure::Rustc)
+        }
     }
 }
 

@@ -2,7 +2,13 @@
 
 ## Overview
 
-LeanRustLisp (LRL) provides a hygienic, procedural macro system based on syntax objects. The goal is to allow users to extend the language syntax without accidentally capturing variables (hygiene) and without compromising the trusted kernel.
+LeanRustLisp (LRL) provides a template-based macro system on syntax objects: a macro
+`(defmacro name (p1 ... pn) template)` is instantiated by substituting its arguments for its
+parameters in the template (no code runs at macro time; macros are not procedural). Expansion is
+hygienic for local binders. The goal is to allow users to extend the language syntax without
+accidentally capturing variables and without compromising the trusted kernel: macro output is
+ordinary surface syntax that goes through the whole pipeline (desugaring, elaboration, kernel,
+MIR).
 
 ## Decision Note (2026-02-02)
 
@@ -50,14 +56,23 @@ LRL uses a **Scope Sets** model (simplified for this stage).
 
 ### Example
 ```lisp
-(defmacro m () x) ;; x here has scopes {Module}
+(defmacro m () x)   ;; the template's x carries no scope until an expansion adds one
 
-(let x 1 (m))
+(let x Nat 1 (m))
 ```
-*   The `let` binder `x` has scopes `{Module}`.
-*   The `(m)` expands to `x` with scopes `{Module, MacroScope}`.
-*   Macro-introduced references do *not* accidentally bind to unrelated unscoped/local binders; the extra macro scope prevents fallback to unscoped names.
+*   The `let` binder `x`, written by the user, has no scopes.
+*   `(m)` expands to `x` with scopes `{MacroScope}` (the fresh scope of this call).
+*   Macro-introduced references do *not* bind to unrelated unscoped/local binders; the macro scope prevents fallback to unscoped names, so `x` refers to a global `x` (or is unbound).
 *   *Note*: Hygiene resolution is subset-based with deterministic tie-breaking, not strict equality. Nested macro invocations do not implicitly capture binders from outer macro expansions unless scope propagation makes that binder visible.
+
+### Limits of hygiene
+
+Hygiene covers local binders only (see `docs/spec/macros/hygiene.md`):
+*   Macro names are resolved by bare name in the module where the call is expanded, so a local
+    binder named like a macro is taken over by the macro in head position, and a template that calls
+    another macro uses the call site's macro of that name.
+*   Global names in a template (definitions, constructors, inductives) are resolved at the call
+    site by the elaborator, like any free identifier.
 
 ### Nested Macro Example (Current Behavior)
 ```lisp
@@ -82,21 +97,24 @@ Attributes (e.g. `opaque`, `transparent`) are part of surface syntax and must be
 
 Macro names that collide with core surface forms are reserved and cannot be defined or shadowed by macros. This preserves explicitness at safety and classical boundaries.
 
-Reserved core forms (non-exhaustive but enforced):
-*   `def`, `partial`, `unsafe`
+Reserved core forms (`RESERVED_MACRO_NAMES` in `frontend/src/macro_expander.rs`):
+*   `def`, `partial`, `unsafe`, `noncomputable`
 *   `axiom`
 *   `instance`
 *   `inductive`, `structure`
 *   `opaque`, `transparent`
-*   `import`, `import-macros`
+*   `import`, `import-macros`, `module`, `open`
 *   `eval`
 *   `defmacro`
 
 ## Staging
 
-Macros are expanded at **compile time** (or pre-evaluation time in the REPL).
-*   Expansion happens top-down, processing macros until a fixed point (or fully expanded).
-*   Macros cannot execute runtime effects (IO) but can perform logic to rearrange syntax.
+Macros are expanded at **compile time** (or pre-evaluation time in the REPL), before desugaring.
+*   Expansion is one recursive pass in normal order: a macro call is replaced by its instantiated
+    template, which is expanded again; other lists are expanded element by element.
+*   Macros cannot execute runtime effects (IO) and cannot compute: there are no conditionals, no
+    pattern matching on arguments and no syntax primitives. The only operation is substitution of
+    the arguments into the template (plus `quasiquote`/`unquote`, which build syntax).
 
 ## Macro Environment and Imports
 
@@ -117,13 +135,13 @@ Macro expansion is **compile-time only** and operates purely on syntax objects. 
 
 *   Any dynamic evaluation must appear as an explicit form (e.g. `(eval <dyn-code> <EvalCap>)`) in the expanded syntax.
 *   The expander does not insert `eval` forms or capabilities implicitly.
-*   Compile-time macros cannot perform runtime I/O or depend on runtime values; they may only compute and transform syntax.
+*   Compile-time macros cannot perform runtime I/O or depend on runtime values; they only substitute syntax into templates.
 
 ## Expansion Order and Trace Semantics
 
-*   **Order**: Expansion is deterministic, top-down, and left-to-right within a form. Expansion repeats until a fixed point (no remaining macro calls) or a configured expansion limit.
+*   **Order**: Expansion is deterministic, top-down, and left-to-right within a form. The result of each macro call is expanded again until no macro call remains, subject to limits: at most 10,000 macro invocations per top-level form (`F0106`), a nesting depth of at most 128 (`F0106`), and a repeated identical call (same macro, same arguments with scopes) inside its own expansion is reported as a cycle (`F0107`).
 *   **Scope generation**: Each macro invocation introduces a fresh scope deterministically.
-*   **Error/trace**: Errors report the span of the macro call site. Diagnostics include a macro-expansion stack (macro name + call-site span) when available, not only on fatal errors.
+*   **Error/trace**: Errors report the span of the macro call site. Diagnostics raised during expansion (boundary violations, limits, cycles) carry the macro-expansion stack (macro name + call-site span) as labels. Diagnostics raised later (elaboration, kernel, MIR) are related to the macro calls of the same file afterwards (`attach_macro_call_sites` in `cli/src/driver.rs`): a diagnostic whose span lies inside a macro call site gets the label "in code produced by macro 'm'" (template code carries the call site's span), and a macro call inside the reported span gets "macro 'm' expanded here" (e.g. a kernel ownership error, which is reported on the whole definition body). A MIR borrow error located at a compiler-inserted statement without source position is reported at the span of the offending loan.
 
 ## Quasiquoting
 
@@ -132,6 +150,14 @@ To facilitate macro writing, LRL supports:
 *   `(quasiquote x)` or `` `x ``: Template construction **at macro time** (produces syntax objects).
 *   `(unquote x)` or `,x`: Insert the **syntax object** produced by macro-time expansion of `x` into the template.
 *   `(unquote-splicing x)` or `,@x`: Splice a **list of syntax objects** produced by macro-time expansion of `x` into the template.
+
+**Parameter substitution and quasiquote.** In a template that is not quasiquoted, every occurrence of a
+parameter is replaced by the argument. Inside a quasiquote, a parameter is replaced only inside an
+`unquote`/`unquote-splicing` of the outermost quasiquote; other symbols under the quasiquote are literal
+text, even if they have the name of a parameter (`substitute_rec_with_scope` in
+`frontend/src/macro_expander.rs`). So in
+`(defmacro defchan (name ctor) `(inductive ,name (sort 1) (ctor ,ctor (pi id Nat ,name))))` the keyword `ctor`
+stays and only `,ctor` is replaced (before, every `ctor` was replaced and the expansion was malformed).
 
 ## Determinism
 
@@ -153,7 +179,7 @@ Expansion results may be cached. A cache key must include:
 Any classical-logic forms (e.g. `import classical` or explicit `axiom`/classical tags) must be present explicitly in expanded syntax.
 *   The expander does **not** silently inject classical axioms or attributes.
 *   Macros may emit classical forms, but the output must make the classical dependency explicit to downstream phases and tooling.
-*   The expander emits a warning diagnostic when a macro expansion produces `unsafe` forms or classical/unsafe axioms/imports, pointing at the macro call site.
+*   **Macro boundary.** When a macro expansion produces an `(unsafe name type value)` definition, an `eval` form, any `axiom` (tagged or not) or `(import classical)`, the expander reports `F0104` at the macro call site, with the expansion stack as labels. By default this is an **error** (for prelude and user macros alike; the prelude allowlist `PRELUDE_MACRO_BOUNDARY_ALLOWLIST` is empty); `--macro-boundary-warn` downgrades it to a warning.
 
 ## Error Handling
 

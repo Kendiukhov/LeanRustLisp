@@ -1,0 +1,8 @@
+;; Class 27 (macro twin) - `const-of` expands to `(lam n Nat k)`.
+;; Expected: elaborator F0206 (FunctionKindMismatch).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(defmacro const-of (v) `(lam n Nat ,v))
+
+(def konst (pi k Tok (pi n Nat Tok))
+  (lam k Tok (const-of k)))

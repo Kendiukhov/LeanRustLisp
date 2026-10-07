@@ -1,0 +1,10 @@
+;; Class 25 - borrowing a value that was already moved. A shared borrow is a
+;; read for the kernel, and reading a moved variable is a use after move.
+;; Expected: kernel K0021 [UseAfterMove] naming `t`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def look (pi r (Ref #[r] Shared Tok) Nat) (lam r (Ref #[r] Shared Tok) (succ zero)))
+(def eat (pi t Tok Nat) (lam t Tok (succ (succ zero))))
+
+(def bam (pi t Tok Nat)
+  (lam t Tok (let n Nat (eat t) (look (& t)))))

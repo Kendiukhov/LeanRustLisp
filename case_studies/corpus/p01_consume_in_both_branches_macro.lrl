@@ -1,0 +1,15 @@
+;; Positive control P01 (macro twin) - `either-spend` expands to the match.
+;; Expected: accepted; main = 2.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(def spend (pi t Tok (pi #[once] n Nat Nat))
+  (lam t Tok (lam #[once] n Nat (match t Nat (case (mk_tok i) (add i n))))))
+
+(defmacro either-spend (flag tok)
+  `(match ,flag Nat
+     (case (true) (spend ,tok 1))
+     (case (false) (spend ,tok 2))))
+
+(def pick (pi t Tok (pi #[once] b Bool Nat))
+  (lam t Tok (lam #[once] b Bool (either-spend b t))))
+
+(def main Nat (pick (mk_tok 0) false))

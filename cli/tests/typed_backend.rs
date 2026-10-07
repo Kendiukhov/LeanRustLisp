@@ -1041,8 +1041,8 @@ fn typed_backend_supports_parametric_adts() {
     let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
 
     assert!(
-        code.contains("enum Box<T0>"),
-        "expected generic Box enum in output, got:\n{}",
+        code.contains("enum lrl_Box<T0>"),
+        "expected generic Box enum (Rust name lrl_Box: the user type would shadow std Box) in output, got:\n{}",
         code
     );
     assert!(
@@ -1277,7 +1277,7 @@ fn typed_backend_matches_dynamic_output_for_parametric_adt_program() {
     let dynamic_code = build_dynamic_code(&env, &ids, &defs, main_name);
 
     assert!(
-        typed_code.contains("enum Box<T0>"),
+        typed_code.contains("enum lrl_Box<T0>"),
         "expected generic Box enum in typed output"
     );
     assert!(
@@ -1368,7 +1368,7 @@ fn typed_backend_codegen_is_deterministic_with_generics_and_refs() {
 
     assert_eq!(code1, code2, "typed backend output is nondeterministic");
     assert!(
-        code1.contains("enum Box<T0>"),
+        code1.contains("enum lrl_Box<T0>"),
         "expected generic Box enum in typed output"
     );
     assert!(
@@ -1628,6 +1628,63 @@ fn typed_backend_executes_deep_recursive_tree_payload_program() {
     assert!(
         output.contains("Result: 4"),
         "expected output to contain Result: 4, got {}",
+        output
+    );
+}
+
+/// Recursive constructor fields are shared (`Rc`, not `Box`), so cloning a value copies one
+/// node, and the emitted recursor moves the recursive field out of the (owned) major premise
+/// instead of deep-cloning it (it used to deep-clone it twice per step, which made structural
+/// recursion quadratic).
+#[test]
+fn typed_backend_shares_recursive_fields_and_moves_them_in_recursors() {
+    let source = r#"
+        (inductive copy Nat (sort 1)
+          (ctor zero Nat)
+          (ctor succ (pi n Nat Nat)))
+
+        (inductive copy NatList (sort 1)
+          (ctor lnil NatList)
+          (ctor lcons (pi h Nat (pi t NatList NatList))))
+
+        (def build (pi n Nat NatList)
+          (lam n Nat
+            (match n NatList
+              (case (zero) lnil)
+              (case (succ k ih) (lcons k ih)))))
+
+        (def len (pi l NatList Nat)
+          (lam l NatList
+            (match l Nat
+              (case (lnil) zero)
+              (case (lcons h t ih) (succ ih)))))
+
+        (def entry Nat (len (build (succ (succ (succ zero))))))
+    "#;
+
+    let (env, ids, defs, main_name) = lower_program(source, false, false);
+    let program = build_typed_program(&defs, main_name);
+    let code = codegen_program(&env, &ids, &program).expect("typed codegen failed");
+    assert!(
+        code.contains("lcons(u64, Rc<NatList>)"),
+        "expected the recursive field to be shared (Rc), got:\n{}",
+        code
+    );
+    assert!(
+        !code.contains("Box<NatList>"),
+        "recursive fields must not be boxed (deep clones), got:\n{}",
+        code
+    );
+    assert!(
+        code.contains("let field_1 = lrl_unshare(field_1);")
+            && !code.contains("let field_1 = (*field_1).clone();"),
+        "expected the recursor to move the recursive field out of the major premise, got:\n{}",
+        code
+    );
+    let output = compile_and_run(&code);
+    assert!(
+        output.contains("Result: 3"),
+        "expected output to contain Result: 3, got {}",
         output
     );
 }

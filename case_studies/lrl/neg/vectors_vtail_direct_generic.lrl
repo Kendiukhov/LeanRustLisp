@@ -1,0 +1,19 @@
+;; Negative variant of case study A (../vectors.lrl). The declarations up to the marked line
+;; are copied from vectors.lrl (comments and unused definitions omitted); only the code after
+;; it is new.
+;; Expected: rejected by the kernel ownership check (K0021 RecursiveFieldConsumedByIh). This is the
+;; definition of vtail that vectors.lrl cannot use (README section A explains why vtail goes
+;; through a split): the recursor computes the induction hypothesis of the tail t eagerly, which
+;; consumes t, so a case may not also return t when the element type A is not Copy.
+
+(inductive Vec (pi A (sort 1) (pi n Nat (sort 1)))
+  (ctor vnil (pi {A (sort 1)} (Vec A zero)))
+  (ctor vcons (pi {A (sort 1)} (pi {n Nat} (pi h A (pi t (Vec A n) (Vec A (succ n))))))))
+
+;; ---- new code ----
+
+(def vtail_direct (pi {A (sort 1)} (pi {n Nat} (pi v (Vec A (succ n)) (Vec A n))))
+  (lam {A} (sort 1) (lam {n} Nat (lam v (Vec A (succ n))
+    (match v (motive (lam k Nat (lam w (Vec A k) (Vec A (nat_pred k)))))
+      (case (vnil) vnil)
+      (case (vcons h t ih) t))))))

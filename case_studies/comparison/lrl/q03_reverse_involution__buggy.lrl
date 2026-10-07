@@ -1,0 +1,62 @@
+;; Q3 (negative): the same proofs for a WRONG reverse that drops elements. Identical to
+;; q03_reverse_involution.lrl except for the cons case of `rev` (marked CHANGED).
+;; Expected: the proofs are rejected before running.
+
+;; --- equality lemmas (Eq and refl are in the prelude) ---
+;; `cong` accepts any function, including a once-only (#[once]) closure such as
+;; (lam y (List A) (snoc y h)), which owns the captured element h. Inside the proof, f is only
+;; applied in erased positions (types and proof terms), so this costs nothing.
+(def cong (pi {A (sort 1)} (pi {B (sort 1)} (pi f (pi #[once] x A B)
+            (pi {x A} (pi {y A} (pi e (Eq A x y) (Eq B (f x) (f y))))))))
+  (lam {A} (sort 1) (lam {B} (sort 1) (lam f (pi #[once] x A B) (lam {x} A (lam {y} A (lam e (Eq A x y)
+    (match e (motive (lam b A (lam w (Eq A x b) (Eq B (f x) (f b)))))
+      (case (refl) (refl B (f x)))))))))))
+
+(def trans (pi {A (sort 1)} (pi {x A} (pi {y A} (pi {z A}
+             (pi p (Eq A x y) (pi q (Eq A y z) (Eq A x z)))))))
+  (lam {A} (sort 1) (lam {x} A (lam {y} A (lam {z} A (lam p (Eq A x y) (lam q (Eq A y z)
+    (match q (motive (lam b A (lam w (Eq A y b) (Eq A x b))))
+      (case (refl) p)))))))))
+
+;; --- list reverse ---
+;; (`snoc l` is a closure that owns `l`, so its type is a once-only (#[once]) function type)
+(def snoc (pi {A (sort 1)} (pi l (List A) (pi #[once] x A (List A))))
+  (lam {A} (sort 1) (lam l (List A) (lam #[once] x A
+    (match l (List A)
+      (case (nil) (cons x nil))
+      (case (cons h t ih) (cons h ih)))))))
+
+(def rev (pi {A (sort 1)} (pi l (List A) (List A)))
+  (lam {A} (sort 1) (lam l (List A)
+    (match l (List A)
+      (case (nil) nil)
+      (case (cons h t ih) ih)))))   ;; CHANGED: was (snoc ih h); this rev drops every element
+
+;; --- proofs ---
+;; rev (snoc l x) = cons x (rev l)
+(def rev_snoc (pi {A (sort 1)} (pi l (List A) (pi x A
+                (Eq (List A) (rev (snoc l x)) (cons x (rev l))))))
+  (lam {A} (sort 1) (lam l (List A) (lam x A
+    (match l (motive (lam w (List A) (Eq (List A) (rev (snoc w x)) (cons x (rev w)))))
+      (case (nil) (refl (List A) (cons x nil)))
+      (case (cons h t ih) (cong (lam y (List A) (snoc y h)) ih)))))))
+
+;; rev (rev l) = l
+(def rev_rev (pi {A (sort 1)} (pi l (List A) (Eq (List A) (rev (rev l)) l)))
+  (lam {A} (sort 1) (lam l (List A)
+    (match l (motive (lam w (List A) (Eq (List A) (rev (rev w)) w)))
+      (case (nil) (refl (List A) nil))
+      (case (cons h t ih) (trans (rev_snoc (rev t) h) (cong (cons h) ih)))))))
+
+;; --- run ---
+;; prints the elements in order and returns their number
+(def lprint (pi l (List Nat) Nat)
+  (lam l (List Nat)
+    ((match l (pi c Nat Nat)
+       (case (nil) (lam c Nat c))
+       (case (cons h t ih) (lam c Nat (let p Nat (print_nat h) (ih (succ c))))))
+     zero)))
+
+(def sample (List Nat) (cons 1 (cons 2 (cons 3 nil))))
+
+(def main Nat (add (lprint (rev (rev sample))) (lprint (rev sample))))

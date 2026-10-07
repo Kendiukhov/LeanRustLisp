@@ -1,0 +1,11 @@
+;; Class 26 - a value consumed in one branch of a match is used after the
+;; match. The branches of a match on Bool are alternatives (each may consume
+;; `k`), but afterwards `k` counts as moved if any branch moved it.
+;; Expected: kernel K0021 [UseAfterMove] naming `k`.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive TL (sort 1) (ctor tnil TL) (ctor tcons (pi h Tok (pi t TL TL))))
+
+(def route (pi k Tok (pi #[once] b Bool TL))
+  (lam k Tok (lam #[once] b Bool
+    (let r TL (match b TL (case (true) (tcons k tnil)) (case (false) tnil))
+      (tcons k r)))))

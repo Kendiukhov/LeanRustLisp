@@ -1,0 +1,15 @@
+;; Class 08 (macro twin) - `nat-fold-later` expands to the partially applied
+;; recursor `((rec Nat) (lam z Nat Nat) zero)`.
+;; Expected: kernel K0021 [RecursorWithoutMinorPremises].
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+
+(def eat (pi t Tok (pi #[once] n Nat Nat))
+  (lam t Tok (lam #[once] n Nat (succ n))))
+
+(defmacro nat-fold-later (base) `((rec Nat) (lam z Nat Nat) ,base))
+
+(def bad (pi k Tok (pi #[once] n Nat Nat))
+  (lam k Tok (lam #[once] n Nat
+    (let r (pi s (pi #[once] m Nat (pi #[once] ih Nat Nat)) (pi n Nat Nat))
+           (nat-fold-later zero)
+      (r (lam #[once] m Nat (lam #[once] ih Nat (eat k ih))) n)))))

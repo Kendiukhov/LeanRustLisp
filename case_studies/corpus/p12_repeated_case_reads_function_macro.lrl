@@ -1,0 +1,11 @@
+;; Positive control P12 (macro twin) - `iterate-with` expands to the match.
+;; Expected: accepted; main = 3.
+(defmacro iterate-with (g count)
+  `(match ,count Nat
+     (case (zero) zero)
+     (case (succ m ih) (,g ih))))
+
+(def iter (pi f (pi x Nat Nat) (pi #[once] n Nat Nat))
+  (lam f (pi x Nat Nat) (lam #[once] n Nat (iterate-with f n))))
+
+(def main Nat (iter succ 3))

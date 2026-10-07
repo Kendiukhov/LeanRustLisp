@@ -1,0 +1,16 @@
+;; MIR-independence probe for the stage matrix (case_studies/tools/run_stage_matrix.sh, set `mir_gaps`).
+;; Regression probe (kernel rejects; MIR must reject too): a recursive-case minor premise consumes a
+;; captured owned value, on a recursive type with a NON-Copy recursive field that the case does not use
+;; at run time. Such an arm used to dispatch the whole major premise and the (FnOnce) minor-premise
+;; closure to the recursor entry function, which calls the closure once per cons cell out of MIR's
+;; sight, so MIR saw a single move and accepted. Entry dispatch now requires the minor-premise local to
+;; be Copy (mir/src/lower.rs, `local_is_copy` before `rec_arm_dispatches_to_entry`), and MIR reports M100.
+;; Same program on Nat (Copy recursive field) = case_studies/corpus/06.
+;; The kernel rejects `spread` (K0021 ConsumedInRepeatedScope 'k').
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive TL (sort 1) (ctor tnil TL) (ctor tcons (pi h Tok (pi t TL TL))))
+(def spread (pi k Tok (pi #[once] l TL TL))
+  (lam k Tok (lam #[once] l TL
+    (match l TL
+      (case (tnil) tnil)
+      (case (tcons h t ih) (tcons k ih))))))

@@ -1,0 +1,10 @@
+;; Class 19 (macro twin) - `boxed-borrow` expands to `(rb (& t))`.
+;; Expected: MIR M203 (DanglingReference).
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi n Nat Tok)))
+
+(inductive RB (sort 1) (ctor rb (pi r (Ref #[r] Shared Tok) RB)))
+
+(defmacro boxed-borrow (v) `(rb (& ,v)))
+
+(def leak (pi t Tok RB)
+  (lam t Tok (boxed-borrow t)))

@@ -1,0 +1,26 @@
+;; Q10 (positive): the token is consumed in one branch only; on the other path it is dropped.
+;; Identical to q10_consume_both_branches.lrl except for the line marked CHANGED. LRL's
+;; discipline is affine (like Rust's), so we expect this to be accepted; a linear discipline
+;; (Idris 2 quantity 1, Turnstile lin) rejects it.
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive Color (sort 1) (ctor red Color) (ctor green Color) (ctor blue Color))
+
+(def burn (pi code Nat (pi t Tok Nat))
+  (lam code Nat (lam t Tok (match t Nat (case (mk_tok id) (print_nat (add code id)))))))
+
+(def route_if (pi b Bool (pi t Tok Nat))
+  (lam b Bool (lam t Tok
+    (match b Nat
+      (case (true) (burn 5 t))
+      (case (false) 0)))))   ;; CHANGED: was (burn 50 t); t is not consumed on this path
+
+(def route_match (pi c Color (pi t Tok Nat))
+  (lam c Color (lam t Tok
+    (match c Nat
+      (case (red) (burn 10 t))
+      (case (green) (burn 7 t))
+      (case (blue) (burn 70 t))))))
+
+(def main Nat
+  (add (route_if true (mk_tok 1))           ;; prints 6
+       (route_match green (mk_tok 1))))     ;; prints 8

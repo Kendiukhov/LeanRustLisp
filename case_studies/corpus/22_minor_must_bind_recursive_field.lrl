@@ -1,0 +1,13 @@
+;; Class 22 - a minor premise of a recursive type that does not bind the
+;; non-Copy recursive field as a lambda parameter. The step case of the raw
+;; `TL` recursor binds only the head and returns the function value `f`, which
+;; would receive the tail `t` (already consumed to compute the induction
+;; hypothesis) out of sight of the recursor rule.
+;; Expected: kernel K0021 [MinorMustBindRecursiveField].
+(inductive (affine) Tok (sort 1) (ctor mk_tok (pi id Nat Tok)))
+(inductive TL (sort 1) (ctor tnil TL) (ctor tcons (pi h Tok (pi t TL TL))))
+
+(def cnt (pi f (pi #[once] t TL (pi #[once] ih Nat Nat)) (pi #[once] l TL Nat))
+  (lam f (pi #[once] t TL (pi #[once] ih Nat Nat))
+    (lam #[once] l TL
+      ((rec TL) (lam z TL Nat) zero (lam #[once] h Tok f) l))))

@@ -1,23 +1,31 @@
+/-!
+# LRL syntax — simply-typed fragment
+
+This file defines a small simply-typed lambda calculus in de Bruijn form.
+It is the scaffold the `Mechanized.lean` aggregator builds on.
+The dependent-type fragment of the paper lives in `Dependent.lean` and is
+a stretch goal; this file stays simple so the proofs in `Typing.lean`
+remain tractable.
+
+Decisions:
+* de Bruijn indices, no named variables
+* one base type and function types
+* no letE, no fixpoints, no inductives — just the STLC core
+-/
+
 namespace LRL
 
-/-- Universe levels -/
-inductive Level where
-  | zero : Level
-  | succ : Level -> Level
-  | max  : Level -> Level -> Level
-  | imax : Level -> Level -> Level
-  | param : String -> Level
-  deriving Repr, DecidableEq
+/-- Types of the simply-typed fragment. -/
+inductive Ty : Type where
+  | base : Ty
+  | arrow : Ty → Ty → Ty
+  deriving DecidableEq, Repr
 
-/-- The core terms of the calculus, using de Bruijn indices. -/
-inductive Term where
-  | var  : Nat -> Term                  -- Bound variable (de Bruijn index)
-  | sort : Level -> Term                -- Universe
-  | const : String -> List Level -> Term -- Constant (global definition)
-  | app  : Term -> Term -> Term         -- Application
-  | lam  : Term -> Term -> Term         -- Lambda abstraction (type, body)
-  | pi   : Term -> Term -> Term         -- Pi type (binder type, body)
-  | letE : Term -> Term -> Term -> Term -- Let binding (type, value, body)
-  deriving Repr, DecidableEq
+/-- Terms of the simply-typed fragment, in de Bruijn form. -/
+inductive Term : Type where
+  | var : Nat → Term
+  | lam : Ty → Term → Term
+  | app : Term → Term → Term
+  deriving DecidableEq, Repr
 
 end LRL
