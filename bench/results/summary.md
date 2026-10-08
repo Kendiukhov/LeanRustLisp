@@ -5,7 +5,7 @@ Wall-clock seconds measured with `time.perf_counter` around `subprocess.run` (ou
 ## Machine
 
 ```
-date: 2026-10-05T18:08:42
+date: 2026-10-08T00:54:19
 machdep.cpu.brand_string: Apple M2 Pro
 hw.ncpu: 10
 hw.perflevel0.physicalcpu (performance cores): 6
@@ -25,13 +25,13 @@ release: 1.78.0
 LLVM version: 18.1.2
 cargo -V: cargo 1.78.0 (54d8815d0 2024-03-26)
 python: 3.11.9 (/Users/ihorkendiukhov/anaconda3/bin/python3)
-uptime: 18:08  up 21:02, 1 user, load averages: 2.78 3.69 3.74
+uptime: 0:54  up 3 days,  3:47, 1 user, load averages: 8.19 13.93 19.38
 stack soft limit for measured processes (ulimit -s, KiB): 65520
-lrl binary: /private/tmp/claude-501/-Volumes-Crucial-X6-MacBook-Code-leanrustlisp/4c0357f0-9be9-469e-bba8-627fe4a2405e/scratchpad/target_release/release/cli (5475088 bytes)
-lrl sha256: 43640e57f8be283a369d266b2c2d2f0d325be3f69d53911d4de39c1a51f1da13
-git HEAD: efe7bc09763b4755267f14a45556fa5b6dcb7a2f
-git status --short: 105 entries (84 modified, 19 untracked, 2 deleted)
-git diff --shortstat (tracked files vs HEAD):  86 files changed, 7946 insertions(+), 2104 deletions(-)
+lrl binary: /private/tmp/claude-501/-Volumes-Crucial-X6-MacBook-Code-leanrustlisp/4c0357f0-9be9-469e-bba8-627fe4a2405e/scratchpad/target_release_final/release/cli (5494336 bytes)
+lrl sha256: e50af7a629ec5801f3d0ffb4fa18b589476f6ccfcecd226861119e2fad349820
+git HEAD: 4eb6b1d3025b60f3f0b60c5479490cac068da99c
+git status --short (outside results files and paper/): 2 entries (0 modified, 2 untracked, 0 deleted)
+git diff --shortstat (tracked files vs HEAD):  19 files changed, 19 insertions(+), 3624 deletions(-)
 ```
 
 ## 1. Compile time of the case studies
@@ -40,33 +40,33 @@ git diff --shortstat (tracked files vs HEAD):  86 files changed, 7946 insertions
 
 | program | backend | phase | median s | min s | max s | runs |
 |---|---|---|---:|---:|---:|---:|
-| case_studies/lrl/protocol.lrl | dynamic | cli_front_noop_rustc | 0.5891 | 0.5706 | 0.5998 | 10 |
-| case_studies/lrl/protocol.lrl | dynamic | cli_total | 1.861 | 1.827 | 2.188 | 10 |
-| case_studies/lrl/protocol.lrl | dynamic | rustc_O | 1.584 | 1.505 | 1.616 | 10 |
-| case_studies/lrl/protocol.lrl | dynamic | rustc_cli_flags | 1.124 | 0.9548 | 1.223 | 10 |
-| case_studies/lrl/protocol.lrl | typed | cli_front_noop_rustc | 0.6003 | 0.5862 | 0.6169 | 10 |
-| case_studies/lrl/protocol.lrl | typed | cli_total | 1.910 | 1.856 | 1.981 | 10 |
-| case_studies/lrl/protocol.lrl | typed | rustc_O | 1.866 | 1.798 | 2.002 | 10 |
-| case_studies/lrl/protocol.lrl | typed | rustc_cli_flags | 1.270 | 1.230 | 1.424 | 10 |
-| case_studies/lrl/vectors.lrl | dynamic | cli_front_noop_rustc | 7.941 | 7.730 | 8.050 | 10 |
-| case_studies/lrl/vectors.lrl | dynamic | cli_total | 9.494 | 9.418 | 9.649 | 10 |
-| case_studies/lrl/vectors.lrl | dynamic | rustc_O | 3.592 | 3.457 | 3.683 | 10 |
-| case_studies/lrl/vectors.lrl | dynamic | rustc_cli_flags | 1.382 | 1.363 | 1.440 | 10 |
-| case_studies/lrl/vectors.lrl | typed | cli_front_noop_rustc | 7.923 | 7.767 | 7.987 | 10 |
-| case_studies/lrl/vectors.lrl | typed | cli_total | 9.450 | 9.440 | 9.815 | 5 |
-| case_studies/lrl/vectors.lrl | typed | rustc_O | 3.764 | 3.702 | 4.147 | 10 |
-| case_studies/lrl/vectors.lrl | typed | rustc_cli_flags | 1.910 | 1.875 | 1.965 | 10 |
+| case_studies/lrl/protocol.lrl | dynamic | cli_front_noop_rustc | 0.8134 | 0.7851 | 0.8532 | 10 |
+| case_studies/lrl/protocol.lrl | dynamic | cli_total | 3.669 | 3.526 | 3.776 | 10 |
+| case_studies/lrl/protocol.lrl | dynamic | rustc_O | 1.535 | 1.403 | 1.773 | 10 |
+| case_studies/lrl/protocol.lrl | dynamic | rustc_cli_flags | 1.033 | 0.9277 | 1.090 | 10 |
+| case_studies/lrl/protocol.lrl | typed | cli_front_noop_rustc | 0.8155 | 0.7963 | 0.8528 | 10 |
+| case_studies/lrl/protocol.lrl | typed | cli_total | 2.845 | 2.781 | 2.883 | 10 |
+| case_studies/lrl/protocol.lrl | typed | rustc_O | 1.748 | 1.739 | 1.778 | 10 |
+| case_studies/lrl/protocol.lrl | typed | rustc_cli_flags | 1.164 | 1.132 | 1.222 | 10 |
+| case_studies/lrl/vectors.lrl | dynamic | cli_front_noop_rustc | 9.995 | 9.970 | 10.086 | 10 |
+| case_studies/lrl/vectors.lrl | dynamic | cli_total | 12.814 | 12.689 | 12.829 | 5 |
+| case_studies/lrl/vectors.lrl | dynamic | rustc_O | 3.304 | 3.280 | 3.320 | 10 |
+| case_studies/lrl/vectors.lrl | dynamic | rustc_cli_flags | 1.392 | 1.363 | 1.419 | 10 |
+| case_studies/lrl/vectors.lrl | typed | cli_front_noop_rustc | 9.988 | 9.953 | 10.105 | 5 |
+| case_studies/lrl/vectors.lrl | typed | cli_total | 12.472 | 12.411 | 12.607 | 5 |
+| case_studies/lrl/vectors.lrl | typed | rustc_O | 3.725 | 3.712 | 3.749 | 10 |
+| case_studies/lrl/vectors.lrl | typed | rustc_cli_flags | 1.658 | 1.628 | 1.730 | 10 |
 
 Split (medians): front half vs rustc with the CLI's flags; `front + rustc` is compared with the measured total.
 
 | program | backend | front s | rustc (CLI flags) s | front + rustc s | total s | front share of total | rustc -O s |
 |---|---|---:|---:|---:|---:|---:|---:|
-| case_studies/lrl/protocol.lrl | typed | 0.6003 | 1.270 | 1.871 | 1.910 | 31% | 1.866 |
-| case_studies/lrl/protocol.lrl | dynamic | 0.5891 | 1.124 | 1.713 | 1.861 | 32% | 1.584 |
-| case_studies/lrl/vectors.lrl | typed | 7.923 | 1.910 | 9.833 | 9.450 | 84% | 3.764 |
-| case_studies/lrl/vectors.lrl | dynamic | 7.941 | 1.382 | 9.323 | 9.494 | 84% | 3.592 |
+| case_studies/lrl/protocol.lrl | typed | 0.8155 | 1.164 | 1.980 | 2.845 | 29% | 1.748 |
+| case_studies/lrl/protocol.lrl | dynamic | 0.8134 | 1.033 | 1.846 | 3.669 | 22% | 1.535 |
+| case_studies/lrl/vectors.lrl | typed | 9.988 | 1.658 | 11.646 | 12.472 | 80% | 3.725 |
+| case_studies/lrl/vectors.lrl | dynamic | 9.995 | 1.392 | 11.387 | 12.814 | 78% | 3.304 |
 
-Generated Rust (last recorded copy): case_studies/lrl/vectors.lrl typed: 9536 lines, 827077 bytes; case_studies/lrl/vectors.lrl dynamic: 25563 lines, 771959 bytes; case_studies/lrl/protocol.lrl typed: 7298 lines, 604279 bytes; case_studies/lrl/protocol.lrl dynamic: 20135 lines, 594037 bytes
+Generated Rust (last recorded copy): case_studies/lrl/vectors.lrl typed: 9536 lines, 819997 bytes; case_studies/lrl/vectors.lrl dynamic: 25475 lines, 765282 bytes; case_studies/lrl/protocol.lrl typed: 7298 lines, 604279 bytes; case_studies/lrl/protocol.lrl dynamic: 20135 lines, 594037 bytes
 
 ## 2. Run time of workloads derived from the case studies
 
@@ -76,59 +76,59 @@ Generated Rust (last recorded copy): case_studies/lrl/vectors.lrl typed: 9536 li
 
 | n | backend | flags | median s | min s | max s | runs | ratio to previous n | exponent |
 |---:|---|---|---:|---:|---:|---:|---:|---:|
-| 100 | typed | cli | 0.0029 | 0.0026 | 0.0039 | 20 | - | - |
-| 1000 | typed | cli | 0.0038 | 0.0031 | 0.0065 | 20 | 1.32 | 0.12 (n x10) |
-| 1600 | typed | cli | 0.0036 | 0.0033 | 0.0061 | 20 | 0.96 | -0.08 (n x1.6) |
-| 32000 | typed | cli | 0.0105 | 0.0099 | 0.0130 | 20 | 2.89 | 0.35 (n x20) |
-| 256000 | typed | cli | 0.0497 | 0.0487 | 0.0513 | 20 | 4.74 | 0.75 (n x8) |
-| 100 | typed | O | 0.0032 | 0.0026 | 0.0046 | 20 | - | - |
-| 1000 | typed | O | 0.0032 | 0.0024 | 0.0049 | 20 | 1.02 | 0.01 (n x10) |
-| 1600 | typed | O | 0.0033 | 0.0028 | 0.0043 | 20 | 1.02 | 0.05 (n x1.6) |
-| 32000 | typed | O | 0.0050 | 0.0041 | 0.0057 | 20 | 1.50 | 0.14 (n x20) |
-| 256000 | typed | O | 0.0117 | 0.0110 | 0.0147 | 20 | 2.34 | 0.41 (n x8) |
-| 100 | dynamic | cli | 0.0025 | 0.0023 | 0.0030 | 20 | - | - |
-| 1000 | dynamic | cli | 0.0032 | 0.0027 | 0.0052 | 20 | 1.28 | 0.11 (n x10) |
-| 1600 | dynamic | cli | 0.0034 | 0.0030 | 0.0058 | 20 | 1.05 | 0.11 (n x1.6) |
-| 32000 | dynamic | cli | 0.0041 | 0.0030 | 0.0054 | 20 | 1.22 | 0.07 (n x20) |
-| 256000 | dynamic | cli | 0.0040 | 0.0035 | 0.0050 | 20 | 0.97 | -0.02 (n x8) |
-| 100 | dynamic | O | 0.0032 | 0.0026 | 0.0047 | 20 | - | - |
-| 1000 | dynamic | O | 0.0028 | 0.0023 | 0.0049 | 20 | 0.88 | -0.05 (n x10) |
-| 1600 | dynamic | O | 0.0028 | 0.0025 | 0.0037 | 20 | 0.98 | -0.04 (n x1.6) |
-| 32000 | dynamic | O | 0.0040 | 0.0026 | 0.0044 | 20 | 1.44 | 0.12 (n x20) |
-| 256000 | dynamic | O | 0.0036 | 0.0032 | 0.0044 | 20 | 0.91 | -0.05 (n x8) |
+| 100 | typed | cli | 0.0033 | 0.0028 | 0.0065 | 20 | - | - |
+| 1000 | typed | cli | 0.0043 | 0.0038 | 0.0050 | 20 | 1.28 | 0.11 (n x10) |
+| 1600 | typed | cli | 0.0036 | 0.0031 | 0.0052 | 20 | 0.84 | -0.38 (n x1.6) |
+| 32000 | typed | cli | 0.0093 | 0.0090 | 0.0120 | 20 | 2.61 | 0.32 (n x20) |
+| 256000 | typed | cli | 0.0498 | 0.0488 | 0.0516 | 20 | 5.35 | 0.81 (n x8) |
+| 100 | typed | O | 0.0032 | 0.0028 | 0.0040 | 20 | - | - |
+| 1000 | typed | O | 0.0038 | 0.0032 | 0.0061 | 20 | 1.19 | 0.08 (n x10) |
+| 1600 | typed | O | 0.0032 | 0.0025 | 0.0037 | 20 | 0.84 | -0.37 (n x1.6) |
+| 32000 | typed | O | 0.0043 | 0.0038 | 0.0066 | 20 | 1.35 | 0.10 (n x20) |
+| 256000 | typed | O | 0.0114 | 0.0110 | 0.0142 | 20 | 2.67 | 0.47 (n x8) |
+| 100 | dynamic | cli | 0.0034 | 0.0031 | 0.0054 | 20 | - | - |
+| 1000 | dynamic | cli | 0.0039 | 0.0036 | 0.0058 | 20 | 1.16 | 0.06 (n x10) |
+| 1600 | dynamic | cli | 0.0029 | 0.0025 | 0.0032 | 20 | 0.74 | -0.63 (n x1.6) |
+| 32000 | dynamic | cli | 0.0039 | 0.0030 | 0.0053 | 20 | 1.32 | 0.09 (n x20) |
+| 256000 | dynamic | cli | 0.0039 | 0.0035 | 0.0047 | 20 | 1.02 | 0.01 (n x8) |
+| 100 | dynamic | O | 0.0032 | 0.0030 | 0.0065 | 20 | - | - |
+| 1000 | dynamic | O | 0.0040 | 0.0032 | 0.0108 | 20 | 1.24 | 0.09 (n x10) |
+| 1600 | dynamic | O | 0.0035 | 0.0027 | 0.0040 | 20 | 0.87 | -0.30 (n x1.6) |
+| 32000 | dynamic | O | 0.0037 | 0.0033 | 0.0043 | 20 | 1.05 | 0.02 (n x20) |
+| 256000 | dynamic | O | 0.0034 | 0.0028 | 0.0041 | 20 | 0.94 | -0.03 (n x8) |
 
 ### vec_build_sum
 
 | n | backend | flags | median s | min s | max s | runs | ratio to previous n | exponent |
 |---:|---|---|---:|---:|---:|---:|---:|---:|
-| 1000 | typed | cli | 0.0078 | 0.0069 | 0.0092 | 20 | - | - |
-| 2000 | typed | cli | 0.0098 | 0.0088 | 0.0129 | 20 | 1.25 | 0.33 |
-| 4000 | typed | cli | 0.0141 | 0.0129 | 0.0157 | 20 | 1.44 | 0.53 |
-| 8000 | typed | cli | 0.0206 | 0.0204 | 0.0218 | 20 | 1.46 | 0.55 |
-| 16000 | typed | cli | 0.0396 | 0.0388 | 0.0406 | 20 | 1.92 | 0.94 |
-| 32000 | typed | cli | 0.0732 | 0.0711 | 0.0750 | 20 | 1.85 | 0.89 |
-| 64000 | typed | cli | 0.1414 | 0.1392 | 0.1437 | 20 | 1.93 | 0.95 |
+| 1000 | typed | cli | 0.0067 | 0.0061 | 0.0083 | 20 | - | - |
+| 2000 | typed | cli | 0.0086 | 0.0082 | 0.0116 | 20 | 1.29 | 0.37 |
+| 4000 | typed | cli | 0.0127 | 0.0125 | 0.0157 | 20 | 1.48 | 0.57 |
+| 8000 | typed | cli | 0.0217 | 0.0210 | 0.0254 | 20 | 1.70 | 0.77 |
+| 16000 | typed | cli | 0.0383 | 0.0376 | 0.0406 | 20 | 1.77 | 0.82 |
+| 32000 | typed | cli | 0.0716 | 0.0707 | 0.0730 | 20 | 1.87 | 0.90 |
+| 64000 | typed | cli | 0.1377 | 0.1364 | 0.1410 | 20 | 1.92 | 0.94 |
 | 128000 | typed | cli | - | - | - | 0 | error:-6 (stack overflow) | |
-| 1000 | typed | O | 0.0047 | 0.0040 | 0.0054 | 20 | - | - |
-| 2000 | typed | O | 0.0052 | 0.0041 | 0.0078 | 20 | 1.11 | 0.15 |
-| 4000 | typed | O | 0.0068 | 0.0058 | 0.0107 | 20 | 1.30 | 0.37 |
-| 8000 | typed | O | 0.0076 | 0.0071 | 0.0080 | 20 | 1.12 | 0.16 |
-| 16000 | typed | O | 0.0138 | 0.0129 | 0.0163 | 20 | 1.82 | 0.86 |
-| 32000 | typed | O | 0.0228 | 0.0212 | 0.0248 | 20 | 1.66 | 0.73 |
-| 64000 | typed | O | 0.0417 | 0.0407 | 0.0455 | 20 | 1.83 | 0.87 |
-| 128000 | typed | O | 0.0803 | 0.0796 | 0.0847 | 20 | 1.93 | 0.95 |
-| 1000 | dynamic | cli | 0.7338 | 0.7306 | 0.7453 | 10 | - | - |
-| 2000 | dynamic | cli | 2.918 | 2.871 | 3.056 | 10 | 3.98 | 1.99 |
-| 4000 | dynamic | cli | 11.554 | 11.340 | 12.490 | 5 | 3.96 | 1.99 |
+| 1000 | typed | O | 0.0045 | 0.0039 | 0.0066 | 20 | - | - |
+| 2000 | typed | O | 0.0049 | 0.0041 | 0.0062 | 20 | 1.09 | 0.12 |
+| 4000 | typed | O | 0.0055 | 0.0052 | 0.0063 | 20 | 1.13 | 0.17 |
+| 8000 | typed | O | 0.0077 | 0.0074 | 0.0088 | 20 | 1.39 | 0.47 |
+| 16000 | typed | O | 0.0123 | 0.0120 | 0.0148 | 20 | 1.60 | 0.68 |
+| 32000 | typed | O | 0.0214 | 0.0211 | 0.0265 | 20 | 1.74 | 0.80 |
+| 64000 | typed | O | 0.0425 | 0.0416 | 0.0438 | 20 | 1.99 | 0.99 |
+| 128000 | typed | O | 0.0795 | 0.0781 | 0.0816 | 20 | 1.87 | 0.90 |
+| 1000 | dynamic | cli | 0.7113 | 0.7087 | 0.7248 | 10 | - | - |
+| 2000 | dynamic | cli | 2.839 | 2.836 | 2.876 | 10 | 3.99 | 2.00 |
+| 4000 | dynamic | cli | 11.446 | 11.322 | 11.515 | 5 | 4.03 | 2.01 |
 | 8000 | dynamic | cli | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 | 16000 | dynamic | cli | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 | 32000 | dynamic | cli | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 | 64000 | dynamic | cli | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 | 128000 | dynamic | cli | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
-| 1000 | dynamic | O | 0.2456 | 0.2424 | 0.2497 | 20 | - | - |
-| 2000 | dynamic | O | 0.9640 | 0.9474 | 1.007 | 10 | 3.93 | 1.97 |
-| 4000 | dynamic | O | 3.877 | 3.847 | 3.948 | 10 | 4.02 | 2.01 |
-| 8000 | dynamic | O | 18.751 | 18.453 | 18.953 | 5 | 4.84 | 2.27 |
+| 1000 | dynamic | O | 0.2360 | 0.2342 | 0.2380 | 10 | - | - |
+| 2000 | dynamic | O | 0.9365 | 0.9282 | 0.9579 | 10 | 3.97 | 1.99 |
+| 4000 | dynamic | O | 3.717 | 3.678 | 3.768 | 10 | 3.97 | 1.99 |
+| 8000 | dynamic | O | 17.999 | 17.768 | 18.177 | 5 | 4.84 | 2.28 |
 | 16000 | dynamic | O | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 | 32000 | dynamic | O | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 | 64000 | dynamic | O | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
@@ -138,40 +138,40 @@ Generated Rust (last recorded copy): case_studies/lrl/vectors.lrl typed: 9536 li
 
 | n | backend | flags | median s | min s | max s | runs | ratio to previous n | exponent |
 |---:|---|---|---:|---:|---:|---:|---:|---:|
-| 1000 | typed | cli | 0.0073 | 0.0066 | 0.0103 | 20 | - | - |
-| 2000 | typed | cli | 0.0095 | 0.0081 | 0.0142 | 20 | 1.30 | 0.38 |
-| 4000 | typed | cli | 0.0136 | 0.0123 | 0.0164 | 20 | 1.43 | 0.52 |
-| 8000 | typed | cli | 0.0203 | 0.0193 | 0.0232 | 20 | 1.49 | 0.57 |
-| 16000 | typed | cli | 0.0354 | 0.0338 | 0.0375 | 20 | 1.75 | 0.80 |
-| 32000 | typed | cli | 0.0648 | 0.0636 | 0.0674 | 20 | 1.83 | 0.87 |
-| 64000 | typed | cli | 0.1247 | 0.1238 | 0.1268 | 20 | 1.92 | 0.94 |
-| 128000 | typed | cli | 0.2482 | 0.2458 | 0.2588 | 10 | 1.99 | 0.99 |
+| 1000 | typed | cli | 0.0063 | 0.0057 | 0.0075 | 20 | - | - |
+| 2000 | typed | cli | 0.0080 | 0.0077 | 0.0102 | 20 | 1.28 | 0.36 |
+| 4000 | typed | cli | 0.0118 | 0.0116 | 0.0135 | 20 | 1.46 | 0.55 |
+| 8000 | typed | cli | 0.0206 | 0.0198 | 0.0240 | 20 | 1.75 | 0.81 |
+| 16000 | typed | cli | 0.0357 | 0.0352 | 0.0365 | 20 | 1.73 | 0.79 |
+| 32000 | typed | cli | 0.0654 | 0.0645 | 0.0667 | 20 | 1.83 | 0.87 |
+| 64000 | typed | cli | 0.1272 | 0.1264 | 0.1313 | 20 | 1.94 | 0.96 |
+| 128000 | typed | cli | 0.2489 | 0.2483 | 0.2502 | 10 | 1.96 | 0.97 |
 | 256000 | typed | cli | - | - | - | 0 | error:-6 (stack overflow) | |
-| 1000 | typed | O | 0.0048 | 0.0035 | 0.0072 | 20 | - | - |
-| 2000 | typed | O | 0.0054 | 0.0042 | 0.0074 | 20 | 1.12 | 0.17 |
-| 4000 | typed | O | 0.0060 | 0.0052 | 0.0071 | 20 | 1.11 | 0.15 |
-| 8000 | typed | O | 0.0081 | 0.0071 | 0.0091 | 20 | 1.35 | 0.43 |
-| 16000 | typed | O | 0.0113 | 0.0108 | 0.0147 | 20 | 1.40 | 0.48 |
-| 32000 | typed | O | 0.0192 | 0.0190 | 0.0221 | 20 | 1.70 | 0.76 |
-| 64000 | typed | O | 0.0366 | 0.0359 | 0.0383 | 20 | 1.91 | 0.93 |
-| 128000 | typed | O | 0.0725 | 0.0708 | 0.0745 | 20 | 1.98 | 0.99 |
-| 256000 | typed | O | 0.1411 | 0.1377 | 0.1442 | 20 | 1.95 | 0.96 |
-| 1000 | dynamic | cli | 0.0058 | 0.0052 | 0.0065 | 20 | - | - |
-| 2000 | dynamic | cli | 0.0076 | 0.0065 | 0.0096 | 20 | 1.30 | 0.38 |
-| 4000 | dynamic | cli | 0.0103 | 0.0087 | 0.0138 | 20 | 1.36 | 0.45 |
-| 8000 | dynamic | cli | 0.0162 | 0.0154 | 0.0180 | 20 | 1.58 | 0.66 |
-| 16000 | dynamic | cli | 0.0232 | 0.0229 | 0.0254 | 20 | 1.43 | 0.51 |
-| 32000 | dynamic | cli | 0.0450 | 0.0437 | 0.0484 | 20 | 1.94 | 0.96 |
+| 1000 | typed | O | 0.0036 | 0.0033 | 0.0042 | 20 | - | - |
+| 2000 | typed | O | 0.0046 | 0.0041 | 0.0067 | 20 | 1.27 | 0.35 |
+| 4000 | typed | O | 0.0055 | 0.0052 | 0.0065 | 20 | 1.21 | 0.28 |
+| 8000 | typed | O | 0.0073 | 0.0067 | 0.0118 | 20 | 1.33 | 0.41 |
+| 16000 | typed | O | 0.0115 | 0.0112 | 0.0148 | 20 | 1.56 | 0.64 |
+| 32000 | typed | O | 0.0200 | 0.0196 | 0.0247 | 20 | 1.74 | 0.80 |
+| 64000 | typed | O | 0.0380 | 0.0372 | 0.0389 | 20 | 1.90 | 0.93 |
+| 128000 | typed | O | 0.0729 | 0.0716 | 0.0751 | 20 | 1.92 | 0.94 |
+| 256000 | typed | O | 0.1419 | 0.1399 | 0.1466 | 20 | 1.95 | 0.96 |
+| 1000 | dynamic | cli | 0.0052 | 0.0046 | 0.0062 | 20 | - | - |
+| 2000 | dynamic | cli | 0.0064 | 0.0059 | 0.0078 | 20 | 1.23 | 0.30 |
+| 4000 | dynamic | cli | 0.0087 | 0.0083 | 0.0130 | 20 | 1.35 | 0.43 |
+| 8000 | dynamic | cli | 0.0138 | 0.0133 | 0.0175 | 20 | 1.58 | 0.66 |
+| 16000 | dynamic | cli | 0.0246 | 0.0241 | 0.0280 | 20 | 1.79 | 0.84 |
+| 32000 | dynamic | cli | 0.0465 | 0.0455 | 0.0485 | 20 | 1.89 | 0.92 |
 | 64000 | dynamic | cli | - | - | - | 0 | error:-6 (stack overflow) | |
 | 128000 | dynamic | cli | - | - | - | 0 | skipped: the run at n=64000 failed | |
 | 256000 | dynamic | cli | - | - | - | 0 | skipped: the run at n=64000 failed | |
-| 1000 | dynamic | O | 0.0047 | 0.0037 | 0.0058 | 20 | - | - |
-| 2000 | dynamic | O | 0.0056 | 0.0037 | 0.0075 | 20 | 1.20 | 0.26 |
-| 4000 | dynamic | O | 0.0062 | 0.0050 | 0.0075 | 20 | 1.11 | 0.15 |
-| 8000 | dynamic | O | 0.0080 | 0.0073 | 0.0108 | 20 | 1.29 | 0.37 |
-| 16000 | dynamic | O | 0.0103 | 0.0101 | 0.0132 | 20 | 1.28 | 0.36 |
-| 32000 | dynamic | O | 0.0190 | 0.0182 | 0.0223 | 20 | 1.85 | 0.89 |
-| 64000 | dynamic | O | 0.0350 | 0.0342 | 0.0373 | 20 | 1.84 | 0.88 |
+| 1000 | dynamic | O | 0.0039 | 0.0032 | 0.0049 | 20 | - | - |
+| 2000 | dynamic | O | 0.0045 | 0.0038 | 0.0051 | 20 | 1.16 | 0.21 |
+| 4000 | dynamic | O | 0.0052 | 0.0047 | 0.0064 | 20 | 1.14 | 0.19 |
+| 8000 | dynamic | O | 0.0071 | 0.0066 | 0.0084 | 20 | 1.38 | 0.46 |
+| 16000 | dynamic | O | 0.0108 | 0.0103 | 0.0166 | 20 | 1.51 | 0.59 |
+| 32000 | dynamic | O | 0.0192 | 0.0186 | 0.0222 | 20 | 1.78 | 0.83 |
+| 64000 | dynamic | O | 0.0354 | 0.0343 | 0.0373 | 20 | 1.84 | 0.88 |
 | 128000 | dynamic | O | - | - | - | 0 | error:-6 (stack overflow) | |
 | 256000 | dynamic | O | - | - | - | 0 | skipped: the run at n=128000 failed | |
 
@@ -179,31 +179,31 @@ Generated Rust (last recorded copy): case_studies/lrl/vectors.lrl typed: 9536 li
 
 | n | backend | flags | median s | min s | max s | runs | ratio to previous n | exponent |
 |---:|---|---|---:|---:|---:|---:|---:|---:|
-| 1000 | typed | cli | 0.0084 | 0.0075 | 0.0111 | 20 | - | - |
-| 2000 | typed | cli | 0.0114 | 0.0110 | 0.0138 | 20 | 1.36 | 0.45 |
-| 4000 | typed | cli | 0.0181 | 0.0179 | 0.0192 | 20 | 1.58 | 0.66 |
-| 8000 | typed | cli | 0.0333 | 0.0326 | 0.0356 | 20 | 1.84 | 0.88 |
-| 16000 | typed | cli | 0.0599 | 0.0593 | 0.0612 | 20 | 1.80 | 0.84 |
-| 32000 | typed | cli | 0.1202 | 0.1167 | 0.1235 | 20 | 2.01 | 1.01 |
+| 1000 | typed | cli | 0.0079 | 0.0075 | 0.0097 | 20 | - | - |
+| 2000 | typed | cli | 0.0114 | 0.0112 | 0.0158 | 20 | 1.44 | 0.52 |
+| 4000 | typed | cli | 0.0187 | 0.0182 | 0.0227 | 20 | 1.65 | 0.72 |
+| 8000 | typed | cli | 0.0343 | 0.0339 | 0.0348 | 20 | 1.83 | 0.88 |
+| 16000 | typed | cli | 0.0634 | 0.0624 | 0.0644 | 20 | 1.85 | 0.89 |
+| 32000 | typed | cli | 0.1204 | 0.1188 | 0.1225 | 20 | 1.90 | 0.93 |
 | 64000 | typed | cli | - | - | - | 0 | error:-6 (stack overflow) | |
-| 1000 | typed | O | 0.0053 | 0.0044 | 0.0068 | 20 | - | - |
-| 2000 | typed | O | 0.0055 | 0.0050 | 0.0063 | 20 | 1.04 | 0.05 |
-| 4000 | typed | O | 0.0070 | 0.0066 | 0.0088 | 20 | 1.28 | 0.35 |
-| 8000 | typed | O | 0.0126 | 0.0118 | 0.0146 | 20 | 1.81 | 0.86 |
-| 16000 | typed | O | 0.0200 | 0.0193 | 0.0220 | 20 | 1.58 | 0.66 |
-| 32000 | typed | O | 0.0350 | 0.0347 | 0.0385 | 20 | 1.75 | 0.81 |
-| 64000 | typed | O | 0.0681 | 0.0673 | 0.0700 | 20 | 1.95 | 0.96 |
-| 1000 | dynamic | cli | 0.7236 | 0.7177 | 0.7337 | 10 | - | - |
-| 2000 | dynamic | cli | 2.909 | 2.894 | 2.924 | 10 | 4.02 | 2.01 |
-| 4000 | dynamic | cli | 11.574 | 11.351 | 11.585 | 5 | 3.98 | 1.99 |
+| 1000 | typed | O | 0.0049 | 0.0040 | 0.0057 | 20 | - | - |
+| 2000 | typed | O | 0.0056 | 0.0051 | 0.0086 | 20 | 1.15 | 0.21 |
+| 4000 | typed | O | 0.0076 | 0.0071 | 0.0126 | 20 | 1.35 | 0.43 |
+| 8000 | typed | O | 0.0114 | 0.0112 | 0.0129 | 20 | 1.49 | 0.58 |
+| 16000 | typed | O | 0.0203 | 0.0198 | 0.0246 | 20 | 1.78 | 0.83 |
+| 32000 | typed | O | 0.0383 | 0.0369 | 0.0392 | 20 | 1.89 | 0.92 |
+| 64000 | typed | O | 0.0717 | 0.0705 | 0.0738 | 20 | 1.87 | 0.91 |
+| 1000 | dynamic | cli | 0.7181 | 0.7145 | 0.7239 | 10 | - | - |
+| 2000 | dynamic | cli | 2.845 | 2.841 | 2.856 | 10 | 3.96 | 1.99 |
+| 4000 | dynamic | cli | 11.259 | 11.241 | 11.297 | 5 | 3.96 | 1.98 |
 | 8000 | dynamic | cli | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 | 16000 | dynamic | cli | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 | 32000 | dynamic | cli | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 | 64000 | dynamic | cli | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
-| 1000 | dynamic | O | 0.2323 | 0.2300 | 0.2349 | 10 | - | - |
-| 2000 | dynamic | O | 0.9247 | 0.9104 | 0.9354 | 10 | 3.98 | 1.99 |
-| 4000 | dynamic | O | 3.850 | 3.667 | 3.925 | 10 | 4.16 | 2.06 |
-| 8000 | dynamic | O | 16.222 | 15.380 | 16.970 | 5 | 4.21 | 2.07 |
+| 1000 | dynamic | O | 0.2333 | 0.2320 | 0.2372 | 10 | - | - |
+| 2000 | dynamic | O | 0.9354 | 0.9288 | 0.9420 | 10 | 4.01 | 2.00 |
+| 4000 | dynamic | O | 3.785 | 3.727 | 3.805 | 10 | 4.05 | 2.02 |
+| 8000 | dynamic | O | 18.402 | 18.211 | 18.740 | 5 | 4.86 | 2.28 |
 | 16000 | dynamic | O | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 | 32000 | dynamic | O | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 | 64000 | dynamic | O | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
@@ -212,25 +212,25 @@ Generated Rust (last recorded copy): case_studies/lrl/vectors.lrl typed: 9536 li
 
 | n | backend | flags | median s | min s | max s | runs | ratio to previous n | exponent |
 |---:|---|---|---:|---:|---:|---:|---:|---:|
-| 100 | typed | cli | 0.0069 | 0.0066 | 0.0094 | 20 | - | - |
-| 200 | typed | cli | 0.0194 | 0.0189 | 0.0210 | 20 | 2.79 | 1.48 |
-| 400 | typed | cli | 0.0697 | 0.0682 | 0.0716 | 20 | 3.60 | 1.85 |
-| 800 | typed | cli | 0.2599 | 0.2576 | 0.2681 | 10 | 3.73 | 1.90 |
-| 1600 | typed | cli | 1.036 | 1.029 | 1.040 | 10 | 3.99 | 1.99 |
-| 100 | typed | O | 0.0040 | 0.0035 | 0.0049 | 20 | - | - |
-| 200 | typed | O | 0.0088 | 0.0081 | 0.0105 | 20 | 2.22 | 1.15 |
-| 400 | typed | O | 0.0237 | 0.0222 | 0.0247 | 20 | 2.68 | 1.42 |
-| 800 | typed | O | 0.0833 | 0.0816 | 0.0866 | 20 | 3.51 | 1.81 |
-| 1600 | typed | O | 0.3181 | 0.3155 | 0.3222 | 10 | 3.82 | 1.93 |
-| 100 | dynamic | cli | 0.2585 | 0.2578 | 0.2613 | 10 | - | - |
-| 200 | dynamic | cli | 1.985 | 1.960 | 1.998 | 10 | 7.68 | 2.94 |
-| 400 | dynamic | cli | 15.478 | 15.214 | 15.492 | 5 | 7.80 | 2.96 |
+| 100 | typed | cli | 0.0072 | 0.0067 | 0.0119 | 20 | - | - |
+| 200 | typed | cli | 0.0192 | 0.0190 | 0.0236 | 10 | 2.66 | 1.41 |
+| 400 | typed | cli | 0.0672 | 0.0666 | 0.0683 | 20 | 3.51 | 1.81 |
+| 800 | typed | cli | 0.2602 | 0.2581 | 0.2663 | 10 | 3.87 | 1.95 |
+| 1600 | typed | cli | 1.017 | 1.013 | 1.022 | 10 | 3.91 | 1.97 |
+| 100 | typed | O | 0.0045 | 0.0040 | 0.0079 | 20 | - | - |
+| 200 | typed | O | 0.0078 | 0.0075 | 0.0100 | 20 | 1.73 | 0.79 |
+| 400 | typed | O | 0.0228 | 0.0221 | 0.0271 | 20 | 2.94 | 1.56 |
+| 800 | typed | O | 0.0823 | 0.0807 | 0.0857 | 20 | 3.60 | 1.85 |
+| 1600 | typed | O | 0.3163 | 0.3119 | 0.3218 | 10 | 3.84 | 1.94 |
+| 100 | dynamic | cli | 0.2575 | 0.2560 | 0.2608 | 10 | - | - |
+| 200 | dynamic | cli | 1.924 | 1.917 | 1.931 | 10 | 7.47 | 2.90 |
+| 400 | dynamic | cli | 15.072 | 15.024 | 15.401 | 5 | 7.83 | 2.97 |
 | 800 | dynamic | cli | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 | 1600 | dynamic | cli | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
-| 100 | dynamic | O | 0.0797 | 0.0762 | 0.0832 | 20 | - | - |
-| 200 | dynamic | O | 0.5875 | 0.5703 | 0.5931 | 10 | 7.37 | 2.88 |
-| 400 | dynamic | O | 4.713 | 4.556 | 4.788 | 10 | 8.02 | 3.00 |
-| 800 | dynamic | O | 37.331 | 36.743 | 37.932 | 5 | 7.92 | 2.99 |
+| 100 | dynamic | O | 0.0783 | 0.0772 | 0.0795 | 20 | - | - |
+| 200 | dynamic | O | 0.5609 | 0.5552 | 0.5675 | 10 | 7.16 | 2.84 |
+| 400 | dynamic | O | 4.455 | 4.452 | 4.480 | 10 | 7.94 | 2.99 |
+| 800 | dynamic | O | 36.289 | 36.147 | 36.317 | 5 | 8.15 | 3.03 |
 | 1600 | dynamic | O | - | - | - | 0 | skipped: a smaller n took more than 10 s (median) | |
 
 ### Ratios of medians
@@ -239,32 +239,32 @@ dynamic / typed at the same n and build; cli / O at the same n and backend. Only
 
 | workload | n | dynamic/typed (cli) | dynamic/typed (O) | typed cli/O | dynamic cli/O |
 |---|---:|---:|---:|---:|---:|
-| vec_build_sum | 1000 | 94.1 | 52.2 | 1.7 | 3.0 |
-| vec_build_sum | 2000 | 298.6 | 184.2 | 1.9 | 3.0 |
-| vec_build_sum | 4000 | 819.4 | 572.1 | 2.1 | 3.0 |
-| vec_build_sum | 8000 | - | 2472.4 | 2.7 | - |
-| vec_build_sum | 16000 | - | - | 2.9 | - |
-| vec_build_sum | 32000 | - | - | 3.2 | - |
-| vec_build_sum | 64000 | - | - | 3.4 | - |
-| list_fold | 1000 | 0.8 | 1.0 | 1.5 | 1.2 |
-| list_fold | 2000 | 0.8 | 1.0 | 1.8 | 1.3 |
-| list_fold | 4000 | 0.8 | 1.0 | 2.3 | 1.7 |
-| list_fold | 8000 | 0.8 | 1.0 | 2.5 | 2.0 |
+| vec_build_sum | 1000 | 106.6 | 52.1 | 1.5 | 3.0 |
+| vec_build_sum | 2000 | 330.4 | 190.2 | 1.7 | 3.0 |
+| vec_build_sum | 4000 | 899.2 | 670.5 | 2.3 | 3.1 |
+| vec_build_sum | 8000 | - | 2336.9 | 2.8 | - |
+| vec_build_sum | 16000 | - | - | 3.1 | - |
+| vec_build_sum | 32000 | - | - | 3.3 | - |
+| vec_build_sum | 64000 | - | - | 3.2 | - |
+| list_fold | 1000 | 0.8 | 1.1 | 1.7 | 1.3 |
+| list_fold | 2000 | 0.8 | 1.0 | 1.8 | 1.4 |
+| list_fold | 4000 | 0.7 | 0.9 | 2.1 | 1.7 |
+| list_fold | 8000 | 0.7 | 1.0 | 2.8 | 1.9 |
 | list_fold | 16000 | 0.7 | 0.9 | 3.1 | 2.3 |
-| list_fold | 32000 | 0.7 | 1.0 | 3.4 | 2.4 |
-| list_fold | 64000 | - | 1.0 | 3.4 | - |
+| list_fold | 32000 | 0.7 | 1.0 | 3.3 | 2.4 |
+| list_fold | 64000 | - | 0.9 | 3.3 | - |
 | list_fold | 128000 | - | - | 3.4 | - |
-| proto_send | 1000 | 86.1 | 44.1 | 1.6 | 3.1 |
-| proto_send | 2000 | 254.2 | 169.4 | 2.1 | 3.1 |
-| proto_send | 4000 | 639.1 | 551.9 | 2.6 | 3.0 |
-| proto_send | 8000 | - | 1282.7 | 2.6 | - |
-| proto_send | 16000 | - | - | 3.0 | - |
-| proto_send | 32000 | - | - | 3.4 | - |
-| vec_rev_sum | 100 | 37.2 | 20.0 | 1.7 | 3.2 |
-| vec_rev_sum | 200 | 102.5 | 66.5 | 2.2 | 3.4 |
-| vec_rev_sum | 400 | 222.0 | 198.6 | 2.9 | 3.3 |
-| vec_rev_sum | 800 | - | 448.3 | 3.1 | - |
-| vec_rev_sum | 1600 | - | - | 3.3 | - |
+| proto_send | 1000 | 90.9 | 47.7 | 1.6 | 3.1 |
+| proto_send | 2000 | 250.4 | 165.6 | 2.0 | 3.0 |
+| proto_send | 4000 | 602.2 | 496.0 | 2.4 | 3.0 |
+| proto_send | 8000 | - | 1615.9 | 3.0 | - |
+| proto_send | 16000 | - | - | 3.1 | - |
+| proto_send | 32000 | - | - | 3.1 | - |
+| vec_rev_sum | 100 | 35.7 | 17.5 | 1.6 | 3.3 |
+| vec_rev_sum | 200 | 100.3 | 72.3 | 2.5 | 3.4 |
+| vec_rev_sum | 400 | 224.2 | 195.0 | 2.9 | 3.4 |
+| vec_rev_sum | 800 | - | 440.8 | 3.2 | - |
+| vec_rev_sum | 1600 | - | - | 3.2 | - |
 
 Binary sizes in bytes at the smallest n of each workload (`stat`; the size hardly depends on n):
 
@@ -282,14 +282,14 @@ Binary sizes in bytes at the smallest n of each workload (`stat`; the size hardl
 
 | calls | backend | flags | without: median / min / max s | with: median / min / max s | runs (each) | ratio of medians | ratio of minima | extra per call ns |
 |---:|---|---|---|---|---:|---:|---:|---:|
-| 1000000 | typed | cli | 0.2751 / 0.2740 / 0.2804 | 0.3644 / 0.3622 / 0.3690 | 15 | 1.325 | 1.322 | 89 |
-| 1000000 | typed | O | 0.0362 / 0.0350 / 0.0390 | 0.1083 / 0.1071 / 0.1205 | 15 | 2.990 | 3.063 | 72 |
-| 1000000 | dynamic | cli | 0.3634 / 0.3592 / 0.3987 | 0.5670 / 0.5602 / 0.5968 | 15 | 1.560 | 1.559 | 204 |
-| 1000000 | dynamic | O | 0.1294 / 0.1268 / 0.1322 | 0.2027 / 0.2013 / 0.2094 | 15 | 1.567 | 1.587 | 73 |
-| 4000000 | typed | cli | 1.090 / 1.078 / 1.093 | 1.437 / 1.432 / 1.460 | 15 | 1.319 | 1.329 | 87 |
-| 4000000 | typed | O | 0.1335 / 0.1317 / 0.1362 | 0.4217 / 0.4190 / 0.4395 | 15 | 3.158 | 3.181 | 72 |
-| 4000000 | dynamic | cli | 1.450 / 1.419 / 1.466 | 2.251 / 2.226 / 2.339 | 15 | 1.553 | 1.569 | 200 |
-| 4000000 | dynamic | O | 0.4931 / 0.4872 / 0.5051 | 0.8215 / 0.7916 / 0.8344 | 15 | 1.666 | 1.625 | 82 |
+| 1000000 | typed | cli | 0.2753 / 0.2735 / 0.2812 | 0.3596 / 0.3568 / 0.3651 | 15 | 1.307 | 1.305 | 84 |
+| 1000000 | typed | O | 0.0354 / 0.0350 / 0.0365 | 0.1077 / 0.1055 / 0.1116 | 15 | 3.040 | 3.013 | 72 |
+| 1000000 | dynamic | cli | 0.3616 / 0.3593 / 0.3930 | 0.5598 / 0.5539 / 0.6746 | 15 | 1.548 | 1.541 | 198 |
+| 1000000 | dynamic | O | 0.1293 / 0.1267 / 0.1356 | 0.2021 / 0.1981 / 0.2071 | 15 | 1.564 | 1.564 | 73 |
+| 4000000 | typed | cli | 1.086 / 1.074 / 1.094 | 1.434 / 1.430 / 1.466 | 15 | 1.321 | 1.331 | 87 |
+| 4000000 | typed | O | 0.1336 / 0.1319 / 0.1373 | 0.4201 / 0.4158 / 0.4312 | 15 | 3.146 | 3.153 | 72 |
+| 4000000 | dynamic | cli | 1.422 / 1.415 / 1.430 | 2.179 / 2.177 / 2.209 | 15 | 1.533 | 1.538 | 189 |
+| 4000000 | dynamic | O | 0.4873 / 0.4821 / 0.5034 | 0.8164 / 0.8000 / 0.8228 | 15 | 1.675 | 1.659 | 82 |
 
 ## 4. Context only: plain Rust reference for vec_rev_sum
 
@@ -297,16 +297,16 @@ Binary sizes in bytes at the smallest n of each workload (`stat`; the size hardl
 
 | n | variant | median s | min s | max s | runs | factor typed/O | factor dynamic/O |
 |---:|---|---:|---:|---:|---:|---:|---:|
-| 100 | inplace | 0.0038 | 0.0029 | 0.0047 | 20 | 1.0 | 21 |
-| 200 | inplace | 0.0032 | 0.0027 | 0.0038 | 20 | 2.8 | 185 |
-| 400 | inplace | 0.0034 | 0.0029 | 0.0046 | 20 | 6.9 | 1380 |
-| 800 | inplace | 0.0032 | 0.0023 | 0.0047 | 20 | 26 | 11533 |
-| 1600 | inplace | 0.0033 | 0.0030 | 0.0039 | 20 | 97 | - |
-| 100 | snoc | 0.0031 | 0.0028 | 0.0037 | 20 | 1.3 | 25 |
-| 200 | snoc | 0.0030 | 0.0024 | 0.0034 | 20 | 3.0 | 198 |
-| 400 | snoc | 0.0032 | 0.0023 | 0.0038 | 20 | 7.4 | 1473 |
-| 800 | snoc | 0.0034 | 0.0026 | 0.0039 | 20 | 25 | 11001 |
-| 1600 | snoc | 0.0039 | 0.0027 | 0.0045 | 20 | 82 | - |
+| 100 | inplace | 0.0027 | 0.0025 | 0.0037 | 20 | 1.7 | 29 |
+| 200 | inplace | 0.0023 | 0.0022 | 0.0025 | 20 | 3.4 | 242 |
+| 400 | inplace | 0.0023 | 0.0022 | 0.0024 | 20 | 9.9 | 1936 |
+| 800 | inplace | 0.0023 | 0.0022 | 0.0025 | 20 | 36 | 15923 |
+| 1600 | inplace | 0.0022 | 0.0022 | 0.0025 | 20 | 141 | - |
+| 100 | snoc | 0.0023 | 0.0022 | 0.0025 | 20 | 2.0 | 34 |
+| 200 | snoc | 0.0023 | 0.0021 | 0.0024 | 20 | 3.4 | 248 |
+| 400 | snoc | 0.0023 | 0.0022 | 0.0024 | 20 | 10.0 | 1946 |
+| 800 | snoc | 0.0024 | 0.0022 | 0.0026 | 20 | 35 | 15413 |
+| 1600 | snoc | 0.0025 | 0.0024 | 0.0029 | 20 | 126 | - |
 
 ## 5. Compile time: a closed size expression in a type index
 
@@ -314,25 +314,16 @@ Front half of `lrl compile --backend typed` (no-op `rustc` on PATH) for `vec_bui
 
 | n | closed index: median / min / max s (runs) | index is a variable: median / min / max s (runs) |
 |---:|---|---|
-| 250 | 2.957 / 2.936 / 2.985 (10) | 0.5640 / 0.5416 / 0.5718 (10) |
-| 500 | 10.330 / 10.252 / 10.397 (5) | 0.6020 / 0.5663 / 0.6097 (10) |
-| 1000 | 38.941 / 38.878 / 39.257 (5) | 0.6224 / 0.6023 / 0.6362 (10) |
-| 2000 | 80.789 / 78.304 / 81.985 (5) | 0.6398 / 0.6247 / 0.6695 (10) |
+| 250 | 1.788 / 1.774 / 1.814 (10) | 0.7502 / 0.7297 / 0.7663 (10) |
+| 500 | 4.854 / 4.820 / 4.888 (10) | 0.7756 / 0.7606 / 0.8132 (10) |
+| 1000 | 16.898 / 16.858 / 16.956 (5) | 0.8127 / 0.7913 / 0.8840 (10) |
 
 ## Measurement conditions
 
-- 144 measurement batches (excluded batches not counted); batches started while a compiler/prover/LRL process was running: 0.
-- 1-minute load average at batch start (`uptime`): min 1.73, median 2.79, max 4.16.
-- 1-minute load average recorded after each run (all CSV rows, warm-up included): min 1.73, median 2.83, max 7.04 over 2870 runs.
-- Processes recorded at some batch start among the (at most three) busiest processes using >= 10% CPU (`ps -A -r`, other than the driver): BackgroundShortcutRunner, Codex (Renderer), Telegram, UVFSService, WindowServer, XprotectService, cloudd, com.apple.WebKit.Networking, contactsd, fskitd, launchd, loginwindow, mds, mdworker_shared, python, siriactionsd, triald.
-- Spread of a configuration = max / min - 1 over its measured runs. All 159 configurations: median 11.0%, max 111.3% (runtime.csv size_only 1000 dynamic O, median 0.0028 s).
-- Configurations with a median of at least 0.1 s (67): spread median 4.1%, max 28.1%; 58 of them have a spread of at most 10%.
-
-## Excluded batches
-
-Rows of these batches remain in the raw CSV files but are not used above.
-
-| batch | reason |
-|---|---|
-| indexcost:vec_build_sum_closed_index:2000@2026-10-05T18:48:29 | incomplete and disturbed: the machine went to sleep at 18:53:12 during the third measured run (pmset -g log: Entering Sleep state due to Clamshell Sleep; full wake 19:39:36); that run measured 129.7 s (the two before it 77.6 and 79.3 s) and that driver invocation wrote no further rows; re-measured in batch indexcost:vec_build_sum_closed_index:2000@2026-10-05T19:43:26 |
+- 142 measurement batches (excluded batches not counted); batches started while a compiler/prover/LRL process was running: 0.
+- 1-minute load average at batch start (`uptime`): min 4.12, median 5.30, max 8.19.
+- 1-minute load average recorded after each run (all CSV rows, warm-up included): min 4.11, median 5.31, max 7.55 over 2828 runs.
+- Processes recorded at some batch start among the (at most three) busiest processes using >= 10% CPU (`ps -A -r`, other than the driver): ApplicationsStorageExtension, CGPDFService, Creative Cloud UI Helper (Renderer), Google Chrome Helper (Renderer), Storage, StorageManagementService, UVFSService, XProtectRemediatorAdload, XProtectRemediatorPirrit, XProtectRemediatorSnowBeagle, XprotectService, coreaudiod, fskitd, jetbrains-toolbox, launchd, mds, mds_stores, mdworker_shared.
+- Spread of a configuration = max / min - 1 over its measured runs. All 157 configurations: median 8.6%, max 239.6% (runtime.csv size_only 1000 dynamic O, median 0.0040 s).
+- Configurations with a median of at least 0.1 s (65): spread median 2.5%, max 26.3%; 61 of them have a spread of at most 10%.
 

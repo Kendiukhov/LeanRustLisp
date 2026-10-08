@@ -1,51 +1,68 @@
 Sampling profiles of the LRL front half (context for experiments 1 and 5; not timing measurements)
 =================================================================================================
 
-Taken 2026-10-05 after all timing batches had finished, with the same release CLI
-(sha256 43640e57f8be283a369d266b2c2d2f0d325be3f69d53911d4de39c1a51f1da13) and the no-op rustc of
-the driver first on PATH. macOS `/usr/bin/sample` (default 1 ms interval) attached to the running
-`lrl compile`. The raw `sample` reports are not kept in the repository (14 MB and 474 MB of text);
-the counts below were extracted with `bench/sample_summary.py <report> <frame>...`, which prints, for
-each named frame, the samples of its outermost occurrences and their split over its direct callees.
+Taken 2026-10-08 after all timing batches had finished, with the same release CLI
+(sha256 e50af7a629ec5801f3d0ffb4fa18b589476f6ccfcecd226861119e2fad349820) and the no-op rustc of
+the driver first on PATH, from the repository root in a shell with `ulimit -s 65520`. macOS
+`/usr/bin/sample` (default 1 ms interval) attached to the running `lrl compile`. The raw `sample`
+reports are not kept in the repository (14766618 and 459507269 bytes of text); the counts below
+were extracted with `bench/sample_summary.py <report> <frame>...`, which prints, for each named
+frame, the samples of its outermost occurrences and their split over its direct callees.
 Counts are samples of the compiler thread (`Thread_...: lrl`); the main thread only waits in
 `pthread_join`.
 
 (a) case_studies/lrl/vectors.lrl, --backend typed, front half (experiment 1, `cli_front_noop_rustc`)
     PATH="bench/work/compile/shim:$PATH" <cli> compile case_studies/lrl/vectors.lrl --backend typed -o <bin> &
     /usr/bin/sample $! 6 -file vectors_typed_front.sample.txt
-    The report covers the first 6 s of the run (Launch Time 19:52:18.600, Date/Time 19:52:18.657).
-    Compiler thread: 4890 samples; 4849 under cli::run_cli -> cli::compiler::compile_with_mir.
-      cli::compiler::compile_with_mir                     4849
-        cli::driver::process_code(_inner)                 3992
-          cli::driver::validate_definition_mir            2799  (2774 of them in mir::lower::LoweringContext::lower_term)
-          kernel::checker::Env::add_definition             451
-          kernel::checker::check                           373
-          frontend::elaborator::Elaborator::check          354
-        mir::lower::LoweringContext::lower_term            826
-      mir::lower::LoweringContext::infer_term_type        3003  (all in kernel::checker::infer)
-      kernel::checker::whnf_in_ctx                        3662  (2444 in kernel::nbe::quote_with_fuel,
-                                                                 406 in kernel::nbe::eval_with_fuel)
-    i.e. 3003 / 4849 = 62% of the sampled front-half time is type inference called from MIR
-    lowering, and 3662 / 4849 = 76% is spent under the kernel's weak-head normaliser (from any caller).
+    The report covers the first 6 s of the run (Launch Time 01:35:11.250, Date/Time 01:35:11.316);
+    the median of this front half is 9.988 s (results/summary.md).
+    Compiler thread: 4459 samples; 4334 under cli::run_cli -> cli::compiler::compile_with_mir (the
+    other 125 have an incomplete recorded stack).
+      cli::compiler::compile_with_mir                     4334
+        cli::driver::process_code(_inner)                 4323
+          cli::driver::validate_definition_mir            3257  (3246 of them in mir::lower::LoweringContext::lower_term;
+                                                                 1968 of these via mir::lower::LoweringContext::lower_erased_proof_value)
+          kernel::checker::Env::add_definition             394
+          kernel::checker::check                           338
+          frontend::elaborator::Elaborator::check          318
+      mir::lower::LoweringContext::infer_term_type        3133  (all in kernel::checker::infer)
+      kernel::checker::whnf_in_ctx                        3164  (2448 in kernel::nbe::normalize_for_typing,
+                                                                 312 in kernel::checker::eval_env_from_ctx,
+                                                                 259 in drop_in_place<kernel::nbe::Value>)
+      kernel::nbe::normalize_for_typing (all callers)     2450  (1491 in kernel::nbe::quote_with_config,
+                                                                 157 in kernel::nbe::eval_with_config)
+    i.e. 3133 / 4334 = 72% of the sampled front-half time is type inference called from MIR
+    lowering, and 3164 / 4334 = 73% is spent under the kernel's weak-head normaliser (from any caller).
 
 (b) bench/work/indexcost/vec_build_sum_closed_index_n1000.lrl (experiment 5, closed size expression
-    in a type index, n = 1000; this front half takes about 39 s)
+    in a type index, n = 1000; median of this front half 16.898 s in results/summary.md)
     PATH="bench/work/compile/shim:$PATH" <cli> compile <that file> --backend typed -o <bin> &
-    (wait 15 s) /usr/bin/sample $! 10 -file ic1000_typed_front.sample.txt
-    The report covers 15-25 s into the run (Launch Time 19:54:24.149, Date/Time 19:54:39.252).
-    Compiler thread: 5553 samples. The stacks are so deep that `sample` recorded the full stack
-    (down to thread_start) for only 294 of them. Outermost recorded frame of the other samples:
-      kernel::nbe::* (apply_with_config, apply_recursor_with_args, try_reduce_rec,
-                      drop_in_place<kernel::nbe::Value>, <kernel::nbe::Value as Clone>::clone)  3593
-      <Vec<T> as Clone>::clone (called from <kernel::nbe::Value as Clone>::clone)                1624
-      other                                                                                        42
-    All 304 samples whose recorded stack reaches cli::driver::process_code_inner (the 294 complete
-    ones and 10 partial ones) are under kernel::checker::Env::add_definition (the kernel's check of a
-    definition); 225 samples are under kernel::checker::whnf_in_ctx (224 of them in
-    kernel::nbe::eval_with_fuel). No sample reaches mir::lower in this window.
-    An exploratory sample of the same program shape at n = 8000 (same binary, taken about 10 min
-    into that run, before the timing run; kept outside the repository) showed the time under
-    mir::lower::LoweringContext::infer_term_type -> kernel::checker::infer ->
-    kernel::checker::whnf_in_ctx -> kernel::nbe. Both profiles place the cost in the kernel's
-    evaluator (kernel::nbe) normalising the closed size expression; one reaches it from the kernel's
-    definition check, the other from type inference during MIR lowering.
+    (wait 5 s) /usr/bin/sample $! 10 -file ic1000_typed_front.sample.txt
+    The report covers 5-15 s into the run (Launch Time 01:36:33.946, Date/Time 01:36:39.005).
+    Compiler thread: 5388 samples. The stacks are so deep that `sample` recorded the full stack
+    (down to thread_start) for only 282 of them. Outermost recorded frame of the other samples:
+      kernel::nbe::* (apply_with_config 803, apply_recursor_with_args 793, try_reduce_rec 767,
+                      drop_in_place<kernel::nbe::Value> 576, <kernel::nbe::Value as Clone>::clone 527,
+                      check_eq_vec 15, eval_with_config 10, check_eq 8, normalize_for_typing 1,
+                      extend_env 1)                                                              3501
+      <Vec<T> as Clone>::clone (its caller is not recorded)                                       1572
+      other                                                                                        33
+    All 288 samples whose recorded stack reaches cli::driver::process_code_inner (the 282 complete
+    ones and 6 partial ones) split into 166 under kernel::checker::Env::add_definition (the kernel's
+    check of a definition; via its closure: 107 in kernel::checker::check, 60 in
+    kernel::checker::check_ownership_in_term_with_capture) and 122 under
+    cli::driver::validate_definition_mir -> mir::lower::LoweringContext::lower_term (MIR lowering;
+    direct callees mir::lower::LoweringContext::lower_term_to_local 98 and
+    kernel::checker::whnf_in_ctx 24; mir::lower::LoweringContext::infer_term_type 25 samples, all in
+    kernel::checker::infer). 260 samples are under kernel::checker::whnf_in_ctx, all via
+    kernel::nbe::normalize_for_typing -> kernel::nbe::eval_with_config: 132 of them under
+    kernel::checker::Env::add_definition, 122 under mir::lower::LoweringContext::lower_term (i.e. all
+    of the MIR-lowering samples), 6 in partial stacks reaching neither. Of the samples under
+    kernel::nbe::eval_with_config (outermost occurrences), 162 are under
+    kernel::checker::Env::add_definition, 122 under mir::lower::LoweringContext::lower_term and 1238
+    in partial stacks reaching neither (counted with a helper script, kept outside the repository, that
+    checks the recorded ancestors of each outermost occurrence).
+    Most samples (3501 of 5388) have a frame of the kernel's evaluator (kernel::nbe) as outermost
+    recorded frame; the samples whose stack reaches the driver reach the evaluator both from the
+    kernel's definition check and from MIR lowering. Because only 288 of 5388 stacks reach the
+    driver, the profile does not apportion the time between the two.

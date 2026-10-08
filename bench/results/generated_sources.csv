@@ -1,5 +1,5 @@
 program,backend,file,lines,bytes,time
-case_studies/lrl/vectors.lrl,typed,bench/work/compile/vectors_typed.rs,9536,827077,2026-10-05T18:09:41
-case_studies/lrl/vectors.lrl,dynamic,bench/work/compile/vectors_dynamic.rs,25563,771959,2026-10-05T18:13:57
-case_studies/lrl/protocol.lrl,typed,bench/work/compile/protocol_typed.rs,7298,604279,2026-10-05T18:16:42
-case_studies/lrl/protocol.lrl,dynamic,bench/work/compile/protocol_dynamic.rs,20135,594037,2026-10-05T18:17:46
+case_studies/lrl/vectors.lrl,typed,bench/work/compile/vectors_typed.rs,9536,819997,2026-10-08T00:55:37
+case_studies/lrl/vectors.lrl,dynamic,bench/work/compile/vectors_dynamic.rs,25475,765282,2026-10-08T00:58:56
+case_studies/lrl/protocol.lrl,typed,bench/work/compile/protocol_typed.rs,7298,604279,2026-10-08T01:02:12
+case_studies/lrl/protocol.lrl,dynamic,bench/work/compile/protocol_dynamic.rs,20135,594037,2026-10-08T01:03:36

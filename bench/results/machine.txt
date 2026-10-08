@@ -1,4 +1,4 @@
-date: 2026-10-05T18:08:42
+date: 2026-10-08T00:54:19
 machdep.cpu.brand_string: Apple M2 Pro
 hw.ncpu: 10
 hw.perflevel0.physicalcpu (performance cores): 6
@@ -18,10 +18,10 @@ release: 1.78.0
 LLVM version: 18.1.2
 cargo -V: cargo 1.78.0 (54d8815d0 2024-03-26)
 python: 3.11.9 (/Users/ihorkendiukhov/anaconda3/bin/python3)
-uptime: 18:08  up 21:02, 1 user, load averages: 2.78 3.69 3.74
+uptime: 0:54  up 3 days,  3:47, 1 user, load averages: 8.19 13.93 19.38
 stack soft limit for measured processes (ulimit -s, KiB): 65520
-lrl binary: /private/tmp/claude-501/-Volumes-Crucial-X6-MacBook-Code-leanrustlisp/4c0357f0-9be9-469e-bba8-627fe4a2405e/scratchpad/target_release/release/cli (5475088 bytes)
-lrl sha256: 43640e57f8be283a369d266b2c2d2f0d325be3f69d53911d4de39c1a51f1da13
-git HEAD: efe7bc09763b4755267f14a45556fa5b6dcb7a2f
-git status --short: 105 entries (84 modified, 19 untracked, 2 deleted)
-git diff --shortstat (tracked files vs HEAD):  86 files changed, 7946 insertions(+), 2104 deletions(-)
+lrl binary: /private/tmp/claude-501/-Volumes-Crucial-X6-MacBook-Code-leanrustlisp/4c0357f0-9be9-469e-bba8-627fe4a2405e/scratchpad/target_release_final/release/cli (5494336 bytes)
+lrl sha256: e50af7a629ec5801f3d0ffb4fa18b589476f6ccfcecd226861119e2fad349820
+git HEAD: 4eb6b1d3025b60f3f0b60c5479490cac068da99c
+git status --short (outside results files and paper/): 2 entries (0 modified, 2 untracked, 0 deleted)
+git diff --shortstat (tracked files vs HEAD):  19 files changed, 19 insertions(+), 3624 deletions(-)
