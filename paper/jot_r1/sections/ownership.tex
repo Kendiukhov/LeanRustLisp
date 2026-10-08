@@ -1,0 +1,237 @@
+% =====================================================================
+\section{Ownership}\label{sec:own}
+% =====================================================================
+
+Ownership in LRL has two parts.
+\emph{Affinity}: a value that is not Copy is moved at most once and is not used directly after it has been moved, and a function value is only called in the way its kind allows.
+\emph{Borrowing}: references to a value never conflict with each other or with a move of the value, and never outlive it.
+The kernel enforces affinity (\S\ref{sec:own:modes}--\S\ref{sec:own:rec}); a separate checker on LRL's mid-level intermediate representation (MIR) enforces borrowing (\S\ref{sec:own:borrow}).
+Section~\ref{sec:own:trust} states which of these lies inside the kernel, and \S\ref{sec:own:meta} what we have proved about the kernel's rules.
+
+\subsection{Positions and modes of use}\label{sec:own:modes}
+
+The ownership check walks the value of every definition once, from left to right, in the order in which the generated code evaluates it.
+It distinguishes four ways in which an occurrence of a variable $x$ can use $x$:
+\begin{itemize}\setlength\itemsep{1pt}
+\item $\mathsf{erased}$: the occurrence does not exist at run time---it is inside a type, inside the parameters, motive or indices of a recursor application, or inside an argument whose type is erased (Definition~\ref{def:copy}), that is, an argument that is a type, a type family or a proof. Erased occurrences are always allowed, even after $x$ has been moved.
+\item $\mathsf{read}$: $x$ is borrowed with \lstinline|(& x)|, or $x$ is a function value of kind $\Fn$ that is called.
+\item $\mathsf{mut}$: $x$ is borrowed with \lstinline|(&mut x)|, or $x$ is a function value of kind $\FnMut$ that is called.
+\item $\mathsf{move}$: every other run-time occurrence---passing $x$ as an argument, storing it in a constructor, returning it, calling it as an $\FnOnce$ function.
+\end{itemize}
+The modes are ordered $\mathsf{read} < \mathsf{mut} < \mathsf{move}$.
+The check maintains a \emph{usage state} $\sigma$ that records, for every variable in scope, whether it is still available or has been moved.
+
+\subsection{The ownership judgment}\label{sec:own:rules}
+
+Figure~\ref{fig:own} gives the rules.
+The judgment $\Gamma; \mathcal{B}; \gamma \vdash t : \sigma \Rightarrow \sigma'$ says that evaluating $t$ in a state where the variables have usage $\sigma$ is allowed and leaves usage $\sigma'$.
+$\Gamma$ is the typing context; $\mathcal{B} \subseteq \mathrm{dom}(\Gamma)$ is the \emph{repetition barrier}, the set of variables that must not be moved because $t$ may run more than once (\S\ref{sec:own:rec}); and $\gamma$ maps every variable to a \emph{ceiling}, the strongest use that $t$ can make of it given the closures between its binder and $t$.
+Outside any closure the ceiling is $\mathsf{move}$; inside the body of $\Lamk{k}(x{:}A).\,t$ the ceiling of every variable bound outside the $\lambda$ is lowered to at most $\mathrm{cap}(k)$ (it stays lower if an enclosing closure has already lowered it), because the body of an $\Fn$ closure can only read what it captures, and so on (Definition~\ref{def:kinds}).
+
+The function $\mathrm{use}_{\Gamma;\mathcal{B};\gamma}$ of Figure~\ref{fig:own} is the only place where an occurrence of an existing variable inspects or changes the state; the other rules only add and remove binders and combine states.
+For a variable $x$ used in mode $m$, the effective mode is $e = \min(m, \gamma(x))$.
+A $\mathsf{read}$ or $\mathsf{mut}$ use requires that $x$ is available (or Copy) and leaves $\sigma$ unchanged; a $\mathsf{move}$ of a non-Copy variable additionally requires $x \notin \mathcal{B}$ and marks $x$ as moved.
+Implicit binders (\lstinline|{x}|) of a type that is not Copy may only be read.
+A definition is well-owned if its value is accepted starting from the empty context.
+
+\begin{figure*}[p]
+\footnotesize
+\[
+\mathrm{use}_{\Gamma;\mathcal{B};\gamma}(x, m, \sigma) =
+\begin{cases}
+\sigma & \text{if } x \text{ is Copy}\\
+\sigma & \text{if } x \text{ is not Copy},\ \sigma(x) = \mathsf{avail} \text{ and } e = \mathsf{read}\\
+\sigma & \text{if } x \text{ is not Copy and not an implicit binder},\ \sigma(x) = \mathsf{avail} \text{ and } e = \mathsf{mut}\\
+\sigma[x \mapsto \mathsf{moved}] & \text{if } x \text{ is not Copy and not an implicit binder},\ e = \mathsf{move},\ \sigma(x) = \mathsf{avail} \text{ and } x \notin \mathcal{B}\\
+\text{undefined (error)} & \text{otherwise}
+\end{cases}
+\qquad \text{where } e = \min(m, \gamma(x)).
+\]
+\begin{mathpar}
+\inferrule*[right=O-Var]{ }{\Gamma;\mathcal{B};\gamma \vdash x : \sigma \Rightarrow \mathrm{use}_{\Gamma;\mathcal{B};\gamma}(x, \mathsf{move}, \sigma)}
+
+\inferrule*[right=O-Stateless]{t \text{ is } \kw{Sort}\,\ell,\ c,\ I,\ I.j \text{ or a } \Pi\text{-type, or an application whose type is erased}}{\Gamma;\mathcal{B};\gamma \vdash t : \sigma \Rightarrow \sigma}
+
+\inferrule*[right=O-Lam]{\Gamma, x{:}A;\ \mathcal{B};\ \gamma' \vdash t : \sigma[x \mapsto \mathsf{avail}] \Rightarrow \sigma' \\ \gamma' = (\gamma \sqcap \mathrm{cap}(k))[x \mapsto \mathsf{move}]}{\Gamma;\mathcal{B};\gamma \vdash \Lamk{k}(x{:}A).\,t : \sigma \Rightarrow \sigma' \setminus x}
+
+\inferrule*[right=O-Let]{\Gamma;\mathcal{B};\gamma \vdash v : \sigma \Rightarrow \sigma_1 \ (\text{skipped if } A \text{ is erased}) \\ \Gamma, x{:}A;\ \mathcal{B};\ \gamma[x \mapsto \mathsf{move}] \vdash t : \sigma_1[x \mapsto \mathsf{avail}] \Rightarrow \sigma_2}{\Gamma;\mathcal{B};\gamma \vdash \kw{let}\;x{:}A = v\;\kw{in}\;t : \sigma \Rightarrow \sigma_2 \setminus x}
+
+\inferrule*[right=O-App]{h \text{ is not } \kw{rec}_I,\ \kw{borrow\_shared} \text{ or } \kw{borrow\_mut} \\ \Gamma \vdash h : \Pik{k_1}(x_1{:}A_1).\cdots\Pik{k_n}(x_n{:}A_n).\,C \\\\ \sigma_0 = \mathrm{use}_{\Gamma;\mathcal{B};\gamma}(h, \mathrm{cap}(k_1), \sigma) \text{ if } h \text{ is a variable, else } \Gamma;\mathcal{B};\gamma \vdash h : \sigma \Rightarrow \sigma_0 \\\\ \sigma_i = \sigma_{i-1} \text{ if } A_i \text{ is erased, else } \Gamma;\mathcal{B};\gamma \vdash a_i : \sigma_{i-1} \Rightarrow \sigma_i \quad (1 \le i \le n)}{\Gamma;\mathcal{B};\gamma \vdash h\;a_1 \cdots a_n : \sigma \Rightarrow \sigma_n}
+
+\inferrule*[right=O-Borrow]{ }{\Gamma;\mathcal{B};\gamma \vdash \kw{borrow\_shared}\;A\;x : \sigma \Rightarrow \mathrm{use}_{\Gamma;\mathcal{B};\gamma}(x, \mathsf{read}, \sigma) \\\\ \Gamma;\mathcal{B};\gamma \vdash \kw{borrow\_mut}\;A\;x : \sigma \Rightarrow \mathrm{use}_{\Gamma;\mathcal{B};\gamma}(x, \mathsf{mut}, \sigma)}
+
+\inferrule*[right=O-Fix]{\Gamma, f{:}A;\ \mathrm{dom}(\Gamma);\ \gamma[f \mapsto \mathsf{move}] \vdash t : \sigma[f \mapsto \mathsf{avail}] \Rightarrow \sigma'}{\Gamma;\mathcal{B};\gamma \vdash \kw{fix}\;f{:}A.\;t : \sigma \Rightarrow \sigma' \setminus f}
+
+\inferrule*[right=O-Rec-Alt]{I \text{ not recursive},\ e \text{ present} \\ \Gamma;\mathcal{B};\gamma \vdash e : \sigma \Rightarrow \sigma_0 \\ \Gamma;\mathcal{B};\gamma \vdash^{\mathsf{once}}_{I.j} m_j : \sigma_0 \Rightarrow \sigma_j \quad (\text{each } j)}{\Gamma;\mathcal{B};\gamma \vdash \kw{rec}_I\;\overline{p}\;P\;\overline{m}\;\overline{\imath}\;e : \sigma \Rightarrow \textstyle\bigsqcup_j \sigma_j}
+
+\inferrule*[right=O-Rec-Seq]{I \text{ recursive, or } e \text{ absent} \\ \sigma_0 = \sigma \\ \Gamma;\ \mathcal{B}_j;\ \gamma \vdash^{\rho_j}_{I.j} m_j : \sigma_{j-1} \Rightarrow \sigma_j \quad (1 \le j \le |\overline{m}|) \\\\ \rho_j = \mathsf{rep} \text{ if } m_j \text{ is repeatable, else } \mathsf{once}; \quad \mathcal{B}_j = \mathrm{dom}(\Gamma) \text{ if } \rho_j = \mathsf{rep} \text{ and } I.j \text{ has fields, else } \mathcal{B} \\\\ \Gamma;\mathcal{B};\gamma \vdash e : \sigma_{|\overline{m}|} \Rightarrow \sigma' \text{ if } e \text{ is present, else } \sigma' = \sigma_{|\overline{m}|}}{\Gamma;\mathcal{B};\gamma \vdash \kw{rec}_I\;\overline{p}\;P\;\overline{m}\;\overline{\imath}\;[e] : \sigma \Rightarrow \sigma'}
+
+\inferrule*[right=O-Minor]{I.j \text{ has the fields and induction hypotheses } y_1{:}A_1, \ldots, y_r{:}A_r,\ r \ge 1 \\\\ m_j = \Lamk{k_1}(y_1{:}A_1).\cdots\Lamk{k_s}(y_s{:}A_s).\,t \text{ with } s = r, \text{ or } s < r \text{ and } t \text{ not a } \lambda \\\\ \text{every non-Copy recursive field of } I.j \text{ is among } y_1, \ldots, y_s \\ \rho = \mathsf{rep} \text{ and } s = 0 \text{ imply that } t \text{ is a constant or a constructor} \\\\ \Gamma, y_1{:}A_1, \ldots, y_s{:}A_s;\ \mathcal{B};\ \gamma' \vdash t : \sigma[\overline{y} \mapsto \mathsf{avail}][\overline{y_{\mathrm{rec}}} \mapsto \mathsf{moved}] \Rightarrow \sigma'}{\Gamma;\mathcal{B};\gamma \vdash^{\rho}_{I.j} m_j : \sigma \Rightarrow \sigma' \setminus \overline{y}}
+
+\inferrule*[right=O-Minor-Leaf]{I.j \text{ has no fields} \\ \rho = \mathsf{once}, \text{ or } \Gamma \vdash m_j : A \text{ with } A \text{ Copy} \\ \Gamma;\mathcal{B};\gamma \vdash m_j : \sigma \Rightarrow \sigma'}{\Gamma;\mathcal{B};\gamma \vdash^{\rho}_{I.j} m_j : \sigma \Rightarrow \sigma'}
+\end{mathpar}
+\caption{The kernel's ownership rules. In $\mathrm{use}$, ``Copy'' and ``implicit'' refer to the type and the binder of $x$ in $\Gamma$. $\sigma \setminus x$ removes $x$ from the state; $\bigsqcup$ is the pointwise join (a variable is moved after the match if it is moved in some branch); $\gamma \sqcap m$ lowers every ceiling to at most $m$; in \textsc{O-Minor}, $\gamma'$ is $\gamma$ lowered by the kinds of the peeled $\lambda$s, and $\overline{y_{\mathrm{rec}}}$ are the bound recursive fields that are not Copy, which start as moved because computing their induction hypotheses consumed them. The judgment $\vdash^{\rho}_{I.j}$ checks the minor premise of constructor $I.j$; $\rho$ says whether it may run more than once. A minor premise is \emph{repeatable} if $I$ has a constructor with two or more recursive fields, or $I.j$ has a recursive field, or the recursor is applied without its scrutinee ($[e]$: the scrutinee may be absent). Parameters $\overline{p}$, motive $P$ and indices $\overline{\imath}$ are erased; arguments after the scrutinee are checked after it, from left to right. A recursor in a run-time position must be applied at least to its parameters, motive and minor premises (otherwise \lstinline|RecursorWithoutMinorPremises|). A borrow of a compound term evaluates the term as a temporary, which is moved. $\lambda$-abstractions, \lstinline|let| and \lstinline|fix| are checked by their own rules even when their type is erased. The rules are implemented by \texttt{check\_ownership\_in\_term\_with\_capture} and its helpers in \texttt{kernel/src/checker.rs} (application spines, recursor applications and minor premises have separate helpers), and the state by \texttt{UsageContext} in \texttt{kernel/src/ownership.rs}.}
+\label{fig:own}
+\end{figure*}
+
+Three rules deserve comment.
+\textsc{O-App} uses the \emph{type} of the head to decide which arguments are erased and how a variable head is used: a proof argument costs nothing, and calling an $\Fn$ function value only reads it, so such a value can be called any number of times.
+\textsc{O-Borrow} records borrowing as a read or a mutable use, not as a move: taking a reference does not consume the value.
+Whether the reference is still alive when the value is later moved is a borrowing question, which the kernel leaves to MIR (\S\ref{sec:own:borrow}).
+\textsc{O-Lam} checks the closure's body at the moment the closure is built, with the captured variables' ceilings lowered to at most the closure's kind; together with the kind side condition of T-Lam (below) this means that building an $\FnOnce$ closure moves the values it consumes, and building an $\Fn$ closure only reads what it captures.
+
+\subsection{Required kinds}\label{sec:own:kind}
+
+\begin{definition}[Required kind]\label{def:req}
+Let $t$ be the body of a $\lambda$ with parameter $x$, checked in context $\Gamma, x{:}A$.
+The \emph{uses} of $t$ map every variable to the strongest mode in which $t$ uses it at run time, computed over the same positions as Figure~\ref{fig:own} (erased occurrences count as reads; inside a nested $\lambda$ of kind $k'$ the mode is lowered to $\mathrm{cap}(k')$).
+The \emph{capture mode} of a variable $y \in \mathrm{dom}(\Gamma)$ is $\mathsf{read}$ if $y$ is Copy, $\mathsf{mut}$ if $y$ is a mutable reference that $t$ moves (a \emph{reborrow}: the closure uses the reference mutably without taking it), and its use otherwise.
+The required kind $\mathrm{req}(\Gamma, x{:}A, t)$ is $\FnOnce$ if some capture mode is $\mathsf{move}$, else $\FnMut$ if some capture mode is $\mathsf{mut}$, else $\Fn$.
+\end{definition}
+
+Rule T-Lam (Figure~\ref{fig:typing}) requires $\mathrm{req} \sqsubseteq k$.
+The kernel computes the required kind with one analysis (\texttt{term\_variable\_uses} in \texttt{kernel/src/checker.rs}); its check (T-Lam, diagnostic \texttt{K0043}) is the authoritative one.
+The elaborator, which infers the kinds of unannotated $\lambda$s, and MIR lowering, which decides whether each captured variable is moved into a closure or borrowed by it, call the same analysis; they fall back to a conservative syntactic analysis of their own only for terms that the kernel cannot yet type in their context (for example, terms with unsolved metavariables).
+The elaborator reports \texttt{F0207} when an annotated kind is smaller than the required kind and \texttt{F0206} when a $\lambda$'s kind does not match the expected function type.
+
+\subsection{Where kinds meet dependent elimination}\label{sec:own:rec}
+
+The interaction between function kinds and dependent elimination is not orthogonal, and it is the place where the ownership rules needed the most care.
+A recursor calls its minor premises, and how often it calls each one depends on the shape of the data: for a list, the \lstinline|cons| case runs once per element and the \lstinline|nil| case once.
+A minor premise that may run more than once must therefore not consume anything it captures---in the terminology of \S\ref{sec:core:kinds}, it must behave like an $\FnMut$ closure, even though the recursor's type does not say so.
+Figure~\ref{fig:own} enforces this with the repetition barrier $\mathcal{B}$: a \emph{repeatable} minor premise is checked with every variable bound outside it in $\mathcal{B}$, so moving any of them is an error.
+
+Each side condition of the recursor rules rejects a program that the kernel would otherwise accept and that would consume an owned value twice at run time.
+With the affine type \lstinline|Tok| of \S\ref{sec:core:kinds}:
+\begin{lstlisting}
+;; rejected: the succ case runs n times and consumes the captured token k each time
+(def spend (pi k Tok (pi #[once] n Nat (List Tok)))
+  (lam k Tok (lam #[once] n Nat
+    (match n (List Tok)
+      (case (zero) nil)
+      (case (succ m ih) (cons k ih))))))
+\end{lstlisting}
+The kernel reports \texttt{K0021} \lstinline|Ownership violation [ConsumedInRepeatedScope]: non-Copy variable 'k' is consumed inside a minor premise or fixpoint body that may run more than once|.
+Consuming \lstinline|k| in the \lstinline|zero| case instead is accepted, because that case runs once.
+Similarly, a case that uses at run time a recursive field \lstinline|t| holding owned values is rejected, whether or not it also uses the induction hypothesis, because the recursor has already consumed \lstinline|t| to compute the induction hypothesis (\lstinline|RecursiveFieldConsumedByIh|); and a recursor applied without its minor premises is rejected (\lstinline|RecursorWithoutMinorPremises|), because the case functions supplied later could not be checked against the number of times they will run.
+For an inductive type without recursive fields, such as \lstinline|Bool| or \lstinline|Option|, exactly one minor premise runs, once; \textsc{O-Rec-Alt} checks the cases as alternatives, so a channel may be consumed in both branches of a match on a Boolean.
+
+These rules reflect how the compiler evaluates recursors: induction hypotheses are computed before the case function runs, the value of a field-less case is computed once, and for recursive types the case functions are built as closures before the scrutinee is inspected, while for non-recursive types each case is compiled inline into its own branch.
+The ownership rules follow this evaluation order; a different compilation scheme (lazy induction hypotheses, for example) would allow more programs and would require different rules.
+Section~\ref{sec:own:meta} reports, for a core calculus with an iterator, a mechanized example showing that the repetition barrier is needed and a mechanized proof that it suffices.
+
+\subsection{Borrowing and the MIR checker}\label{sec:own:borrow}
+
+After the kernel accepts a definition, the compiler lowers it to MIR, a control-flow graph of basic blocks in the style of Rust's MIR~\cite{rfc1211}, and runs three mandatory analyses on the definition's body and on the body of every closure it contains:
+\begin{enumerate}\setlength\itemsep{1pt}
+\item a \emph{typing} pass over MIR's runtime types (in which type indices are erased; \texttt{M300} reports a mismatch, which indicates a lowering bug);
+\item an \emph{ownership} pass that checks, on the control-flow graph, that no local is used after it was moved or before it was initialised (\texttt{M100}--\texttt{M106});
+\item a \emph{borrow} check with non-lexical lifetimes~\cite{rfc2094}: for every reference it computes the region of the program, a set of program points, in which the reference is live, and it rejects a mutable borrow that overlaps another borrow (\texttt{M200}), a use or move of a value while it is borrowed (\texttt{M201}), an assignment to a borrowed place (\texttt{M206}), and a reference that outlives its referent (\texttt{M203}) or escapes its function (\texttt{M204}).
+Loans held by closures, by partial applications and by constructed data are kept alive as long as the holder is.
+\end{enumerate}
+The ownership analysis is run again after the MIR optimisations, as a check that they did not invalidate it.
+Lifetime labels in signatures (\lstinline|(Ref #[a] Shared T)|) name regions, and the kernel compares them strictly.
+An unlabelled reference type in a signature receives a fresh label, and a signature that returns an unlabelled reference must have exactly one lifetime among its inputs, where each unlabelled input reference counts as a lifetime of its own (\texttt{F0208} otherwise).
+A borrow expression produces a reference with the fixed label \lstinline|#[r]|, so a function that takes a borrowed argument names that label in its signature.
+
+Two caveats apply.
+First, the language currently has no operation that reads or writes \emph{through} a reference: references can be created, passed, stored and returned, and the borrow checker enforces their discipline, but a program can observe a reference only through primitive functions.
+Borrowing in LRL is therefore checked but not yet useful for in-place computation; \S\ref{sec:limits} returns to this.
+Second, MIR rejects a few programs that the kernel accepts: for example, a case of a recursive type that calls a captured $\FnMut$ function value (MIR moves the function into the case closure, which then cannot be duplicated for the recursive call), or a recursor applied to its minor premises but not to its scrutinee (which MIR lowering does not support).
+Such programs are rejected, which is safe; \S\ref{sec:eval:stages} measures how rare they are.
+
+\subsection{Who enforces what}\label{sec:own:trust}
+
+Table~\ref{tab:trust} lists each guarantee, the component that enforces it, and whether that component is the kernel.
+Two notions of trust must be distinguished.
+The \emph{logical trusted base} is what must be correct for the logical soundness of every accepted definition and proof; in LRL it is the kernel.
+The \emph{borrowing guarantee}---that references in generated code behave as their types say---additionally relies on MIR lowering, the MIR borrow checker and code generation (and on \texttt{rustc}), as in Rust, where the borrow checker is part of the compiler that must be trusted.
+Likewise, that the generated code respects affinity relies on MIR lowering implementing the evaluation order of \S\ref{sec:own:rec}, which the kernel's rules assume (last row of Table~\ref{tab:trust}).
+The kernel's logical soundness does not depend on the borrow checker: for the kernel, references are opaque values of the reserved type $\kw{Ref}$, and no proof can depend on whether a borrow conflicts.
+
+\begin{table*}[t]
+\centering\footnotesize
+\caption{Guarantees, the components that enforce them, and whether that component is the kernel (the logical trusted base). ``Kernel'' is the \texttt{kernel/} crate; ``MIR'' is the \texttt{mir/} crate. Diagnostic codes are those printed by the compiler.}
+\label{tab:trust}
+\begin{tabular}{p{0.38\linewidth}p{0.22\linewidth}p{0.1\linewidth}p{0.2\linewidth}}\hline
+\textbf{Guarantee} & \textbf{Enforced by} & \textbf{In the kernel} & \textbf{Diagnostics}\\\hline\hline
+Definitions are well-typed; conversion is decided correctly & kernel & yes & \texttt{K00xx}\\
+Total definitions recurse only through recursors; partial and unsafe code stays out of types and total code (unsafe code also out of partial code); axioms are tracked & kernel & yes & \texttt{K0018}--\texttt{K0020}, \texttt{K0022}--\texttt{K0024}\\
+No non-Copy value is moved twice or used directly after a move (including inside recursors) & kernel (re-checked by MIR, except in fixpoint bodies) & yes & \texttt{K0021} (\texttt{M100})\\
+A closure's kind is at least its required kind & kernel (also elaborator; not re-checked by MIR) & yes & \texttt{K0043} (\texttt{F0206}, \texttt{F0207})\\
+Borrows do not conflict; nothing is moved while borrowed or used while mutably borrowed, including through a closure or a data structure that holds a borrow & MIR borrow check & no & \texttt{M200}, \texttt{M201}, \texttt{M206}\\
+References do not outlive their referents & MIR borrow check & no & \texttt{M203}, \texttt{M204}\\
+Macros do not introduce axioms, \lstinline|unsafe| definitions or \lstinline|eval| & macro expander & no & \texttt{F0104}\\
+Generated code behaves like the checked MIR & MIR lowering, code generation, \texttt{rustc} & no & ---\\\hline
+\end{tabular}
+\end{table*}
+
+The boundary between the third and fifth rows is precise: the kernel rejects a direct use of a variable after it was moved, while a use \emph{through} a borrow---for example a closure that borrowed a value and is called after the value was moved---is a borrowing question, which MIR rejects (\texttt{M201}; \S\ref{sec:own:meta}).
+
+\begin{proposition}[Pipeline invariant]\label{prop:pipeline}
+Every definition and top-level expression from which the compiler generates code or which it evaluates---whether written by hand or produced by macro expansion---has been accepted by the elaborator, by the kernel's typing and ownership checks, and by the MIR typing, ownership and borrow checks of its body and of every closure in it.
+\end{proposition}
+
+\emph{Argument.}
+Macro expansion maps surface syntax to surface syntax and runs before elaboration (\S\ref{sec:macros}); it has no access to the kernel or to MIR.
+All entry points of the compiler---the commands that run, compile and build programs, and the read--eval--print loop---pass every top-level form through the same elaboration and kernel admission (\texttt{process\_code} in \texttt{cli/src/driver.rs}), and code generation runs only on definitions that the kernel admitted and that passed the MIR checks.
+This is an argument about the structure of the driver, not a formal proof; \S\ref{sec:eval:corpus} tests it with a corpus in which every violation appears both hand-written and macro-generated.
+
+The kernel and MIR therefore do not have to agree; they check different things, and the program must pass both.
+The kernel's affinity check is the authoritative one; MIR's move check re-checks it on the control-flow graph.
+The re-check is not fully independent---it uses the kernel's Copy judgement and capture analysis, though not its walk---but it gives a measure of defence in depth that \S\ref{sec:eval:stages} quantifies.
+
+\subsection{What is proved}\label{sec:own:meta}
+
+We state four results.
+Lemmas~\ref{lem:widening} and~\ref{lem:coercion} are about the kernel's rules (Figures~\ref{fig:typing} and~\ref{fig:own}); Appendix~\ref{app:proofs} proves them on paper, and their counterparts for a core calculus, $\lambda^{\mathrm{aff}}$, are proved in Lean.
+Lemma~\ref{lem:subst} and Theorem~\ref{thm:affine} are stated and proved, in Lean only, for $\lambda^{\mathrm{aff}}$.
+
+\begin{lemma}[Kind widening]\label{lem:widening}
+Suppose $\Gamma \vdash \Lamk{k}(x{:}A).\,t : \Pik{k}(x{:}A).\,C$ and $\Gamma;\mathcal{B};\gamma \vdash \Lamk{k}(x{:}A).\,t : \sigma \Rightarrow \sigma'$, and $k \sqsubseteq k'$.
+Then $\Gamma \vdash \Lamk{k'}(x{:}A).\,t : \Pik{k'}(x{:}A).\,C$.
+Moreover $\Gamma;\mathcal{B};\gamma \vdash \Lamk{k'}(x{:}A).\,t : \sigma \Rightarrow \sigma'$, unless $k = \FnMut$, $k' = \FnOnce$ and $t$ moves a captured mutable reference.
+\end{lemma}
+
+In the excepted case the wider closure takes the captured mutable reference by move instead of reborrowing it, so the reference is no longer available after the closure is built, and inside a repeatable minor premise the move is forbidden; the compiler accepts an $\FnMut$ closure that reborrows a captured mutable reference and rejects the same closure annotated $\FnOnce$ when the reference is used afterwards (\texttt{K0021}).
+Widening is therefore pure capability widening except for captured mutable references, exactly as for Rust's \lstinline|move| closures.
+
+\begin{lemma}[Coercion]\label{lem:coercion}
+Let $f$ be a variable with $\Gamma \vdash f : \Pik{k}(x{:}A).\,C$, where $\Pik{k}(x{:}A).\,C$ is not erased, and let $k \sqsubseteq k'$.
+The coercion $\Lamk{k'}(x{:}A).\,f\,x$ inserted by the elaborator has type $\Pik{k'}(x{:}A).\,C$ and required kind exactly $k$, and checking it performs $\mathrm{use}_{\Gamma;\mathcal{B};\gamma}(f, \mathrm{cap}(k), \sigma)$, the same use as checking a call $f\,a$; in particular, where the ceiling of $f$ is $\mathsf{move}$, it moves $f$ if and only if $k = \FnOnce$.
+\end{lemma}
+
+For a compound term $f$ the wrapper evaluates $f$ again at every call, so its required kind can exceed $k$: if evaluating $f$ consumes a captured variable (as $g\,y$ consumes an affine $y$), the wrapper requires $\FnOnce$. When the required kind exceeds $k'$, the kernel rejects the wrapper (T-Lam), so the elaborator's coercion of compound terms is sound but not always accepted.
+
+\paragraph{The mechanized core calculus.}
+$\lambda^{\mathrm{aff}}$ has a unit type and natural numbers (Copy), an owned resource type, and function types annotated with kinds; its terms are variables, constants, resource locations, $\lambda^k$, application, \lstinline|let|, an operation that consumes a resource, an operation that reads one, an iterator $\kw{iter}\;n\;z\;s$ that calls the step function $s$ $n$ times (the analogue of a recursor's repeatable minor premise), and an erased position.
+Its ownership judgment is the counterpart of Figure~\ref{fig:own} for these constructs, with four differences in presentation and one in substance.
+In presentation: the judgment records the mode $m$ in which the term itself is used---$\mathrm{cap}(k)$ for a variable at the head of a call of a function of kind $k$, $\mathsf{read}$ for the operand of the operation that reads a resource, and $\mathsf{move}$ otherwise (Figure~\ref{fig:own} corresponds to $\mathsf{move}$, and its rule \textsc{O-App} applies $\mathrm{cap}(k)$ to a variable head directly); captured uses are not lowered by a ceiling (which makes no difference under the kind side condition); the side condition $\mathrm{req} \sqsubseteq k$ and the repetition barrier on the iterator's step function (which must be a $\lambda$) are premises of the judgment itself; and resource locations have additional run-time rules.
+In substance: $\lambda^{\mathrm{aff}}$ checks $n$ before $z$ and $s$, the order in which they are evaluated, whereas \textsc{O-Rec-Seq} checks the minor premises before the scrutinee, the order in which compiled LRL code builds them.
+The two judgments therefore accept slightly different programs: $\lambda^{\mathrm{aff}}$ rejects a step function that reads a resource which $n$ consumes, while the kernel accepts the corresponding recursor application, which MIR then rejects as a use of a value while it is borrowed (\texttt{M201}).
+The operational semantics is call-by-value over configurations $(\rho, t)$, where the store $\rho$ records which resources are still live; consuming a live resource kills it, and consuming a dead resource is stuck.
+$\lambda^{\mathrm{aff}}$ has no mutable references, so its version of Lemma~\ref{lem:widening} has no exception.
+
+\begin{lemma}[Value substitution, for $\lambda^{\mathrm{aff}}$]\label{lem:subst}
+Let $v$ be a closed value with $\vdash v : A$ that is well-owned.
+If $t$ is well-typed in $\Gamma_1, y{:}A, \Gamma_2$ and, used in a mode $m$ that is $\mathsf{move}$ or $\mathrm{cap}(k)$ when $t$ has a function type of kind $k$ (any mode when $t$ has another type), well-owned there from state $\sigma$ to $\sigma'$, and no resource location consumed by $v$ is moved in $\sigma'$, then $t[v/y]$ is well-typed in $\Gamma_1, \Gamma_2$ and, used in mode $m$, well-owned from $\sigma^{-y}$ to $\sigma'^{-y}$, where $\sigma^{-y}$ removes $y$ from a state and, if $y$ is moved in it, marks the locations consumed by $v$ as moved.
+\end{lemma}
+
+The restriction to values is necessary: substituting a computation that consumes a resource for a copyable variable captured by an $\Fn$ closure produces a closure whose required kind is $\FnOnce$.
+The condition on resource locations excludes a term that already consumes, directly, a location that $v$ also consumes.
+
+\begin{theorem}[Affine safety, mechanized]\label{thm:affine}
+In $\lambda^{\mathrm{aff}}$, let $t$ be a closed term that is well-typed and well-owned from usage state $\sigma$, and let $\rho$ be a store whose dead resources are all marked moved in $\sigma$.
+Then (preservation) if $(\rho, t)$ steps to $(\rho', t')$, then $t'$ is well-typed and well-owned from the updated state, which again agrees with $\rho'$; and (progress) $t$ is a value or $(\rho, t)$ can step.
+Consequently, every evaluation of a well-typed term that is well-owned from the empty state, started from a store in which all resources are live, consumes each resource at most once and never reaches a configuration that would consume a dead resource.
+\end{theorem}
+
+The Lean development (\texttt{mechanization/\allowbreak src/\allowbreak LRL/\allowbreak Affine/}) proves the $\lambda^{\mathrm{aff}}$ versions of Lemmas~\ref{lem:widening} and~\ref{lem:coercion}, Lemma~\ref{lem:subst} and Theorem~\ref{thm:affine} without \lstinline|sorry|, using only Lean's standard axioms (Table~\ref{tab:mech} in Appendix~\ref{app:proofs} lists the theorem names).
+It also contains a well-typed program whose iterated step function consumes a resource: the judgment rejects it, and, if run, it reaches a configuration that tries to consume the already consumed resource.
+
+The theorem has a precise scope.
+It guarantees that no resource is \emph{consumed} twice; it does not prevent \emph{reading} a resource after it was consumed.
+The judgment checks the body of a closure where the closure is built, so a closure that only reads a captured resource does not move it, and the resource can be consumed before the closure is called; a read of a resource location is not checked at all.
+The mechanization exhibits such a read with a term that passes a location to a function that consumes it and then reads the location, and the kernel's rules have the same property.
+In LRL, a closure that borrows a value and is called after the value was moved keeps the borrow alive across the move; this is a borrow conflict, which the MIR borrow checker rejects (\texttt{M201}), consistent with Table~\ref{tab:trust}.
+The mechanization does not cover dependent types, constructors and general recursors, fixpoints, implicit binders, references, or MIR, and it does not prove that the Rust implementation of the kernel implements the rules; the connection between the rules and the code rests on the correspondence between the rules and the functions named in Figure~\ref{fig:own}, established by inspection, and on the tests of \S\ref{sec:eval}.

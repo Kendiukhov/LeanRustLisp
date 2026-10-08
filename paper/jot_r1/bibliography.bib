@@ -1,0 +1,1864 @@
+%% bibliography.bib -- LeanRustLisp, JOT revision (paper/jot_r1)
+%%
+%% Merged from the submitted paper's bibliography (paper/jcl_v2/bibliography.bib; all keys
+%% cited by paper/jcl_v2/main.tex kept) and the two literature reports of the revision
+%% (related_linear_ownership, related_rust_macros_inplace). One entry per work: four
+%% conference/journal pairs with identical titles were reduced to one entry each (the other
+%% version is named in a comment above the kept entry).
+%%
+%% AUDIT NOTE (CLAUDE.md no-fabrication rule). Every entry was checked on 2026-10-05; the
+%% line "%% verified:" above each entry says how. Methods:
+%%   - DOI entries: Crossref REST API (curl https://api.crossref.org/works/<DOI>), or the
+%%     DataCite API (https://api.datacite.org/dois/<DOI>) for 10.48550/* and 10.4230/* DOIs;
+%%     title, author family names, year, venue, volume, issue and pages compared field by
+%%     field by a script. LNCS/LNBIP volumes, editors and book subtitles from the Crossref
+%%     unixsd XML (.../works/<DOI>/transform/application/vnd.crossref.unixsd+xml) and the
+%%     Crossref record of the parent book.
+%%   - PACMPL article numbers ("N:1--N:M") only where the paper PDF's ACM Reference Format
+%%     block or running footer was read; otherwise Crossref's page range is used.
+%%   - Entries without DOI: the cited URL itself, the GitHub API, OpenLibrary, author pages.
+%% A field that could not be verified is omitted (never guessed); deviations from the
+%% Crossref record are explained in a comment above the entry.
+%% Checked with bibtex and the JOT class's style (jot.cls loads apacite and natbib and sets
+%% \bibliographystyle{apacite}): with \nocite{*}, bibtex reports no errors and no warnings.
+%%
+%% Sections follow the related-work lines of CHANGE_LIST.md section 4:
+%%   L1 linear and dependent type theories; L2 refinement types and verification for Rust;
+%%   L3 dependent type systems through hygienic macros (and macro systems);
+%%   L4 ownership types in the object-oriented tradition; L5 in-place update;
+%%   then Rust semantics, type-theory foundations, dependently typed languages, other.
+
+%% =====================================================================
+%% Foundations: type theory and lambda calculus
+%% =====================================================================
+
+%% verified: Crossref 10.1016/1385-7258(72)90034-0 (title, author, year, journal, 75(5):381-392); Crossref gives initials N.G. only.
+@article{debruijn1972,
+  author    = {de Bruijn, Nicolaas G.},
+  title     = {Lambda Calculus Notation with Nameless Dummies, a Tool for Automatic Formula Manipulation, with Application to the {Church-Rosser} Theorem},
+  journal   = {Indagationes Mathematicae (Proceedings)},
+  year      = {1972},
+  volume    = {75},
+  number    = {5},
+  pages     = {381--392},
+  doi       = {10.1016/1385-7258(72)90034-0}
+}
+
+%% verified: OpenLibrary work OL6527094W edition (Bibliopolis, Napoli, 1984, Studies in Proof Theory, by-statement with the Sambin note).
+@book{martinlof1984,
+  author    = {Martin-L{\"o}f, Per},
+  title     = {Intuitionistic Type Theory},
+  year      = {1984},
+  publisher = {Bibliopolis},
+  address   = {Naples},
+  series    = {Studies in Proof Theory},
+  note      = {Notes by Giovanni Sambin of a series of lectures given in Padua, June 1980}
+}
+
+%% verified: Crossref 10.1016/0304-3975(87)90045-4 (title, authors, year, venue, volume, issue, pages).
+@article{girard1987linear,
+  author    = {Girard, Jean-Yves},
+  title     = {Linear Logic},
+  journal   = {Theoretical Computer Science},
+  year      = {1987},
+  volume    = {50},
+  number    = {1},
+  pages     = {1--101},
+  doi       = {10.1016/0304-3975(87)90045-4}
+}
+
+%% verified: Crossref 10.1016/0890-5401(88)90005-3 (title, authors, year, venue, volume, issue, pages).
+@article{coquand1988,
+  author    = {Coquand, Thierry and Huet, G{\'e}rard},
+  title     = {The Calculus of Constructions},
+  journal   = {Information and Computation},
+  year      = {1988},
+  volume    = {76},
+  number    = {2--3},
+  pages     = {95--120},
+  doi       = {10.1016/0890-5401(88)90005-3}
+}
+
+%% verified: Crossref 10.1007/BFb0014058 (title, author, pages, year, publisher); LNCS volume 902 and editors Dezani-Ciancaglini, Plotkin from the Crossref unixsd XML (2026-10-08).
+@inproceedings{hurkens1995,
+  author    = {Hurkens, Antonius J. C.},
+  title     = {A Simplification of {Girard's} Paradox},
+  booktitle = {Typed Lambda Calculi and Applications ({TLCA} '95)},
+  editor    = {Dezani-Ciancaglini, Mariangiola and Plotkin, Gordon},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {902},
+  pages     = {266--278},
+  publisher = {Springer},
+  year      = {1995},
+  doi       = {10.1007/BFb0014058}
+}
+
+%% verified: Crossref 10.1007/BFb0037116 (title, author, pages); year 1993, LNCS 664, editors and TLCA '93 from the book record 10.1007/BFb0037093.
+@inproceedings{paulinmohring1993,
+  author    = {Paulin-Mohring, Christine},
+  title     = {Inductive Definitions in the System {Coq} -- Rules and Properties},
+  booktitle = {Typed Lambda Calculi and Applications ({TLCA} '93)},
+  editor    = {Bezem, Marc and Groote, Jan Friso},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {664},
+  pages     = {328--345},
+  publisher = {Springer},
+  year      = {1993},
+  doi       = {10.1007/BFb0037116}
+}
+
+%% verified: Crossref 10.1007/BFb0014566 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{werner1997,
+  author    = {Werner, Benjamin},
+  title     = {Sets in Types, Types in Sets},
+  booktitle = {Theoretical Aspects of Computer Software ({TACS} '97)},
+  editor    = {Abadi, Mart{\'\i}n and Ito, Takayasu},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {1281},
+  pages     = {530--546},
+  publisher = {Springer},
+  year      = {1997},
+  doi       = {10.1007/BFb0014566}
+}
+
+%% verified: OpenLibrary ISBN 9780262162098 (title, author Benjamin C. Pierce, The MIT Press, 2002).
+@book{pierce2002tapl,
+  author    = {Pierce, Benjamin C.},
+  title     = {Types and Programming Languages},
+  year      = {2002},
+  publisher = {MIT Press},
+  address   = {Cambridge, MA},
+  isbn      = {978-0-262-16209-8}
+}
+
+%% verified: Crossref 10.1007/978-3-662-07964-5 (title, authors, year, series); subtitle from OpenLibrary ISBN 3540208542.
+@book{bertot2004coqart,
+  author    = {Bertot, Yves and Cast{\'e}ran, Pierre},
+  title     = {Interactive Theorem Proving and Program Development: {Coq'Art}: The Calculus of Inductive Constructions},
+  year      = {2004},
+  publisher = {Springer},
+  address   = {Berlin},
+  series    = {Texts in Theoretical Computer Science. An EATCS Series},
+  doi       = {10.1007/978-3-662-07964-5}
+}
+
+%% verified: title page of the PDF at the url (Habilitationsschrift, LMU Muenchen); year from the author homepage ("My Habilitation 31st May 2013").
+@phdthesis{abel2013,
+  author    = {Abel, Andreas},
+  title     = {Normalization by Evaluation: Dependent Types and Impredicativity},
+  year      = {2013},
+  school    = {Ludwig-Maximilians-Universit{\"a}t M{\"u}nchen},
+  type      = {Habilitation thesis},
+  url       = {https://www.cse.chalmers.se/~abela/habil.pdf}
+}
+
+%% verified: Crossref 10.1145/2699407 (title, authors, year, venue, volume, issue, pages).
+@article{wadler2015propositions,
+  author    = {Wadler, Philip},
+  title     = {Propositions as Types},
+  journal   = {Communications of the ACM},
+  year      = {2015},
+  volume    = {58},
+  number    = {12},
+  pages     = {75--84},
+  doi       = {10.1145/2699407}
+}
+
+%% verified: Crossref 10.1145/2500365.2500582 (title, authors, year, venue, pages).
+@inproceedings{dunfield2013bidir,
+  author    = {Dunfield, Jana and Krishnaswami, Neelakantan R.},
+  title     = {Complete and Easy Bidirectional Typechecking for Higher-Rank Polymorphism},
+  booktitle = {Proceedings of the 18th {ACM} {SIGPLAN} International Conference on Functional Programming ({ICFP} 2013)},
+  year      = {2013},
+  pages     = {429--442},
+  publisher = {ACM},
+  doi       = {10.1145/2500365.2500582}
+}
+
+%% =====================================================================
+%% Dependently typed languages and proof assistants
+%% =====================================================================
+
+%% verified: Crossref 10.1145/289423.289451 (title, authors, year, venue, pages).
+@inproceedings{augustsson1998cayenne,
+  author    = {Augustsson, Lennart},
+  title     = {{Cayenne} -- A Language with Dependent Types},
+  booktitle = {Proceedings of the Third {ACM} {SIGPLAN} International Conference on Functional Programming ({ICFP} 1998)},
+  year      = {1998},
+  pages     = {239--250},
+  publisher = {ACM},
+  doi       = {10.1145/289423.289451}
+}
+
+%% verified: title page of cse.chalmers.se/~ulfn/papers/thesis.pdf (PhD thesis, Chalmers University of Technology and Goteborg University, 2007).
+@phdthesis{norell2007,
+  author    = {Norell, Ulf},
+  title     = {Towards a Practical Programming Language Based on Dependent Type Theory},
+  school    = {Chalmers University of Technology and G{\"o}teborg University},
+  address   = {G{\"o}teborg, Sweden},
+  year      = {2007}
+}
+
+%% verified: Crossref 10.1007/11780274_27 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@incollection{goguen2006eliminating,
+  author    = {Goguen, Healfdene and McBride, Conor and McKinna, James},
+  title     = {Eliminating Dependent Pattern Matching},
+  booktitle = {Algebra, Meaning, and Computation: Essays Dedicated to {Joseph A. Goguen} on the Occasion of His 65th Birthday},
+  editor    = {Futatsugi, Kokichi and Jouannaud, Jean-Pierre and Meseguer, Jos{\'e}},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {4060},
+  pages     = {521--540},
+  publisher = {Springer},
+  year      = {2006},
+  doi       = {10.1007/11780274_27}
+}
+
+%% verified: Crossref 10.1007/3-540-39185-1_12 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{letouzey2003extraction,
+  author    = {Letouzey, Pierre},
+  title     = {A New Extraction for {Coq}},
+  booktitle = {Types for Proofs and Programs: International Workshop, {TYPES} 2002},
+  editor    = {Geuvers, Herman and Wiedijk, Freek},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {2646},
+  pages     = {200--219},
+  publisher = {Springer},
+  year      = {2003},
+  doi       = {10.1007/3-540-39185-1_12}
+}
+
+%% verified: Crossref 10.1017/S095679681300018X (title, authors, year, venue, volume, issue, pages).
+@article{brady2013,
+  author    = {Brady, Edwin},
+  title     = {{Idris}, a General-Purpose Dependently Typed Programming Language: Design and Implementation},
+  journal   = {Journal of Functional Programming},
+  year      = {2013},
+  volume    = {23},
+  number    = {5},
+  pages     = {552--593},
+  doi       = {10.1017/S095679681300018X}
+}
+
+%% verified: Crossref 10.1007/978-3-319-21401-6_26 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{lean2015,
+  author    = {de Moura, Leonardo and Kong, Soonho and Avigad, Jeremy and van Doorn, Floris and von Raumer, Jakob},
+  title     = {The {Lean} Theorem Prover (System Description)},
+  booktitle = {Automated Deduction -- {CADE-25}},
+  editor    = {Felty, Amy P. and Middeldorp, Aart},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {9195},
+  pages     = {378--388},
+  publisher = {Springer},
+  year      = {2015},
+  doi       = {10.1007/978-3-319-21401-6_26}
+}
+
+%% verified: Crossref 10.1007/978-3-030-79876-5_37 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{lean42021,
+  author    = {de Moura, Leonardo and Ullrich, Sebastian},
+  title     = {The {Lean 4} Theorem Prover and Programming Language},
+  booktitle = {Automated Deduction -- {CADE} 28},
+  editor    = {Platzer, Andr{\'e} and Sutcliffe, Geoff},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {12699},
+  pages     = {625--635},
+  publisher = {Springer},
+  year      = {2021},
+  doi       = {10.1007/978-3-030-79876-5_37}
+}
+
+%% =====================================================================
+%% L1 -- Linear and dependent type theories
+%% (linear logical frameworks, QTT, graded dependent types, practical
+%%  linear/uniqueness/graded languages, dependent types with ownership)
+%% =====================================================================
+
+%% Pages omitted: unverifiable (the submitted entry's 561--581 and the 347--359
+%% printed in some reference lists disagree; the author's page gives none).
+%% verified: author page homepages.inf.ed.ac.uk/wadler/topics/linear-logic.html and OpenLibrary work OL4477715W (subtitle, editors M. Broy and C.B. Jones, North-Holland, Amsterdam, 1990); no page range verifiable.
+@inproceedings{wadler1990,
+  author    = {Wadler, Philip},
+  title     = {Linear Types Can Change the World!},
+  booktitle = {Programming Concepts and Methods: Proceedings of the {IFIP Working Group 2.2/2.3} Working Conference on Programming Concepts and Methods},
+  editor    = {Broy, M. and Jones, C. B.},
+  publisher = {North-Holland},
+  address   = {Amsterdam},
+  year      = {1990}
+}
+
+%% Pages from the MIT Press Crossref record of the chapter (3-44); the book's table of contents starts
+%% chapter 2 on p. 45. Year: the book's copyright page says 2005; Crossref/OpenLibrary give 2004-12-23.
+%% verified: Crossref 10.7551/mitpress/1104.003.0003 (title, pages 3-44, book, editor Pierce; no author in record); author from the book front matter (cis.upenn.edu/~bcpierce/attapl/frontmatter.pdf); ISBN via OpenLibrary; year = copyright year 2005 (Crossref: 2004-12-23).
+@incollection{walker2005,
+  author    = {Walker, David},
+  title     = {Substructural Type Systems},
+  booktitle = {Advanced Topics in Types and Programming Languages},
+  editor    = {Pierce, Benjamin C.},
+  publisher = {MIT Press},
+  address   = {Cambridge, MA},
+  year      = {2005},
+  pages     = {3--44},
+  isbn      = {978-0-262-16228-9},
+  doi       = {10.7551/mitpress/1104.003.0003}
+}
+
+%% verified: Crossref 10.1145/1926385.1926436 (title, authors, year, venue, pages).
+@inproceedings{tov2011practical,
+  author    = {Tov, Jesse A. and Pucella, Riccardo},
+  title     = {Practical Affine Types},
+  booktitle = {Proceedings of the 38th Annual {ACM} {SIGPLAN-SIGACT} Symposium on Principles of Programming Languages ({POPL} 2011)},
+  year      = {2011},
+  pages     = {447--458},
+  publisher = {ACM},
+  doi       = {10.1145/1926385.1926436}
+}
+
+%% verified: Crossref 10.1007/978-3-319-30936-1_12 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@incollection{mcbride2016,
+  author    = {McBride, Conor},
+  title     = {{I} Got Plenty o' Nuttin'},
+  booktitle = {A List of Successes That Can Change the World: Essays Dedicated to {Philip Wadler} on the Occasion of His 60th Birthday},
+  editor    = {Lindley, Sam and McBride, Conor and Trinder, Phil and Sannella, Don},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {9600},
+  pages     = {207--233},
+  publisher = {Springer},
+  year      = {2016},
+  doi       = {10.1007/978-3-319-30936-1_12}
+}
+
+%% verified: Crossref 10.1145/3209108.3209189 (title, authors, year, venue, pages).
+@inproceedings{atkey2018,
+  author    = {Atkey, Robert},
+  title     = {Syntax and Semantics of Quantitative Type Theory},
+  booktitle = {Proceedings of the 33rd Annual {ACM/IEEE} Symposium on Logic in Computer Science ({LICS} 2018)},
+  year      = {2018},
+  pages     = {56--65},
+  publisher = {ACM},
+  doi       = {10.1145/3209108.3209189}
+}
+
+%% Journal version of Cervesato & Pfenning, LICS 1996 (doi 10.1109/LICS.1996.561339), same title.
+%% verified: Crossref 10.1006/inco.2001.2951 (title, authors, year, venue, volume, issue, pages).
+@article{cervesato2002llf,
+  author    = {Cervesato, Iliano and Pfenning, Frank},
+  title     = {A Linear Logical Framework},
+  journal   = {Information and Computation},
+  year      = {2002},
+  volume    = {179},
+  number    = {1},
+  pages     = {19--75},
+  doi       = {10.1006/inco.2001.2951}
+}
+
+%% verified: Crossref 10.1145/2676726.2676969 (title, authors, year, venue, pages).
+@inproceedings{krishnaswami2015integrating,
+  author    = {Krishnaswami, Neelakantan R. and Pradic, C{\'e}cilia and Benton, Nick},
+  title     = {Integrating Linear and Dependent Types},
+  booktitle = {Proceedings of the 42nd Annual {ACM} {SIGPLAN-SIGACT} Symposium on Principles of Programming Languages ({POPL} 2015)},
+  year      = {2015},
+  pages     = {17--30},
+  publisher = {ACM},
+  doi       = {10.1145/2676726.2676969}
+}
+
+%% verified: Crossref 10.1007/978-3-662-46678-0_7 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{vakar2015categorical,
+  author    = {V{\'a}k{\'a}r, Matthijs},
+  title     = {A Categorical Semantics for Linear Logical Frameworks},
+  booktitle = {Foundations of Software Science and Computation Structures ({FoSSaCS} 2015)},
+  editor    = {Pitts, Andrew},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {9034},
+  pages     = {102--116},
+  publisher = {Springer},
+  year      = {2015},
+  doi       = {10.1007/978-3-662-46678-0_7}
+}
+
+%% verified: DataCite 10.48550/arXiv.1405.0033 (title, author, v1 2014).
+@misc{vakar2014syntax,
+  author       = {V{\'a}k{\'a}r, Matthijs},
+  title        = {Syntax and Semantics of Linear Dependent Types},
+  year         = {2014},
+  howpublished = {arXiv preprint arXiv:1405.0033},
+  doi          = {10.48550/arXiv.1405.0033},
+  url          = {https://arxiv.org/abs/1405.0033}
+}
+
+%% Journal version of Fu, Kishida & Selinger, LICS 2020 (doi 10.1145/3373718.3394765); pages from the LMCS article header.
+%% verified: Crossref 10.46298/lmcs-18(3:28)2022 (title, authors, year, journal); volume/issue/pages from the LMCS PDF header (pp. 28:1-28:44).
+@article{fu2022linear,
+  author    = {Fu, Peng and Kishida, Kohei and Selinger, Peter},
+  title     = {Linear Dependent Type Theory for Quantum Programming Languages},
+  journal   = {Logical Methods in Computer Science},
+  year      = {2022},
+  volume    = {18},
+  number    = {3},
+  pages     = {28:1--28:44},
+  doi       = {10.46298/lmcs-18(3:28)2022}
+}
+
+%% verified: Crossref 10.1007/978-3-030-72019-3_17 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{moon2021grtt,
+  author    = {Moon, Benjamin and Eades~III, Harley and Orchard, Dominic},
+  title     = {Graded Modal Dependent Type Theory},
+  booktitle = {Programming Languages and Systems: 30th {European} Symposium on Programming ({ESOP} 2021)},
+  editor    = {Yoshida, Nobuko},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {12648},
+  pages     = {462--490},
+  publisher = {Springer},
+  year      = {2021},
+  doi       = {10.1007/978-3-030-72019-3_17}
+}
+
+%% Article number not given: the author copy prints "Article 1" (possibly the acmart default); not confirmed elsewhere.
+%% verified: Crossref 10.1145/3434331 (title, authors, year, venue, volume, issue, pages).
+@article{choudhury2021grad,
+  author    = {Choudhury, Pritam and Eades~III, Harley and Eisenberg, Richard A. and Weirich, Stephanie},
+  title     = {A Graded Dependent Type System with a Usage-Aware Semantics},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2021},
+  volume    = {5},
+  number    = {POPL},
+  pages     = {1--32},
+  doi       = {10.1145/3434331}
+}
+
+%% verified: Crossref 10.1145/3607862 (title, authors, year, venue, volume, issue, pages).
+@article{abel2023graded,
+  author    = {Abel, Andreas and Danielsson, Nils Anders and Eriksson, Oskar},
+  title     = {A Graded Modal Dependent Type Theory with a Universe and Erasure, Formalized},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2023},
+  volume    = {7},
+  number    = {ICFP},
+  pages     = {920--954},
+  doi       = {10.1145/3607862}
+}
+
+%% verified: Crossref 10.1145/3819821 (title, authors, 2026, TOCL 27(3):1-33); arXiv 2309.08673v2 same title and authors; doi.org resolves to dl.acm.org.
+@article{fu2026twolevel,
+  author    = {Fu, Qiancheng and Xi, Hongwei},
+  title     = {A Two-Level Linear Dependent Type Theory},
+  journal   = {ACM Transactions on Computational Logic},
+  year      = {2026},
+  volume    = {27},
+  number    = {3},
+  pages     = {1--33},
+  doi       = {10.1145/3819821}
+}
+
+%% verified: DataCite 10.4230/LIPIcs.ECOOP.2021.9 (title, author, year, LIPIcs 194, 9:1-9:26, 35th ECOOP 2021).
+@inproceedings{brady2021,
+  author    = {Brady, Edwin},
+  title     = {{Idris 2}: Quantitative Type Theory in Practice},
+  booktitle = {35th {European} Conference on Object-Oriented Programming ({ECOOP} 2021)},
+  series    = {Leibniz International Proceedings in Informatics (LIPIcs)},
+  volume    = {194},
+  pages     = {9:1--9:26},
+  publisher = {Schloss Dagstuhl -- Leibniz-Zentrum f{\"u}r Informatik},
+  year      = {2021},
+  doi       = {10.4230/LIPIcs.ECOOP.2021.9}
+}
+
+%% verified: Crossref 10.1145/3158093 (title, authors, year, venue, volume, issue, page count); article number from the ACM Reference Format/footer of the paper PDF.
+@article{bernardy2018,
+  author    = {Bernardy, Jean-Philippe and Boespflug, Mathieu and Newton, Ryan R. and Peyton Jones, Simon and Spiwack, Arnaud},
+  title     = {Linear {Haskell}: Practical Linearity in a Higher-Order Polymorphic Language},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2018},
+  volume    = {2},
+  number    = {POPL},
+  pages     = {5:1--5:29},
+  doi       = {10.1145/3158093}
+}
+
+%% verified: Crossref 10.1145/3341714 (title, authors, year, venue, volume, issue, page count); article number from the ACM Reference Format/footer of the paper PDF.
+@article{orchard2019granule,
+  author    = {Orchard, Dominic and Liepelt, Vilem-Benjamin and Eades~III, Harley},
+  title     = {Quantitative Program Reasoning with Graded Modal Types},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2019},
+  volume    = {3},
+  number    = {ICFP},
+  pages     = {110:1--110:30},
+  doi       = {10.1145/3341714}
+}
+
+%% First author's name as in the publisher's (Springer) current Crossref record.
+%% verified: Crossref 10.1007/978-3-030-99336-8_13 (title, authors incl. given name Danielle, year, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{marshall2022,
+  author    = {Marshall, Danielle and Vollmer, Michael and Orchard, Dominic},
+  title     = {Linearity and Uniqueness: An Entente Cordiale},
+  booktitle = {Programming Languages and Systems: 31st {European} Symposium on Programming ({ESOP} 2022)},
+  editor    = {Sergey, Ilya},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {13240},
+  pages     = {346--375},
+  publisher = {Springer},
+  year      = {2022},
+  doi       = {10.1007/978-3-030-99336-8_13}
+}
+
+%% ACM's Crossref record lists "Daniel Marshall"; arXiv:2310.18166v2 and the
+%% current Springer record of marshall2022 use "Danielle Marshall".
+%% verified: Crossref 10.1145/3649848 (title, family names, year, 8(OOPSLA1):1040-1070; Crossref given name "Daniel"); arXiv 2310.18166v2 lists "Danielle Marshall"; doi.org resolves to dl.acm.org.
+@article{marshall2024fractional,
+  author    = {Marshall, Danielle and Orchard, Dominic},
+  title     = {Functional Ownership through Fractional Uniqueness},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2024},
+  volume    = {8},
+  number    = {OOPSLA1},
+  pages     = {1040--1070},
+  doi       = {10.1145/3649848}
+}
+
+%% verified: Crossref 10.1145/3674642 (title, authors, 2024, 8(ICFP):485-514); doi.org resolves to dl.acm.org.
+@article{lorenzen2024oxidizing,
+  author    = {Lorenzen, Anton and White, Leo and Dolan, Stephen and Eisenberg, Richard A. and Lindley, Sam},
+  title     = {Oxidizing {OCaml} with Modal Memory Management},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2024},
+  volume    = {8},
+  number    = {ICFP},
+  pages     = {485--514},
+  doi       = {10.1145/3674642}
+}
+
+%% verified: Crossref 10.1145/3808259 (title, authors, 2026, 10(PLDI):303-327); arXiv 2604.15290v4 carries the same title, authors and DOI; doi.org resolves to dl.acm.org.
+@article{matsushita2026pureborrow,
+  author    = {Matsushita, Yusuke and Ishii, Hiromi},
+  title     = {Pure Borrow: Linear {Haskell} Meets {Rust}-Style Borrowing},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2026},
+  volume    = {10},
+  number    = {PLDI},
+  pages     = {303--327},
+  doi       = {10.1145/3808259}
+}
+
+%% verified: Crossref 10.1007/978-3-540-24849-1_25 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{xi2007ats,
+  author    = {Xi, Hongwei},
+  title     = {Applied Type System},
+  booktitle = {Types for Proofs and Programs: International Workshop, {TYPES} 2003},
+  editor    = {Berardi, Stefano and Coppo, Mario and Damiani, Ferruccio},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {3085},
+  pages     = {394--408},
+  publisher = {Springer},
+  year      = {2004},
+  doi       = {10.1007/978-3-540-24849-1_25}
+}
+
+%% verified: Crossref 10.1007/978-3-540-30557-6_8 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{zhu2005stateful,
+  author    = {Zhu, Dengping and Xi, Hongwei},
+  title     = {Safe Programming with Pointers through Stateful Views},
+  booktitle = {Practical Aspects of Declarative Languages ({PADL} 2005)},
+  editor    = {Hermenegildo, Manuel V. and Cabeza, Daniel},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {3350},
+  pages     = {83--97},
+  publisher = {Springer},
+  year      = {2005},
+  doi       = {10.1007/978-3-540-30557-6_8}
+}
+
+%% verified: Crossref 10.1145/1086365.1086375 (title, authors, year, venue, pages).
+@inproceedings{chen2005combining,
+  author    = {Chen, Chiyan and Xi, Hongwei},
+  title     = {Combining Programming with Theorem Proving},
+  booktitle = {Proceedings of the Tenth {ACM} {SIGPLAN} International Conference on Functional Programming ({ICFP} 2005)},
+  year      = {2005},
+  pages     = {66--77},
+  publisher = {ACM},
+  doi       = {10.1145/1086365.1086375}
+}
+
+%% verified: Crossref 10.1145/2500365.2500598 (title, authors, year, venue, pages).
+@inproceedings{pottier2013mezzo,
+  author    = {Pottier, Fran{\c{c}}ois and Protzenko, Jonathan},
+  title     = {Programming with Permissions in {Mezzo}},
+  booktitle = {Proceedings of the 18th {ACM} {SIGPLAN} International Conference on Functional Programming ({ICFP} 2013)},
+  year      = {2013},
+  pages     = {173--184},
+  publisher = {ACM},
+  doi       = {10.1145/2500365.2500598}
+}
+
+%% verified: Crossref 10.1145/2837022 (title, authors, year, venue, volume, issue, pages).
+@article{balabonski2016mezzo,
+  author    = {Balabonski, Thibaut and Pottier, Fran{\c{c}}ois and Protzenko, Jonathan},
+  title     = {The Design and Formalization of {Mezzo}, a Permission-Based Programming Language},
+  journal   = {ACM Transactions on Programming Languages and Systems},
+  year      = {2016},
+  volume    = {38},
+  number    = {4},
+  pages     = {1--94},
+  doi       = {10.1145/2837022}
+}
+
+%% verified: Crossref 10.1145/1159803.1159812 (title, authors, year, venue, pages).
+@inproceedings{nanevski2006htt,
+  author    = {Nanevski, Aleksandar and Morrisett, Greg and Birkedal, Lars},
+  title     = {Polymorphism and Separation in {Hoare} Type Theory},
+  booktitle = {Proceedings of the Eleventh {ACM} {SIGPLAN} International Conference on Functional Programming ({ICFP} 2006)},
+  year      = {2006},
+  pages     = {62--73},
+  publisher = {ACM},
+  doi       = {10.1145/1159803.1159812}
+}
+
+%% verified: Crossref 10.1017/S0956796808006953 (title, authors, year, venue, volume, issue, pages).
+@article{nanevski2008htt,
+  author    = {Nanevski, Aleksandar and Morrisett, Greg and Birkedal, Lars},
+  title     = {{Hoare} Type Theory, Polymorphism and Separation},
+  journal   = {Journal of Functional Programming},
+  year      = {2008},
+  volume    = {18},
+  number    = {5--6},
+  pages     = {865--911},
+  doi       = {10.1017/S0956796808006953}
+}
+
+%% verified: Crossref 10.1145/1411204.1411237 (title, authors, year, venue, pages).
+@inproceedings{nanevski2008ynot,
+  author    = {Nanevski, Aleksandar and Morrisett, Greg and Shinnar, Avraham and Govereau, Paul and Birkedal, Lars},
+  title     = {{Ynot}: Dependent Types for Imperative Programs},
+  booktitle = {Proceedings of the 13th {ACM} {SIGPLAN} International Conference on Functional Programming ({ICFP} 2008)},
+  year      = {2008},
+  pages     = {229--240},
+  publisher = {ACM},
+  doi       = {10.1145/1411204.1411237}
+}
+
+%% verified: Crossref 10.1145/3110261 (title, authors, year, venue, volume, issue, page count); article number from the ACM Reference Format/footer of the paper PDF.
+@article{protzenko2017lowstar,
+  author    = {Protzenko, Jonathan and Zinzindohou{\'e}, Jean-Karim and Rastogi, Aseem and Ramananandro, Tahina and Wang, Peng and Zanella-B{\'e}guelin, Santiago and Delignat-Lavaud, Antoine and Hri{\c{t}}cu, C{\u{a}}t{\u{a}}lin and Bhargavan, Karthikeyan and Fournet, C{\'e}dric and Swamy, Nikhil},
+  title     = {Verified Low-Level Programming Embedded in {F*}},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2017},
+  volume    = {1},
+  number    = {ICFP},
+  pages     = {17:1--17:29},
+  doi       = {10.1145/3110261}
+}
+
+%% verified: Crossref 10.1145/3409003 (title, authors, year, venue, volume, issue, page count); article number from the ACM Reference Format/footer of the paper PDF.
+@article{swamy2020steelcore,
+  author    = {Swamy, Nikhil and Rastogi, Aseem and Fromherz, Aymeric and Merigoux, Denis and Ahman, Danel and Mart{\'\i}nez, Guido},
+  title     = {{SteelCore}: An Extensible Concurrent Separation Logic for Effectful Dependently Typed Programs},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2020},
+  volume    = {4},
+  number    = {ICFP},
+  pages     = {121:1--121:30},
+  doi       = {10.1145/3409003}
+}
+
+%% verified: Crossref 10.1145/3473590 (title, authors, year, venue, volume, issue, page count); article number from the ACM Reference Format/footer of the paper PDF.
+@article{fromherz2021steel,
+  author    = {Fromherz, Aymeric and Rastogi, Aseem and Swamy, Nikhil and Gibson, Sydney and Mart{\'\i}nez, Guido and Merigoux, Denis and Ramananandro, Tahina},
+  title     = {{Steel}: Proof-Oriented Programming in a Dependently Typed Concurrent Separation Logic},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2021},
+  volume    = {5},
+  number    = {ICFP},
+  pages     = {85:1--85:30},
+  doi       = {10.1145/3473590}
+}
+
+%% verified: Crossref 10.1145/3729311 (title, authors, 2025, 9(PLDI):1516-1539); doi.org resolves to dl.acm.org.
+@article{ebner2025pulsecore,
+  author    = {Ebner, Gabriel and Mart{\'\i}nez, Guido and Rastogi, Aseem and Dardinier, Thibault and Frisella, Megan and Ramananandro, Tahina and Swamy, Nikhil},
+  title     = {{PulseCore}: An Impredicative Concurrent Separation Logic for Dependently Typed Programs},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2025},
+  volume    = {9},
+  number    = {PLDI},
+  pages     = {1516--1539},
+  doi       = {10.1145/3729311}
+}
+
+%% verified: Crossref 10.1145/3527313 (title, authors, year, venue, volume, issue, page count); article number from the ACM Reference Format/footer of the paper PDF.
+@article{li2022lineardafny,
+  author    = {Li, Jialin and Lattuada, Andrea and Zhou, Yi and Cameron, Jonathan and Howell, Jon and Parno, Bryan and Hawblitzel, Chris},
+  title     = {Linear Types for Large-Scale Systems Verification},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2022},
+  volume    = {6},
+  number    = {OOPSLA1},
+  pages     = {69:1--69:28},
+  doi       = {10.1145/3527313}
+}
+
+%% verified: Crossref 10.1145/2951913.2951940 (title, authors, year, venue, pages).
+@inproceedings{oconnor2016cogent,
+  author    = {O'Connor, Liam and Chen, Zilin and Rizkallah, Christine and Amani, Sidney and Lim, Japheth and Murray, Toby and Nagashima, Yutaka and Sewell, Thomas and Klein, Gerwin},
+  title     = {Refinement through Restraint: Bringing Down the Cost of Verification},
+  booktitle = {Proceedings of the 21st {ACM} {SIGPLAN} International Conference on Functional Programming ({ICFP} 2016)},
+  year      = {2016},
+  pages     = {89--102},
+  publisher = {ACM},
+  doi       = {10.1145/2951913.2951940}
+}
+
+%% verified: Crossref 10.1145/378795.378811 (title, authors, year, venue, pages).
+@inproceedings{deline2001vault,
+  author    = {DeLine, Robert and F{\"a}hndrich, Manuel},
+  title     = {Enforcing High-Level Protocols in Low-Level Software},
+  booktitle = {Proceedings of the {ACM} {SIGPLAN} 2001 Conference on Programming Language Design and Implementation ({PLDI} 2001)},
+  year      = {2001},
+  pages     = {59--69},
+  publisher = {ACM},
+  doi       = {10.1145/378795.378811}
+}
+
+%% verified: Crossref 10.1007/3-540-46425-5_24 (title, authors, year, pages); series volume and editors from the Crossref unixsd XML of the book; venue ESOP 2000 via Semantic Scholar.
+@inproceedings{smith2000alias,
+  author    = {Smith, Frederick and Walker, David and Morrisett, Greg},
+  title     = {Alias Types},
+  booktitle = {Programming Languages and Systems: {European} Symposium on Programming ({ESOP} 2000)},
+  editor    = {Smolka, Gert},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {1782},
+  pages     = {366--381},
+  publisher = {Springer},
+  year      = {2000},
+  doi       = {10.1007/3-540-46425-5_24}
+}
+
+%% verified: Crossref 10.1145/2003476.2003499 (title, authors, year, venue, pages).
+@inproceedings{toninho2011dependent,
+  author    = {Toninho, Bernardo and Caires, Lu{\'\i}s and Pfenning, Frank},
+  title     = {Dependent Session Types via Intuitionistic Linear Type Theory},
+  booktitle = {Proceedings of the 13th International {ACM} {SIGPLAN} Symposium on Principles and Practices of Declarative Programming ({PPDP} 2011)},
+  year      = {2011},
+  pages     = {161--172},
+  publisher = {ACM},
+  doi       = {10.1145/2003476.2003499}
+}
+
+%% =====================================================================
+%% L2 -- Refinement types and verification for Rust
+%% =====================================================================
+
+%% verified: Crossref 10.1145/3591283 (title, authors, year, venue, volume, issue, pages).
+@article{lehmann2023flux,
+  author    = {Lehmann, Nico and Geller, Adam T. and Vazou, Niki and Jhala, Ranjit},
+  title     = {{Flux}: Liquid Types for {Rust}},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2023},
+  volume    = {7},
+  number    = {PLDI},
+  pages     = {1533--1557},
+  doi       = {10.1145/3591283}
+}
+
+%% verified: Crossref 10.1145/3729333 (title, authors, 2025, 9(PLDI):2056-2080); doi.org resolves to dl.acm.org.
+@article{ogawa2025thrust,
+  author    = {Ogawa, Hiromi and Sekiyama, Taro and Unno, Hiroshi},
+  title     = {{Thrust}: A Prophecy-Based Refinement Type System for {Rust}},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2025},
+  volume    = {9},
+  number    = {PLDI},
+  pages     = {2056--2080},
+  doi       = {10.1145/3729333}
+}
+
+%% Article number not given: not confirmed from a primary source in this session.
+%% verified: Crossref 10.1145/3360573 (title, authors, year, venue, volume, issue, pages).
+@article{astrauskas2019prusti,
+  author    = {Astrauskas, Vytautas and M{\"u}ller, Peter and Poli, Federico and Summers, Alexander J.},
+  title     = {Leveraging {Rust} Types for Modular Specification and Verification},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2019},
+  volume    = {3},
+  number    = {OOPSLA},
+  pages     = {1--30},
+  doi       = {10.1145/3360573}
+}
+
+%% verified: Crossref 10.1007/978-3-031-17244-1_6 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{denis2022creusot,
+  author    = {Denis, Xavier and Jourdan, Jacques-Henri and March{\'e}, Claude},
+  title     = {{Creusot}: A Foundry for the Deductive Verification of {Rust} Programs},
+  booktitle = {Formal Methods and Software Engineering: 23rd International Conference on Formal Engineering Methods ({ICFEM} 2022)},
+  editor    = {Riesco, Adrian and Zhang, Min},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {13478},
+  pages     = {90--105},
+  publisher = {Springer},
+  year      = {2022},
+  doi       = {10.1007/978-3-031-17244-1_6}
+}
+
+%% verified: Crossref 10.1145/3586037 (title, authors, year, venue, volume, issue, pages).
+@article{lattuada2023verus,
+  author    = {Lattuada, Andrea and Hance, Travis and Cho, Chanhee and Brun, Matthias and Subasinghe, Isitha and Zhou, Yi and Howell, Jon and Parno, Bryan and Hawblitzel, Chris},
+  title     = {{Verus}: Verifying {Rust} Programs Using Linear Ghost Types},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2023},
+  volume    = {7},
+  number    = {OOPSLA1},
+  pages     = {286--315},
+  doi       = {10.1145/3586037}
+}
+
+%% verified: Crossref 10.1145/3694715.3695952 (title, authors, year, venue, pages).
+@inproceedings{lattuada2024verussosp,
+  author    = {Lattuada, Andrea and Hance, Travis and Bosamiya, Jay and Brun, Matthias and Cho, Chanhee and LeBlanc, Hayley and Srinivasan, Pranav and Achermann, Reto and Chajed, Tej and Hawblitzel, Chris and Howell, Jon and Lorch, Jacob R. and Padon, Oded and Parno, Bryan},
+  title     = {{Verus}: A Practical Foundation for Systems Verification},
+  booktitle = {Proceedings of the {ACM} {SIGOPS} 30th Symposium on Operating Systems Principles ({SOSP} 2024)},
+  year      = {2024},
+  pages     = {438--454},
+  publisher = {ACM},
+  doi       = {10.1145/3694715.3695952}
+}
+
+%% Conference version; the journal version is ACM TOPLAS 43(4):1--54, 2021 (doi 10.1145/3462205), same title.
+%% verified: Crossref 10.1007/978-3-030-44914-8_18 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{matsushita2020rusthorn,
+  author    = {Matsushita, Yusuke and Tsukada, Takeshi and Kobayashi, Naoki},
+  title     = {{RustHorn}: {CHC}-Based Verification for {Rust} Programs},
+  booktitle = {Programming Languages and Systems: 29th {European} Symposium on Programming ({ESOP} 2020)},
+  editor    = {M{\"u}ller, Peter},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {12075},
+  pages     = {484--514},
+  publisher = {Springer},
+  year      = {2020},
+  doi       = {10.1007/978-3-030-44914-8_18}
+}
+
+%% verified: Crossref 10.1145/3547647 (title, authors, year, venue, volume, issue, pages).
+@article{ho2022aeneas,
+  author    = {Ho, Son and Protzenko, Jonathan},
+  title     = {{Aeneas}: {Rust} Verification by Functional Translation},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2022},
+  volume    = {6},
+  number    = {ICFP},
+  pages     = {711--741},
+  doi       = {10.1145/3547647}
+}
+
+%% verified: Crossref 10.1145/3656422 (title, authors, year, venue, volume, issue, pages).
+@article{gaher2024refinedrust,
+  author    = {G{\"a}her, Lennard and Sammler, Michael and Jung, Ralf and Krebbers, Robbert and Dreyer, Derek},
+  title     = {{RefinedRust}: A Type System for High-Assurance Verification of {Rust} Programs},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2024},
+  volume    = {8},
+  number    = {PLDI},
+  pages     = {1115--1139},
+  doi       = {10.1145/3656422}
+}
+
+%% verified: Crossref 10.1145/3453483.3454036 (title, authors, year, venue, pages).
+@inproceedings{sammler2021refinedc,
+  author    = {Sammler, Michael and Lepigre, Rodolphe and Krebbers, Robbert and Memarian, Kayvan and Dreyer, Derek and Garg, Deepak},
+  title     = {{RefinedC}: Automating the Foundational Verification of {C} Code with Refined Ownership Types},
+  booktitle = {Proceedings of the 42nd {ACM} {SIGPLAN} International Conference on Programming Language Design and Implementation ({PLDI} 2021)},
+  year      = {2021},
+  pages     = {158--174},
+  publisher = {ACM},
+  doi       = {10.1145/3453483.3454036}
+}
+
+%% Kani model checker.
+%% verified: Crossref 10.1145/3510457.3513031 (title, authors, year, venue, pages).
+@inproceedings{vanhattum2022kani,
+  author    = {VanHattum, Alexa and Schwartz-Narbonne, Daniel and Chong, Nathan and Sampson, Adrian},
+  title     = {Verifying Dynamic Trait Objects in {Rust}},
+  booktitle = {Proceedings of the 44th International Conference on Software Engineering: Software Engineering in Practice ({ICSE-SEIP} 2022)},
+  year      = {2022},
+  pages     = {321--330},
+  publisher = {ACM},
+  doi       = {10.1145/3510457.3513031}
+}
+
+%% =====================================================================
+%% Rust: formal models, aliasing models, borrow checking, MIR
+%% (listed under L2 in CHANGE_LIST.md section 4)
+%% =====================================================================
+
+%% verified: Crossref 10.1145/3158154 (title, authors, year, venue, volume, issue, page count); article number from the ACM Reference Format/footer of the paper PDF.
+@article{jung2018rustbelt,
+  author    = {Jung, Ralf and Jourdan, Jacques-Henri and Krebbers, Robbert and Dreyer, Derek},
+  title     = {{RustBelt}: Securing the Foundations of the {Rust} Programming Language},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2018},
+  volume    = {2},
+  number    = {POPL},
+  pages     = {66:1--66:34},
+  doi       = {10.1145/3158154}
+}
+
+%% arXiv v4 (2021-10-19); the v1 (2019) author list differs (it included Matsakis
+%% and not Gierczak). No peer-reviewed venue found.
+%% verified: DataCite 10.48550/arXiv.1903.00982 (current authors; v4 submitted 2021-10-19); v1 authors from arxiv.org/abs/1903.00982v1 meta tags.
+@misc{weiss2021oxide,
+  author       = {Weiss, Aaron and Gierczak, Olek and Patterson, Daniel and Ahmed, Amal},
+  title        = {{Oxide}: The Essence of {Rust}},
+  year         = {2021},
+  howpublished = {arXiv preprint arXiv:1903.00982v4},
+  doi          = {10.48550/arXiv.1903.00982},
+  url          = {https://arxiv.org/abs/1903.00982}
+}
+
+%% verified: Crossref 10.1145/3371109 (title, authors, year, venue, volume, issue, page count); article number from the ACM Reference Format/footer of the paper PDF.
+@article{jung2020stacked,
+  author    = {Jung, Ralf and Dang, Hoang-Hai and Kang, Jeehoon and Dreyer, Derek},
+  title     = {Stacked Borrows: An Aliasing Model for {Rust}},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2020},
+  volume    = {4},
+  number    = {POPL},
+  pages     = {41:1--41:32},
+  doi       = {10.1145/3371109}
+}
+
+%% verified: Crossref 10.1145/3735592 (title, authors, 2025, 9(PLDI):1019-1042); doi.org resolves to dl.acm.org.
+@article{villani2025treeborrows,
+  author    = {Villani, Neven and Hostert, Johannes and Dreyer, Derek and Jung, Ralf},
+  title     = {Tree Borrows},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2025},
+  volume    = {9},
+  number    = {PLDI},
+  pages     = {1019--1042},
+  doi       = {10.1145/3735592}
+}
+
+%% verified: the url (HTTP 200; page title and date 27 April 2018); author from the blog about page and Crossref 10.1145/2663171.2663188 (full name).
+@misc{polonius2018,
+  author       = {Matsakis, Nicholas D.},
+  title        = {An Alias-Based Formulation of the Borrow Checker},
+  year         = {2018},
+  month        = apr,
+  howpublished = {Blog post, \emph{baby steps}},
+  url          = {https://smallcultfollowing.com/babysteps/blog/2018/04/27/an-alias-based-formulation-of-the-borrow-checker/},
+  note         = {Accessed 2026-10-05}
+}
+
+%% Author = opener of rust-lang/rfcs PR #2094 (nikomatsakis; label T-lang; merged 2017-09-29).
+%% verified: the url (Start Date 2017-08-02); GitHub API rust-lang/rfcs pull 2094 (author nikomatsakis, merged 2017-09-29).
+@misc{rfc2094,
+  author       = {Matsakis, Nicholas D.},
+  title        = {{RFC 2094}: Non-Lexical Lifetimes},
+  year         = {2017},
+  howpublished = {Rust RFC},
+  url          = {https://rust-lang.github.io/rfcs/2094-nll.html},
+  note         = {Accessed 2026-10-05}
+}
+
+%% Author = opener of rust-lang/rfcs PR #1211 (nikomatsakis; label T-compiler; merged 2015-08-14).
+%% verified: the url (Start Date 2015-07-14); GitHub API rust-lang/rfcs pull 1211 (author nikomatsakis, merged 2015-08-14).
+@misc{rfc1211,
+  author       = {Matsakis, Nicholas D.},
+  title        = {{RFC 1211}: {MIR}},
+  year         = {2015},
+  howpublished = {Rust RFC},
+  url          = {https://rust-lang.github.io/rfcs/1211-mir.html},
+  note         = {Accessed 2026-10-05}
+}
+
+%% verified: Crossref 10.1006/inco.1996.2613 (title, authors, year, venue, volume, issue, pages).
+@article{tofte1997,
+  author    = {Tofte, Mads and Talpin, Jean-Pierre},
+  title     = {Region-Based Memory Management},
+  journal   = {Information and Computation},
+  year      = {1997},
+  volume    = {132},
+  number    = {2},
+  pages     = {109--176},
+  doi       = {10.1006/inco.1996.2613}
+}
+
+%% verified: Crossref 10.1145/512529.512563 (title, authors, year, venue, pages).
+@inproceedings{grossman2002,
+  author    = {Grossman, Dan and Morrisett, Greg and Jim, Trevor and Hicks, Michael and Wang, Yanling and Cheney, James},
+  title     = {Region-Based Memory Management in {Cyclone}},
+  booktitle = {Proceedings of the {ACM} {SIGPLAN} 2002 Conference on Programming Language Design and Implementation ({PLDI} 2002)},
+  year      = {2002},
+  pages     = {282--293},
+  publisher = {ACM},
+  doi       = {10.1145/512529.512563}
+}
+
+%% =====================================================================
+%% L3 -- Dependent type systems through hygienic macros;
+%%       hygienic macro systems and typed metaprogramming
+%% =====================================================================
+
+%% verified: Crossref 10.1145/319838.319859 (title, authors, year, venue, pages).
+@inproceedings{kohlbecker1986,
+  author    = {Kohlbecker, Eugene and Friedman, Daniel P. and Felleisen, Matthias and Duba, Bruce},
+  title     = {Hygienic Macro Expansion},
+  booktitle = {Proceedings of the 1986 {ACM} Conference on {LISP} and Functional Programming ({LFP} '86)},
+  year      = {1986},
+  pages     = {151--161},
+  publisher = {ACM},
+  doi       = {10.1145/319838.319859}
+}
+
+%% verified: Crossref 10.1007/BF01806308 (title, authors, year, venue, volume, issue, pages).
+@article{dybvig1993,
+  author    = {Dybvig, R. Kent and Hieb, Robert and Bruggeman, Carl},
+  title     = {Syntactic Abstraction in {Scheme}},
+  journal   = {Lisp and Symbolic Computation},
+  year      = {1993},
+  volume    = {5},
+  number    = {4},
+  pages     = {295--326},
+  doi       = {10.1007/BF01806308}
+}
+
+%% Haskell Workshop version, matching the DOI. (The reprint is ACM SIGPLAN Notices
+%% 37(12):60--75, doi 10.1145/636517.636528.)
+%% verified: Crossref 10.1145/581690.581691 (title, authors, 2002, Haskell Workshop proceedings, pp. 1-16); reprint 10.1145/636517.636528 checked too.
+@inproceedings{sheard2002th,
+  author    = {Sheard, Tim and Peyton Jones, Simon},
+  title     = {Template Meta-Programming for {Haskell}},
+  booktitle = {Proceedings of the 2002 {ACM} {SIGPLAN} Workshop on {Haskell}},
+  year      = {2002},
+  pages     = {1--16},
+  publisher = {ACM},
+  doi       = {10.1145/581690.581691}
+}
+
+%% verified: Crossref 10.1145/1863543.1863577 (title, authors, year, venue, pages).
+@inproceedings{culpepper2010,
+  author    = {Culpepper, Ryan and Felleisen, Matthias},
+  title     = {Fortifying Macros},
+  booktitle = {Proceedings of the 15th {ACM} {SIGPLAN} International Conference on Functional Programming ({ICFP} 2010)},
+  year      = {2010},
+  pages     = {235--246},
+  publisher = {ACM},
+  doi       = {10.1145/1863543.1863577}
+}
+
+%% verified: Crossref 10.1145/2837614.2837620 (title, authors, year, venue, pages).
+@inproceedings{flatt2016scopes,
+  author    = {Flatt, Matthew},
+  title     = {Binding as Sets of Scopes},
+  booktitle = {Proceedings of the 43rd Annual {ACM} {SIGPLAN-SIGACT} Symposium on Principles of Programming Languages ({POPL} 2016)},
+  year      = {2016},
+  pages     = {705--717},
+  publisher = {ACM},
+  doi       = {10.1145/2837614.2837620}
+}
+
+%% verified: the url racket-lang.org/tr1/ (title, authors, number, institution, 2010).
+@techreport{racket2018,
+  author      = {Flatt, Matthew and {PLT}},
+  title       = {Reference: {Racket}},
+  institution = {PLT Design Inc.},
+  year        = {2010},
+  number      = {PLT-TR-2010-1},
+  url         = {https://racket-lang.org/tr1/}
+}
+
+%% verified: Crossref 10.1145/3009837.3009886 (title, authors, year, venue, pages).
+@inproceedings{chang2017turnstile,
+  author    = {Chang, Stephen and Knauth, Alex and Greenman, Ben},
+  title     = {Type Systems as Macros},
+  booktitle = {Proceedings of the 44th {ACM} {SIGPLAN} Symposium on Principles of Programming Languages ({POPL} 2017)},
+  year      = {2017},
+  pages     = {694--705},
+  publisher = {ACM},
+  doi       = {10.1145/3009837.3009886}
+}
+
+%% verified: Crossref 10.1145/3371071 (title, authors, year, venue, volume, issue, page count); article number from the ACM Reference Format/footer of the paper PDF.
+@article{chang2020dependent,
+  author    = {Chang, Stephen and Ballantyne, Michael and Turner, Milo and Bowman, William J.},
+  title     = {Dependent Type Systems as Macros},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2020},
+  volume    = {4},
+  number    = {POPL},
+  pages     = {3:1--3:29},
+  doi       = {10.1145/3371071}
+}
+
+%% Unpublished manuscript (PDF dated 2017/1/3 on the author's site) describing Cur.
+%% verified: the PDF at the url (title, author; date stamp 2017/1/3).
+@unpublished{bowman2017growing,
+  author    = {Bowman, William J.},
+  title     = {Growing a Proof Assistant},
+  year      = {2017},
+  note      = {Manuscript, \url{https://www.williamjbowman.com/resources/cur.pdf}; implementation: \url{https://github.com/wilbowma/cur}}
+}
+
+%% Software repository (GitHub API: created 2016-10-09); cited as software, no year.
+%% verified: GitHub API repos/lexi-lambda/hackett (description) and users/lexi-lambda (name Alexis King).
+@misc{king2017hackett,
+  author       = {King, Alexis},
+  title        = {Hackett},
+  howpublished = {Software repository, \url{https://github.com/lexi-lambda/hackett}},
+  note         = {Repository description: ``WIP implementation of a Haskell-like Lisp in Racket''. Accessed 2026-10-05}
+}
+
+%% verified: Crossref 10.1145/1328438.1328486 (title, authors, year, venue, pages).
+@inproceedings{tobinhochstadt2008typedscheme,
+  author    = {Tobin-Hochstadt, Sam and Felleisen, Matthias},
+  title     = {The Design and Implementation of {Typed Scheme}},
+  booktitle = {Proceedings of the 35th Annual {ACM} {SIGPLAN-SIGACT} Symposium on Principles of Programming Languages ({POPL} 2008)},
+  year      = {2008},
+  pages     = {395--406},
+  publisher = {ACM},
+  doi       = {10.1145/1328438.1328486}
+}
+
+%% verified: Crossref 10.1145/1993498.1993514 (title, authors, year, venue, pages).
+@inproceedings{tobinhochstadt2011languages,
+  author    = {Tobin-Hochstadt, Sam and St-Amour, Vincent and Culpepper, Ryan and Flatt, Matthew and Felleisen, Matthias},
+  title     = {Languages as Libraries},
+  booktitle = {Proceedings of the 32nd {ACM} {SIGPLAN} Conference on Programming Language Design and Implementation ({PLDI} 2011)},
+  year      = {2011},
+  pages     = {132--141},
+  publisher = {ACM},
+  doi       = {10.1145/1993498.1993514}
+}
+
+%% verified: Crossref 10.1145/2908080.2908091 (title, authors, year, venue, pages).
+@inproceedings{kent2016occurrence,
+  author    = {Kent, Andrew M. and Kempe, David and Tobin-Hochstadt, Sam},
+  title     = {Occurrence Typing Modulo Theories},
+  booktitle = {Proceedings of the 37th {ACM} {SIGPLAN} Conference on Programming Language Design and Implementation ({PLDI} 2016)},
+  year      = {2016},
+  pages     = {296--309},
+  publisher = {ACM},
+  doi       = {10.1145/2908080.2908091}
+}
+
+%% Article number not given: not confirmed from a primary source in this session.
+%% verified: Crossref 10.1145/3428297 (title, authors, year, venue, volume, issue, pages).
+@article{ballantyne2020macros,
+  author    = {Ballantyne, Michael and King, Alexis and Felleisen, Matthias},
+  title     = {Macros for Domain-Specific Languages},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2020},
+  volume    = {4},
+  number    = {OOPSLA},
+  pages     = {1--29},
+  doi       = {10.1145/3428297}
+}
+
+%% Journal version of Ullrich & de Moura, IJCAR 2020 (LNCS 12167, doi 10.1007/978-3-030-51054-1_10); pages from the LMCS article header.
+%% verified: Crossref 10.46298/lmcs-18(2:1)2022 (title, authors, year, journal); volume/issue/pages from the LMCS PDF header (pp. 1:1-1:21).
+@article{ullrich2022,
+  author    = {Ullrich, Sebastian and de Moura, Leonardo},
+  title     = {Beyond Notations: Hygienic Macro Expansion for Theorem Proving Languages},
+  journal   = {Logical Methods in Computer Science},
+  year      = {2022},
+  volume    = {18},
+  number    = {2},
+  pages     = {1:1--1:21},
+  doi       = {10.46298/lmcs-18(2:1)2022}
+}
+
+%% verified: Crossref 10.1145/2951913.2951932 (title, authors, year, venue, pages).
+@inproceedings{christiansen2016elab,
+  author    = {Christiansen, David and Brady, Edwin},
+  title     = {Elaborator Reflection: Extending {Idris} in {Idris}},
+  booktitle = {Proceedings of the 21st {ACM} {SIGPLAN} International Conference on Functional Programming ({ICFP} 2016)},
+  year      = {2016},
+  pages     = {284--297},
+  publisher = {ACM},
+  doi       = {10.1145/2951913.2951932}
+}
+
+%% verified: GitHub API: commit 1c630e67 exists; both files exist at that commit.
+@misc{idris2reflection,
+  author       = {{The Idris Community}},
+  title        = {{Idris 2} Elaborator Reflection ({{\texttt{Language.Reflection}}}, {{\texttt{\%macro}}})},
+  howpublished = {\url{https://github.com/idris-lang/Idris2}, files \path{libs/base/Language/Reflection.idr} and \path{tests/idris2/reflection/reflection015/MacroRetFunc.idr}},
+  note         = {Repository commit 1c630e67c386629a0fbbc6b78a59176fde7f0a76, accessed 2026-10-05}
+}
+
+%% verified: Crossref 10.1007/978-3-642-41582-1_10 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{vanderwalt2013agda,
+  author    = {van der Walt, Paul and Swierstra, Wouter},
+  title     = {Engineering Proof by Reflection in {Agda}},
+  booktitle = {Implementation and Application of Functional Languages: 24th International Symposium ({IFL} 2012), Revised Selected Papers},
+  editor    = {Hinze, Ralf},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {8241},
+  pages     = {157--173},
+  publisher = {Springer},
+  year      = {2013},
+  doi       = {10.1007/978-3-642-41582-1_10}
+}
+
+%% verified: Crossref 10.1145/3278122.3278139 (title, authors, year, venue, pages).
+@inproceedings{stucki2018scala,
+  author    = {Stucki, Nicolas and Biboudis, Aggelos and Odersky, Martin},
+  title     = {A Practical Unification of Multi-Stage Programming and Macros},
+  booktitle = {Proceedings of the 17th {ACM} {SIGPLAN} International Conference on Generative Programming: Concepts and Experiences ({GPCE} 2018)},
+  year      = {2018},
+  pages     = {14--27},
+  publisher = {ACM},
+  doi       = {10.1145/3278122.3278139}
+}
+
+%% verified: Crossref 10.1145/3486609.3487203 (title, authors, year, venue, pages).
+@inproceedings{stucki2021multistage,
+  author    = {Stucki, Nicolas and Brachth{\"a}user, Jonathan Immanuel and Odersky, Martin},
+  title     = {Multi-Stage Programming with Generative and Analytical Macros},
+  booktitle = {Proceedings of the 20th {ACM} {SIGPLAN} International Conference on Generative Programming: Concepts and Experiences ({GPCE} 2021)},
+  year      = {2021},
+  pages     = {110--122},
+  publisher = {ACM},
+  doi       = {10.1145/3486609.3487203}
+}
+
+%% Living document; no publication year.
+%% verified: both urls (HTTP 200; page titles "Macros" and "Macros by example" with a Hygiene section).
+@misc{rustmacros,
+  author       = {{The Rust Project Developers}},
+  title        = {The {Rust} Reference: Macros},
+  howpublished = {\url{https://doc.rust-lang.org/reference/macros.html}},
+  note         = {Hygiene of macros by example: \url{https://doc.rust-lang.org/reference/macros-by-example.html}. Accessed 2026-10-05}
+}
+
+%% =====================================================================
+%% L4 -- Ownership types in the object-oriented tradition
+%% =====================================================================
+
+%% verified: Crossref 10.1145/117954.117975 (title, author, year, venue, pages); editor from the Crossref unixsd XML.
+@inproceedings{hogg1991islands,
+  author    = {Hogg, John},
+  title     = {Islands: Aliasing Protection in Object-Oriented Languages},
+  booktitle = {Conference Proceedings on Object-Oriented Programming Systems, Languages, and Applications ({OOPSLA} '91)},
+  editor    = {Paepcke, Andreas},
+  year      = {1991},
+  pages     = {271--285},
+  publisher = {ACM},
+  doi       = {10.1145/117954.117975}
+}
+
+%% verified: Crossref 10.1007/BFb0053373 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{almeida1997balloon,
+  author    = {Almeida, Paulo S{\'e}rgio},
+  title     = {Balloon Types: Controlling Sharing of State in Data Types},
+  booktitle = {{ECOOP}'97 -- Object-Oriented Programming: 11th {European} Conference},
+  editor    = {Ak{\c{s}}it, Mehmet and Matsuoka, Satoshi},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {1241},
+  pages     = {32--59},
+  publisher = {Springer},
+  year      = {1997},
+  doi       = {10.1007/BFb0053373}
+}
+
+%% verified: Crossref 10.1145/286936.286947 (title, authors, year, venue, pages).
+@inproceedings{clarke1998ownership,
+  author    = {Clarke, David G. and Potter, John M. and Noble, James},
+  title     = {Ownership Types for Flexible Alias Protection},
+  booktitle = {Proceedings of the 13th {ACM} {SIGPLAN} Conference on Object-Oriented Programming, Systems, Languages, and Applications ({OOPSLA} '98)},
+  year      = {1998},
+  pages     = {48--64},
+  publisher = {ACM},
+  doi       = {10.1145/286936.286947}
+}
+
+%% verified: Crossref 10.1007/BFb0054091 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{noble1998flexible,
+  author    = {Noble, James and Vitek, Jan and Potter, John},
+  title     = {Flexible Alias Protection},
+  booktitle = {{ECOOP}'98 -- Object-Oriented Programming: 12th {European} Conference},
+  editor    = {Jul, Eric},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {1445},
+  pages     = {158--185},
+  publisher = {Springer},
+  year      = {1998},
+  doi       = {10.1007/BFb0054091}
+}
+
+%% verified: Crossref 10.1002/spe.370 (title, authors, year, venue, volume, issue, pages).
+@article{boyland2001burying,
+  author    = {Boyland, John},
+  title     = {Alias Burying: Unique Variables without Destructive Reads},
+  journal   = {Software: Practice and Experience},
+  year      = {2001},
+  volume    = {31},
+  number    = {6},
+  pages     = {533--553},
+  doi       = {10.1002/spe.370}
+}
+
+%% verified: Crossref 10.1007/3-540-45337-7_2 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{boyland2001capabilities,
+  author    = {Boyland, John and Noble, James and Retert, William},
+  title     = {Capabilities for Sharing: A Generalisation of Uniqueness and Read-Only},
+  booktitle = {{ECOOP} 2001 -- Object-Oriented Programming: 15th {European} Conference},
+  editor    = {Knudsen, J{\o}rgen Lindskov},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {2072},
+  pages     = {2--27},
+  publisher = {Springer},
+  year      = {2001},
+  doi       = {10.1007/3-540-45337-7_2}
+}
+
+%% Last page from the ACM SIGPLAN Notices 37(11) Crossref record of the same paper
+%% (doi 10.1145/583854.582440: pp. 211-230); the proceedings record gives the first page only.
+%% verified: Crossref 10.1145/582419.582440 (title, authors, year, venue, first page); full range from Crossref 10.1145/583854.582440 and Semantic Scholar.
+@inproceedings{boyapati2002ownership,
+  author    = {Boyapati, Chandrasekhar and Lee, Robert and Rinard, Martin},
+  title     = {Ownership Types for Safe Programming: Preventing Data Races and Deadlocks},
+  booktitle = {Proceedings of the 17th {ACM} {SIGPLAN} Conference on Object-Oriented Programming, Systems, Languages, and Applications ({OOPSLA} '02)},
+  year      = {2002},
+  pages     = {211--230},
+  publisher = {ACM},
+  doi       = {10.1145/582419.582440}
+}
+
+%% Last page from the ACM SIGPLAN Notices 37(11) record (doi 10.1145/583854.582448).
+%% verified: Crossref 10.1145/582419.582448 (title, authors, year, venue, first page); full range from Crossref 10.1145/583854.582448 and Semantic Scholar.
+@inproceedings{aldrich2002alias,
+  author    = {Aldrich, Jonathan and Kostadinov, Valentin and Chambers, Craig},
+  title     = {Alias Annotations for Program Understanding},
+  booktitle = {Proceedings of the 17th {ACM} {SIGPLAN} Conference on Object-Oriented Programming, Systems, Languages, and Applications ({OOPSLA} '02)},
+  year      = {2002},
+  pages     = {311--330},
+  publisher = {ACM},
+  doi       = {10.1145/582419.582448}
+}
+
+%% verified: Crossref 10.1007/978-3-540-45070-2_9 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{clarke2003external,
+  author    = {Clarke, Dave and Wrigstad, Tobias},
+  title     = {External Uniqueness Is Unique Enough},
+  booktitle = {{ECOOP} 2003 -- Object-Oriented Programming: 17th {European} Conference},
+  editor    = {Cardelli, Luca},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {2743},
+  pages     = {176--200},
+  publisher = {Springer},
+  year      = {2003},
+  doi       = {10.1007/978-3-540-45070-2_9}
+}
+
+%% verified: Crossref 10.1007/978-3-540-24851-4_1 (title, authors, year, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{aldrich2004domains,
+  author    = {Aldrich, Jonathan and Chambers, Craig},
+  title     = {Ownership Domains: Separating Aliasing Policy from Mechanism},
+  booktitle = {{ECOOP} 2004 -- Object-Oriented Programming},
+  editor    = {Odersky, Martin},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {3086},
+  pages     = {1--25},
+  publisher = {Springer},
+  year      = {2004},
+  doi       = {10.1007/978-3-540-24851-4_1}
+}
+
+%% Monograph (Crossref files the author under "editor").
+%% verified: Crossref 10.1007/3-540-45651-1 (title, year, LNCS 2262; Crossref files Mueller as editor); authorship via OpenLibrary ISBN 9783540431671.
+@book{muller2002modular,
+  author    = {M{\"u}ller, Peter},
+  title     = {Modular Specification and Verification of Object-Oriented Programs},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {2262},
+  publisher = {Springer},
+  year      = {2002},
+  doi       = {10.1007/3-540-45651-1}
+}
+
+%% verified: Crossref 10.5381/jot.2005.4.8.a1 (title, authors, year, 4(8), first page); pages and month from the jot.fm "Cite as" line.
+@article{dietl2005universes,
+  author    = {Dietl, Werner and M{\"u}ller, Peter},
+  title     = {Universes: Lightweight Ownership for {JML}},
+  journal   = {Journal of Object Technology},
+  year      = {2005},
+  month     = oct,
+  volume    = {4},
+  number    = {8},
+  pages     = {5--32},
+  doi       = {10.5381/jot.2005.4.8.a1}
+}
+
+%% verified: Crossref 10.1007/978-3-540-73589-2_3 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{dietl2007generic,
+  author    = {Dietl, Werner and Drossopoulou, Sophia and M{\"u}ller, Peter},
+  title     = {Generic Universe Types},
+  booktitle = {{ECOOP} 2007 -- Object-Oriented Programming: 21st {European} Conference},
+  editor    = {Ernst, Erik},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {4609},
+  pages     = {28--53},
+  publisher = {Springer},
+  year      = {2007},
+  doi       = {10.1007/978-3-540-73589-2_3}
+}
+
+%% verified: Crossref 10.5381/jot.2007.6.4.a5 (title, authors, year, 6(4), first page); pages and month from the jot.fm "Cite as" line.
+@article{wrigstad2007existential,
+  author    = {Wrigstad, Tobias and Clarke, Dave},
+  title     = {Existential Owners for Ownership Types},
+  journal   = {Journal of Object Technology},
+  year      = {2007},
+  month     = may,
+  volume    = {6},
+  number    = {4},
+  pages     = {141--159},
+  doi       = {10.5381/jot.2007.6.4.a5}
+}
+
+%% verified: Crossref 10.5381/jot.2007.6.5.a3 (title, authors, year, 6(5), first page); pages and month from the jot.fm "Cite as" line.
+@article{schaefer2007loose,
+  author    = {Schaefer, Jan and Poetzsch-Heffter, Arnd},
+  title     = {A Parameterized Type System for Simple Loose Ownership Domains},
+  journal   = {Journal of Object Technology},
+  year      = {2007},
+  month     = jun,
+  volume    = {6},
+  number    = {5},
+  pages     = {71--100},
+  doi       = {10.5381/jot.2007.6.5.a3}
+}
+
+%% verified: Crossref 10.1007/978-3-540-69824-1_11 (title, authors, year, pages); LNBIP volume, editors and TOOLS EUROPE 2008 from the Crossref book record.
+@inproceedings{ostlund2008ownership,
+  author    = {{\"O}stlund, Johan and Wrigstad, Tobias and Clarke, Dave and {\AA}kerblom, Beatrice},
+  title     = {Ownership, Uniqueness, and Immutability},
+  booktitle = {Objects, Components, Models and Patterns: 46th International Conference ({TOOLS} {EUROPE} 2008)},
+  editor    = {Paige, Richard F. and Meyer, Bertrand},
+  series    = {Lecture Notes in Business Information Processing},
+  volume    = {11},
+  pages     = {178--197},
+  publisher = {Springer},
+  year      = {2008},
+  doi       = {10.1007/978-3-540-69824-1_11}
+}
+
+%% verified: Crossref 10.1007/978-3-642-14107-2_17 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{haller2010capabilities,
+  author    = {Haller, Philipp and Odersky, Martin},
+  title     = {Capabilities for Uniqueness and Borrowing},
+  booktitle = {{ECOOP} 2010 -- Object-Oriented Programming},
+  editor    = {D'Hondt, Theo},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {6183},
+  pages     = {354--378},
+  publisher = {Springer},
+  year      = {2010},
+  doi       = {10.1007/978-3-642-14107-2_17}
+}
+
+%% verified: Crossref 10.1145/2384616.2384619 (title, authors, year, venue, pages).
+@inproceedings{gordon2012uniqueness,
+  author    = {Gordon, Colin S. and Parkinson, Matthew J. and Parsons, Jared and Bromfield, Aleks and Duffy, Joe},
+  title     = {Uniqueness and Reference Immutability for Safe Parallelism},
+  booktitle = {Proceedings of the {ACM} International Conference on Object Oriented Programming Systems Languages and Applications ({OOPSLA} 2012)},
+  year      = {2012},
+  pages     = {21--40},
+  publisher = {ACM},
+  doi       = {10.1145/2384616.2384619}
+}
+
+%% verified: Crossref 10.1007/978-3-642-36946-9_3 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@incollection{clarke2013survey,
+  author    = {Clarke, Dave and {\"O}stlund, Johan and Sergey, Ilya and Wrigstad, Tobias},
+  title     = {Ownership Types: A Survey},
+  booktitle = {Aliasing in Object-Oriented Programming: Types, Analysis and Verification},
+  editor    = {Clarke, Dave and Noble, James and Wrigstad, Tobias},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {7850},
+  pages     = {15--58},
+  publisher = {Springer},
+  year      = {2013},
+  doi       = {10.1007/978-3-642-36946-9_3}
+}
+
+%% verified: Crossref 10.1145/2824815.2824816 (title, authors, year, venue, pages).
+@inproceedings{clebsch2015deny,
+  author    = {Clebsch, Sylvan and Drossopoulou, Sophia and Blessing, Sebastian and McNeil, Andy},
+  title     = {Deny Capabilities for Safe, Fast Actors},
+  booktitle = {Proceedings of the 5th International Workshop on Programming Based on Actors, Agents, and Decentralized Control},
+  year      = {2015},
+  pages     = {1--12},
+  publisher = {ACM},
+  doi       = {10.1145/2824815.2824816}
+}
+
+%% verified: DataCite 10.4230/LIPIcs.ECOOP.2016.5 (title, authors, year, LIPIcs 56, 5:1-5:26, 30th ECOOP 2016).
+@inproceedings{castegren2016reference,
+  author    = {Castegren, Elias and Wrigstad, Tobias},
+  title     = {Reference Capabilities for Concurrency Control},
+  booktitle = {30th {European} Conference on Object-Oriented Programming ({ECOOP} 2016)},
+  series    = {Leibniz International Proceedings in Informatics (LIPIcs)},
+  volume    = {56},
+  pages     = {5:1--5:26},
+  publisher = {Schloss Dagstuhl -- Leibniz-Zentrum f{\"u}r Informatik},
+  year      = {2016},
+  doi       = {10.4230/LIPIcs.ECOOP.2016.5}
+}
+
+%% Pages omitted: the jot.fm landing pages print the same "pp. 2:1-11" for this article and for
+%% racordon2022lingua, and Crossref gives only "2:1" for both.
+%% verified: Crossref 10.5381/jot.2022.21.2.a2 (title, authors, year, 21(2)); jot.fm "Cite as" line checked.
+@article{racordon2022mvs,
+  author    = {Racordon, Dimitri and Shabalin, Denys and Zheng, Daniel and Abrahams, Dave and Saeta, Brennan},
+  title     = {Implementation Strategies for Mutable Value Semantics},
+  journal   = {Journal of Object Technology},
+  year      = {2022},
+  volume    = {21},
+  number    = {2},
+  doi       = {10.5381/jot.2022.21.2.a2}
+}
+
+%% verified: Crossref 10.5381/jot.2022.21.2.a3 (title, authors, year, 21(2)); jot.fm "Cite as" line checked.
+@article{racordon2022lingua,
+  author    = {Racordon, Dimitri and Coet, Aur{\'e}lien and Buchs, Didier},
+  title     = {Toward a Lingua Franca for Memory Safety},
+  journal   = {Journal of Object Technology},
+  year      = {2022},
+  volume    = {21},
+  number    = {2},
+  doi       = {10.5381/jot.2022.21.2.a3}
+}
+
+%% =====================================================================
+%% L5 -- In-place update in functional and dependently typed languages
+%% =====================================================================
+
+%% verified: Crossref 10.1145/3412932.3412935 (title, authors, year, venue, pages).
+@inproceedings{ullrich2019beans,
+  author    = {Ullrich, Sebastian and de Moura, Leonardo},
+  title     = {Counting Immutable Beans: Reference Counting Optimized for Purely Functional Programming},
+  booktitle = {Proceedings of the 31st Symposium on Implementation and Application of Functional Languages ({IFL} 2019)},
+  year      = {2019},
+  pages     = {1--12},
+  publisher = {ACM},
+  doi       = {10.1145/3412932.3412935}
+}
+
+%% verified: Crossref 10.1145/3453483.3454032 (title, authors, year, venue, pages).
+@inproceedings{reinking2021perceus,
+  author    = {Reinking, Alex and Xie, Ningning and de Moura, Leonardo and Leijen, Daan},
+  title     = {Perceus: Garbage Free Reference Counting with Reuse},
+  booktitle = {Proceedings of the 42nd {ACM} {SIGPLAN} International Conference on Programming Language Design and Implementation ({PLDI} 2021)},
+  year      = {2021},
+  pages     = {96--111},
+  publisher = {ACM},
+  doi       = {10.1145/3453483.3454032}
+}
+
+%% verified: Crossref 10.1145/3607840 (title, authors, year, venue, volume, issue, pages).
+@article{lorenzen2023fp2,
+  author    = {Lorenzen, Anton and Leijen, Daan and Swierstra, Wouter},
+  title     = {{FP}$^2$: Fully in-Place Functional Programming},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2023},
+  volume    = {7},
+  number    = {ICFP},
+  pages     = {275--304},
+  doi       = {10.1145/3607840}
+}
+
+%% verified: Crossref 10.1145/3547634 (title, authors, year, venue, volume, issue, pages).
+@article{lorenzen2022frame,
+  author    = {Lorenzen, Anton and Leijen, Daan},
+  title     = {Reference Counting with Frame Limited Reuse},
+  journal   = {Proceedings of the ACM on Programming Languages},
+  year      = {2022},
+  volume    = {6},
+  number    = {ICFP},
+  pages     = {357--380},
+  doi       = {10.1145/3547634}
+}
+
+%% verified: Crossref 10.1007/3-540-46425-5_11 (title, author, year, pages); series volume and editors from the Crossref unixsd XML of the book (same book as smith2000alias).
+@inproceedings{hofmann2000inplace,
+  author    = {Hofmann, Martin},
+  title     = {A Type System for Bounded Space and Functional In-Place Update---Extended Abstract},
+  booktitle = {Programming Languages and Systems: {European} Symposium on Programming ({ESOP} 2000)},
+  editor    = {Smolka, Gert},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {1782},
+  pages     = {165--179},
+  publisher = {Springer},
+  year      = {2000},
+  doi       = {10.1007/3-540-46425-5_11}
+}
+
+%% verified: Crossref 10.1007/3-540-57529-4_42 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{barendsen1993conventional,
+  author    = {Barendsen, Erik and Smetsers, Sjaak},
+  title     = {Conventional and Uniqueness Typing in Graph Rewrite Systems: Extended Abstract},
+  booktitle = {Foundations of Software Technology and Theoretical Computer Science: 13th Conference},
+  editor    = {Shyamasundar, Rudrapatna K.},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {761},
+  pages     = {41--51},
+  publisher = {Springer},
+  year      = {1993},
+  doi       = {10.1007/3-540-57529-4_42}
+}
+
+%% verified: Crossref 10.1017/S0960129500070109 (title, authors, year, venue, volume, issue, pages).
+@article{barendsen1996uniqueness,
+  author    = {Barendsen, Erik and Smetsers, Sjaak},
+  title     = {Uniqueness Typing for Functional Languages with Graph Rewriting Semantics},
+  journal   = {Mathematical Structures in Computer Science},
+  year      = {1996},
+  volume    = {6},
+  number    = {6},
+  pages     = {579--612},
+  doi       = {10.1017/S0960129500070109}
+}
+
+%% verified: Crossref 10.4204/EPTCS.153.8 (title, author, year, EPTCS 153, pp. 100-126); MSFP 2014 from the arXiv comment of 1406.2061.
+@article{leijen2014koka,
+  author    = {Leijen, Daan},
+  title     = {{Koka}: Programming with Row Polymorphic Effect Types},
+  journal   = {Electronic Proceedings in Theoretical Computer Science},
+  year      = {2014},
+  volume    = {153},
+  pages     = {100--126},
+  note      = {Proceedings of MSFP 2014},
+  doi       = {10.4204/EPTCS.153.8}
+}
+
+%% verified: Crossref 10.1145/3122948.3122949 (title, authors, year, venue, pages).
+@inproceedings{shaikhha2017dps,
+  author    = {Shaikhha, Amir and Fitzgibbon, Andrew and Peyton Jones, Simon and Vytiniotis, Dimitrios},
+  title     = {Destination-Passing Style for Efficient Memory Management},
+  booktitle = {Proceedings of the 6th {ACM} {SIGPLAN} International Workshop on Functional High-Performance Computing ({FHPC} 2017)},
+  year      = {2017},
+  pages     = {12--23},
+  publisher = {ACM},
+  doi       = {10.1145/3122948.3122949}
+}
+
+%% verified: GitHub API: commit 1c630e67 exists; both files exist at that commit; last LVect.idr commit e2d27105 dated 2023-10-27.
+@misc{idris2lvect,
+  author       = {{The Idris Community}},
+  title        = {{Idris 2} Linear Library: {{\texttt{Data.Linear.LVect}}} and {{\texttt{Data.Linear.Array}}}},
+  howpublished = {\url{https://github.com/idris-lang/Idris2}, files \path{libs/linear/Data/Linear/LVect.idr} (last changed in commit e2d27105, 2023-10-27) and \path{libs/contrib/Data/Linear/Array.idr}},
+  note         = {Repository commit 1c630e67c386629a0fbbc6b78a59176fde7f0a76, accessed 2026-10-05}
+}
+
+%% verified: GitHub API repos/tweag/linear-base (description) and contents src/Data/Array/Mutable/Linear.hs.
+@misc{linearbase,
+  author       = {{Tweag}},
+  title        = {linear-base: Standard Library for Linear Types in {Haskell}},
+  howpublished = {\url{https://github.com/tweag/linear-base}, module \texttt{Data.Array.Mutable.Linear}},
+  note         = {Accessed 2026-10-05}
+}
+
+%% =====================================================================
+%% Other: dependent and refinement types for practical programming
+%% =====================================================================
+
+%% verified: Crossref 10.1145/292540.292560 (title, authors, year, venue, pages).
+@inproceedings{xi1999dml,
+  author    = {Xi, Hongwei and Pfenning, Frank},
+  title     = {Dependent Types in Practical Programming},
+  booktitle = {Proceedings of the 26th {ACM} {SIGPLAN-SIGACT} Symposium on Principles of Programming Languages ({POPL} 1999)},
+  year      = {1999},
+  pages     = {214--227},
+  publisher = {ACM},
+  doi       = {10.1145/292540.292560}
+}
+
+%% verified: Crossref 10.1007/978-3-540-71316-6_35 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{condit2007deputy,
+  author    = {Condit, Jeremy and Harren, Matthew and Anderson, Zachary and Gay, David and Necula, George C.},
+  title     = {Dependent Types for Low-Level Programming},
+  booktitle = {Programming Languages and Systems: 16th {European} Symposium on Programming ({ESOP} 2007)},
+  editor    = {De Nicola, Rocco},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {4421},
+  pages     = {520--535},
+  publisher = {Springer},
+  year      = {2007},
+  doi       = {10.1007/978-3-540-71316-6_35}
+}
+
+%% Crossref misspells the second author as "Kawaguci"; the spelling below is the one
+%% printed on the paper (author PDF).
+%% verified: Crossref 10.1145/1375581.1375602 (title, year, venue, pages); author spelling from the paper PDF (goto.ucsd.edu/~rjhala/liquid/liquid_types.pdf).
+@inproceedings{rondon2008liquid,
+  author    = {Rondon, Patrick M. and Kawaguchi, Ming and Jhala, Ranjit},
+  title     = {Liquid Types},
+  booktitle = {Proceedings of the 29th {ACM} {SIGPLAN} Conference on Programming Language Design and Implementation ({PLDI} 2008)},
+  year      = {2008},
+  pages     = {159--169},
+  publisher = {ACM},
+  doi       = {10.1145/1375581.1375602}
+}
+
+%% verified: Crossref 10.1145/2384616.2384659 (title, authors, year, venue, pages).
+@inproceedings{chugh2012djs,
+  author    = {Chugh, Ravi and Herman, David and Jhala, Ranjit},
+  title     = {Dependent Types for {JavaScript}},
+  booktitle = {Proceedings of the {ACM} International Conference on Object Oriented Programming Systems Languages and Applications ({OOPSLA} 2012)},
+  year      = {2012},
+  pages     = {587--606},
+  publisher = {ACM},
+  doi       = {10.1145/2384616.2384659}
+}
+
+%% verified: Crossref 10.1145/2628136.2628161 (title, authors, year, venue, pages).
+@inproceedings{vazou2014liquid,
+  author    = {Vazou, Niki and Seidel, Eric L. and Jhala, Ranjit and Vytiniotis, Dimitrios and Peyton Jones, Simon},
+  title     = {Refinement Types for {Haskell}},
+  booktitle = {Proceedings of the 19th {ACM} {SIGPLAN} International Conference on Functional Programming ({ICFP} 2014)},
+  year      = {2014},
+  pages     = {269--282},
+  publisher = {ACM},
+  doi       = {10.1145/2628136.2628161}
+}
+
+%% verified: Crossref 10.1145/2837614.2837655 (title, authors, year, venue, pages).
+@inproceedings{swamy2016fstar,
+  author    = {Swamy, Nikhil and Hri{\c{t}}cu, C{\u{a}}t{\u{a}}lin and Keller, Chantal and Rastogi, Aseem and Delignat-Lavaud, Antoine and Forest, Simon and Bhargavan, Karthikeyan and Fournet, C{\'e}dric and Strub, Pierre-Yves and Kohlweiss, Markulf and Zinzindohoue, Jean-Karim and Zanella-B{\'e}guelin, Santiago},
+  title     = {Dependent Types and Multi-Monadic Effects in {F*}},
+  booktitle = {Proceedings of the 43rd Annual {ACM} {SIGPLAN-SIGACT} Symposium on Principles of Programming Languages ({POPL} 2016)},
+  year      = {2016},
+  pages     = {256--270},
+  publisher = {ACM},
+  doi       = {10.1145/2837614.2837655}
+}
+
+%% =====================================================================
+%% Other: sessions, effects, typestate
+%% =====================================================================
+
+%% verified: Crossref 10.1007/BFb0053567 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{honda1998session,
+  author    = {Honda, Kohei and Vasconcelos, Vasco T. and Kubo, Makoto},
+  title     = {Language Primitives and Type Discipline for Structured Communication-Based Programming},
+  booktitle = {Programming Languages and Systems: 7th {European} Symposium on Programming ({ESOP} '98)},
+  editor    = {Hankin, Chris},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {1381},
+  pages     = {122--138},
+  publisher = {Springer},
+  year      = {1998},
+  doi       = {10.1007/BFb0053567}
+}
+
+%% verified: Crossref 10.1007/978-3-642-00590-9_7 (title, authors, year, pages); series volume and editors from the Crossref unixsd XML of the book; venue ESOP 2009 via Semantic Scholar.
+@inproceedings{plotkin2009handlers,
+  author    = {Plotkin, Gordon D. and Pretnar, Matija},
+  title     = {Handlers of Algebraic Effects},
+  booktitle = {Programming Languages and Systems: {European} Symposium on Programming ({ESOP} 2009)},
+  editor    = {Castagna, Giuseppe},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {5502},
+  pages     = {80--94},
+  publisher = {Springer},
+  year      = {2009},
+  doi       = {10.1007/978-3-642-00590-9_7}
+}
+
+%% verified: Crossref 10.1145/1639950.1640073 (title, authors, year, venue, pages).
+@inproceedings{aldrich2009typestate,
+  author    = {Aldrich, Jonathan and Sunshine, Joshua and Saini, Darpan and Sparks, Zachary},
+  title     = {Typestate-Oriented Programming},
+  booktitle = {Proceedings of the 24th {ACM} {SIGPLAN} Conference Companion on Object Oriented Programming Systems Languages and Applications ({OOPSLA} 2009)},
+  year      = {2009},
+  pages     = {1015--1022},
+  publisher = {ACM},
+  doi       = {10.1145/1639950.1640073}
+}
+
+%% verified: Crossref 10.1007/978-3-642-15375-4_16 (title, authors, year, venue, volume, pages); series volume and editors from the Crossref unixsd XML of the book.
+@inproceedings{caires2010session,
+  author    = {Caires, Lu{\'\i}s and Pfenning, Frank},
+  title     = {Session Types as Intuitionistic Linear Propositions},
+  booktitle = {{CONCUR} 2010 -- Concurrency Theory: 21st International Conference},
+  editor    = {Gastin, Paul and Laroussinie, Fran{\c{c}}ois},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {6269},
+  pages     = {222--236},
+  publisher = {Springer},
+  year      = {2010},
+  doi       = {10.1007/978-3-642-15375-4_16}
+}
+
+%% verified: Crossref 10.1145/2398856.2364568 (title, authors, year, venue, volume, issue, pages).
+@article{wadler2012sessions,
+  author    = {Wadler, Philip},
+  title     = {Propositions as Sessions},
+  journal   = {ACM SIGPLAN Notices},
+  year      = {2012},
+  volume    = {47},
+  number    = {9},
+  pages     = {273--286},
+  doi       = {10.1145/2398856.2364568}
+}
+
+%% verified: Crossref 10.2168/LMCS-9(4:23)2013 (title, authors, year, journal); volume 9(4:23), pp. 1-36 from the LMCS PDF header.
+@article{plotkin2013handling,
+  author    = {Plotkin, Gordon D. and Pretnar, Matija},
+  title     = {Handling Algebraic Effects},
+  journal   = {Logical Methods in Computer Science},
+  year      = {2013},
+  volume    = {9},
+  number    = {4},
+  pages     = {23:1--23:36},
+  doi       = {10.2168/LMCS-9(4:23)2013}
+}
+
+%% verified: Crossref 10.1145/2808098.2808100 (title, authors, year, venue, pages).
+@inproceedings{jespersen2015session,
+  author    = {Jespersen, Thomas Bracht Laumann and Munksgaard, Philip and Larsen, Ken Friis},
+  title     = {Session Types for {Rust}},
+  booktitle = {Proceedings of the 11th {ACM} {SIGPLAN} Workshop on Generic Programming ({WGP} 2015)},
+  year      = {2015},
+  pages     = {13--22},
+  publisher = {ACM},
+  doi       = {10.1145/2808098.2808100}
+}
+
+%% =====================================================================
+%% Other: compilers and verified compilation
+%% =====================================================================
+
+%% verified: Crossref 10.1109/CGO.2004.1281665 (title, authors, year, venue, pages).
+@inproceedings{lattner2004llvm,
+  author    = {Lattner, Chris and Adve, Vikram},
+  title     = {{LLVM}: A Compilation Framework for Lifelong Program Analysis \& Transformation},
+  booktitle = {International Symposium on Code Generation and Optimization ({CGO} 2004)},
+  year      = {2004},
+  pages     = {75--86},
+  publisher = {IEEE},
+  doi       = {10.1109/CGO.2004.1281665}
+}
+
+%% verified: Crossref 10.1145/1538788.1538814 (title, authors, year, venue, volume, issue, pages).
+@article{leroy2009compcert,
+  author    = {Leroy, Xavier},
+  title     = {Formal Verification of a Realistic Compiler},
+  journal   = {Communications of the ACM},
+  year      = {2009},
+  volume    = {52},
+  number    = {7},
+  pages     = {107--115},
+  doi       = {10.1145/1538788.1538814}
+}
+
+%% verified: Crossref 10.1145/2535838.2535841 (title, authors, year, venue, pages).
+@inproceedings{kumar2014cakeml,
+  author    = {Kumar, Ramana and Myreen, Magnus O. and Norrish, Michael and Owens, Scott},
+  title     = {{CakeML}: A Verified Implementation of {ML}},
+  booktitle = {Proceedings of the 41st {ACM} {SIGPLAN-SIGACT} Symposium on Principles of Programming Languages ({POPL} 2014)},
+  year      = {2014},
+  pages     = {179--191},
+  publisher = {ACM},
+  doi       = {10.1145/2535838.2535841}
+}

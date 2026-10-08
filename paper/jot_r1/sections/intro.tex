@@ -1,0 +1,55 @@
+% =====================================================================
+\section{Introduction}\label{sec:intro}
+% =====================================================================
+
+Many programs manage resources that must be used in a disciplined way---a file that must not be written after it is closed, a channel that must follow a protocol, a buffer that must not be read while it is being filled---and maintain invariants that relate those resources to their data, such as ``the channel expects exactly as many messages as the vector has elements''.
+Programmers also want to extend their language with notations for such patterns.
+Three traditions in language design address one concern each.
+Dependently typed languages and proof assistants in the tradition of Martin-L\"of type theory and the Calculus of Constructions~\cite{martinlof1984,coquand1988}, such as Lean~\cite{lean2015,lean42021}, Coq~\cite{bertot2004coqart}, Agda~\cite{norell2007} and Idris~\cite{brady2013,brady2021}, can state invariants in types and check proofs of them.
+Rust controls resources with ownership: every value has one owner, a move transfers it, references are checked by a borrow checker, and closures are classified by how they use what they capture~\cite{jung2018rustbelt,rfc2094}.
+Lisp-family languages, and Racket in particular~\cite{racket2018,flatt2016scopes}, let programmers extend the syntax with hygienic macros.
+
+These traditions have influenced each other.
+Lean~4 has a hygienic macro system~\cite{ullrich2022} and updates unshared data in place at run time~\cite{ullrich2019beans}; Idris~2 has linear types~\cite{brady2021} and elaborator reflection, which was introduced for Idris~1~\cite{christiansen2016elab}; Rust has macros and, through external verifiers such as Prusti, Creusot, Verus and Flux, specifications and proofs~\cite{astrauskas2019prusti,denis2022creusot,lattuada2023verus,lehmann2023flux}; and dependently typed languages can be built inside Racket with macros~\cite{chang2020dependent}.
+What none of them provides is Rust's particular ownership machinery---affine values, closures classified as \lstinline|Fn|, \lstinline|FnMut| or \lstinline|FnOnce|, and borrow checking with non-lexical lifetimes---inside a language whose types and proofs are checked by a dependently typed kernel.
+This paper studies what happens when one puts them together.
+
+We built \LRL\ (\lrl) to find out.
+LRL's programs are S-expressions; its kernel checks a dependent type theory with inductive types, universes and an impredicative universe of propositions, in the style of Lean and Coq; every function type carries a Rust-style function kind; values are affine unless their type is copyable; a separate checker on a mid-level intermediate representation (MIR) checks borrows; and hygienic macros extend the syntax.
+The compiler generates Rust code and builds native executables.
+
+\paragraph{Questions.}
+Three questions organise the paper.
+\begin{itemize}\setlength\itemsep{2pt}
+\item \textbf{RQ1.} How do Rust-style function kinds and affine values interact with dependent elimination, and what rules make the combination sound?
+\item \textbf{RQ2.} Which component of the compiler must enforce which part of ownership, which of these components must be trusted, and how can one be sure that code produced by macros does not escape them?
+\item \textbf{RQ3.} Does the combination support complete, realistic programs, and how do the same programs fare in Lean~4, Idris~2, Rust and Racket?
+\end{itemize}
+
+\paragraph{Answers and contributions.}
+\begin{enumerate}\setlength\itemsep{2pt}
+\item \emph{Kinds and elimination} (\S\ref{sec:core}--\S\ref{sec:own}).
+We define function kinds precisely---a kind describes how calling a function uses the environment it captured---and give the typing and ownership rules that the kernel implements.
+The two features are not orthogonal: a recursor calls its case functions a number of times that depends on the data, so a case that may run more than once must not consume what it captures, and a recursive field is consumed when its induction hypothesis is computed.
+The kernel enforces these rules (\S\ref{sec:own:rec}).
+We prove kind widening and kind coercion for the kernel's rules, and we mechanize in Lean, for a non-dependent core calculus with function kinds and an iterator, value substitution and an affine safety theorem: well-owned programs never consume a resource twice.
+\item \emph{Division of responsibility} (\S\ref{sec:own:trust}, \S\ref{sec:macros}).
+The kernel, which is the logical trusted base, guarantees affinity: no owned value is moved twice or used directly after it was moved.
+The MIR borrow checker, which lies outside the kernel, guarantees that borrows neither conflict nor outlive their referents, and so also rejects a use of a value through a borrow after the value was moved.
+Every definition must pass both before code is generated, and macros, which run before elaboration and see neither types nor ownership, cannot avoid either check.
+\item \emph{Implementation} (\S\ref{sec:impl}).
+An open-source compiler with two code generators that share one checked MIR.
+\item \emph{Validation} (\S\ref{sec:eval}).
+Two complete case studies that combine length-indexed vectors, kernel-checked proofs and an affine protocol channel whose operations are generated by a macro; a corpus of ownership violations, each written by hand and generated by a macro, with the component that rejects it; a stage-by-stage comparison of the kernel's and MIR's verdicts; the same properties tested in Lean~4, Idris~2, Rust and Racket by programs that we compiled and ran; and measurements of compile time, run time and the residual cost of proofs.
+\end{enumerate}
+
+\paragraph{Scope.}
+LRL is an alpha-stage research artifact.
+It has no mutable state and no operations that read or write through references; its ownership discipline is checked but not yet used to make programs faster, and we make no performance claim beyond the measurements of \S\ref{sec:eval:cost}.
+Our mechanized results concern a core calculus, not the full language (\S\ref{sec:limits}).
+
+\paragraph{Roadmap.}
+Section~\ref{sec:tour} introduces LRL through the running example.
+Section~\ref{sec:core} defines the core calculus and \S\ref{sec:own} its ownership rules and their division of labour.
+Section~\ref{sec:macros} describes the macro system, \S\ref{sec:impl} the implementation and \S\ref{sec:eval} the evaluation.
+Section~\ref{sec:tensions} discusses design tensions, \S\ref{sec:limits} limitations and \S\ref{sec:related} related work.

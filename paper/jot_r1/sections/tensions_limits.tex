@@ -1,0 +1,73 @@
+% =====================================================================
+\section{Design Tensions and Lessons}\label{sec:tensions}
+% =====================================================================
+
+Building LRL forced several decisions on which the three traditions disagree.
+We describe them because we think they will recur in any language that combines dependent types with Rust-style ownership.
+
+\paragraph{Two checkers, one of them trusted.}
+Affinity and borrowing are checked in different places for a reason.
+Affinity is a property of terms: whether a variable is used once can be decided by walking the term, and the walk benefits from information that only the kernel has, such as which positions are erased because they are types or proofs.
+Borrowing is a property of executions: whether a reference is still alive when its referent is moved depends on control flow and liveness, which a control-flow graph exposes and a term does not.
+Putting the borrow checker into the kernel would make the logical trusted base much larger; putting the affinity check only into MIR would leave the kernel's guarantee about types and proofs without its resource component.
+The cost is that move checking exists twice, in the kernel and in MIR, and the two disagree in documented cases (\S\ref{sec:eval:stages}).
+Marshall and Orchard~\cite{marshall2024fractional} note that Rust checks types and borrows in separate phases, and express ownership and borrowing within a single graded type system instead; LRL takes the other route, keeping the two checks separate but stating precisely what each one guarantees.
+
+\paragraph{Kinds are part of the type.}
+Making $\Fn$, $\FnMut$ and $\FnOnce$ part of $\Pi$-types lets the kernel check kinds without trusting the elaborator, and lets the required kind be a side condition of one typing rule.
+The costs are visible in programs: curried functions whose inner closures capture owned arguments need explicit \lstinline|#[once]| annotations on the inner $\Pi$s, mismatched kinds must be bridged by coercions, and $\eta$-equality has to be restricted for $\FnOnce$ functions.
+
+\paragraph{Recursors and affinity must be designed together.}
+The most delicate rules in the kernel are those for recursors (\S\ref{sec:own:rec}), and they depend on how recursors are compiled: because induction hypotheses are computed eagerly, a recursive field is consumed before its case runs; because the cases of a recursive type are built as closures before the scrutinee is inspected, they cannot be checked as alternatives.
+A dependently typed language normally treats eliminators as logical primitives whose evaluation order does not matter; with ownership, it matters, and the ownership rules are only correct for a particular compilation scheme.
+The function kinds give the right vocabulary for the result: a case that may run more than once must be a function that can be called repeatedly.
+
+\paragraph{Copy by default, affine by declaration.}
+LRL derives \texttt{Copy} for plain data unless a type is declared \lstinline|affine|.
+This keeps proofs and ordinary functional programs free of ownership bookkeeping---lists of numbers can be shared freely in specifications---and confines affinity to types that model resources.
+Rust makes the opposite choice: every type is affine unless it derives \lstinline|Copy|.
+LRL's choice puts the burden on the programmer to mark resource types; forgetting the marker makes a channel copyable without any warning.
+
+\paragraph{Weak macros on purpose.}
+A macro system that cannot inspect types is weaker than those of Lean~4, Idris~2 or Scala~3, and LRL's is weaker still, because its templates have no conditionals, no pattern matching on arguments and no compile-time evaluation.
+We kept it this way because the phase barrier makes Proposition~\ref{prop:transparency} true by construction and easy to test, and because a macro that could inspect ownership would make the code it generates depend on whether a call site moves or borrows its arguments.
+
+\paragraph{Ownership without mutation.}
+LRL's values are immutable and its backends copy them.
+The ownership discipline is therefore enforced but not yet exploited: it does not make anything faster, and references cannot yet be read or written through.
+The obvious next step is a reuse analysis that uses affinity to update unshared data in place, as Lean~4 and Koka do with reference counting~\cite{ullrich2019beans,reinking2021perceus}. FP\textsuperscript{2}~\cite{lorenzen2023fp2} checks statically that a function can run in place but leaves the check that its arguments are unshared to run time; with static affinity, that check could also be static, and reuse could be guaranteed rather than opportunistic.
+We have not built it, and we make no performance claim that depends on it.
+
+% =====================================================================
+\section{Limitations}\label{sec:limits}
+% =====================================================================
+
+\paragraph{Formal results.}
+The mechanized results cover the core calculus $\lambda^{\mathrm{aff}}$, not LRL's dependent calculus, its recursors, fixpoints, references, or MIR.
+The correspondence between the rules of Figures~\ref{fig:typing} and~\ref{fig:own} and the Rust code of the kernel is established by inspection and by tests, not by proof.
+Proposition~\ref{prop:pipeline} is argued from the structure of the driver.
+There is no proof of logical consistency or of normalisation for the kernel's calculus.
+
+\paragraph{Language.}
+Total definitions cannot call themselves by name; recursion goes through \lstinline|match| and induction hypotheses, which makes some programs verbose (the proofs of case study~A are an example).
+Pattern matching has no automatic index unification and no absurd patterns: an impossible case must be written against an explicit motive.
+There is no mutation, and references cannot be dereferenced.
+A borrow expression produces a reference with a fixed lifetime label, so functions that take borrowed arguments must use that label in their signatures.
+
+\paragraph{Ownership.}
+A case of a recursive type cannot use a recursive field that holds owned values, because computing the induction hypothesis has already consumed it; \lstinline|vtail| for a generic element type must therefore be written through a split (\S\ref{sec:eval:cases}).
+MIR rejects some programs that the kernel accepts, for example a recursive case that calls a captured $\FnMut$ function, or a recursor applied without its scrutinee (\S\ref{sec:own:borrow}).
+Effects in the base cases of recursive types are evaluated before the scrutinee is inspected.
+Ownership errors from the kernel point at the whole definition rather than at the offending use, although they name the variable, and MIR diagnostics name internal locals and basic blocks rather than source variables.
+
+\paragraph{Macros.}
+Hygiene covers local variables only; global names and macro names in templates are resolved at the use site.
+Expansion bounds the number of steps but not the size of the output.
+
+\paragraph{Backends and performance.}
+The typed backend does not cover every program; the dynamic backend covers the rest.
+Proof arguments are still passed as unit values.
+\S\ref{sec:eval:cost} reports the measured costs; LRL makes no performance claims beyond them.
+
+\paragraph{Tooling.}
+There is no language server, and apart from skipping unchanged packages in \texttt{lrl build}, every file is re-elaborated and re-checked in full.

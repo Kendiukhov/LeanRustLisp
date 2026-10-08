@@ -1,0 +1,80 @@
+% =====================================================================
+\section{Hygienic Macros and the Phase Barrier}\label{sec:macros}
+% =====================================================================
+
+LRL's macros let programmers add surface forms, such as the channel operations of \S\ref{sec:tour}, without changing the compiler.
+The macro system is deliberately small.
+What matters for this paper is not its power but one property: a macro can only produce programs that a programmer could have written by hand (up to renaming of bound variables), and those programs pass the same checks as hand-written ones; the only additional check, the macro boundary (\S\ref{sec:macros:boundary}), can reject macro output but never makes a program accepted.
+
+\subsection{Templates and expansion}\label{sec:macros:alg}
+
+A macro is declared as \lstinline|(defmacro name (p1 ... pn) template)| and called like a function, with exactly $n$ arguments.
+The template is not a program that runs at compile time: expansion replaces every occurrence of a parameter in the template by the (unexpanded) argument, and then expands the result again.
+Quasiquotation is available inside templates: \lstinline|,e| inserts the expansion of \lstinline|e| and \lstinline|,@e| splices a list.
+There are no conditionals, no pattern matching on arguments and no compile-time evaluation; the only form of computation is that macros can pass other macro names as arguments.
+Arguments are substituted by name, so a parameter used twice duplicates the argument expression, as in other template macro systems.
+
+Expansion runs over each top-level form before any elaboration.
+It stops with an error, pointing at the macro call, when a call is identical to one already being expanded (a cycle, \texttt{F0107}), when calls are nested more than 128 deep, or when one top-level form needs more than 10\,000 macro expansions (\texttt{F0106}); identical calls are expanded once and the result reused.
+These limits bound the number of expansion steps, not the size of the output: a macro that duplicates its argument, nested $n$ times, produces output of size exponential in $n$.
+
+\subsection{Hygiene}\label{sec:macros:hygiene}
+
+Each macro call adds a fresh \emph{scope} to the syntax that comes from the template, while syntax that comes from the arguments keeps its scopes, following Flatt's scope sets~\cite{flatt2016scopes}.
+When the compiler later resolves a variable reference, it chooses, among the binders with the same name, the one whose scope set is the largest subset of the reference's scope set; a binder written without any macro scope matches only references that also have none.
+As a result, a binder introduced by a template never captures a variable written by the caller, and a binder written by the caller never captures a variable referenced in the template.
+For example, with \lstinline|(defmacro with-zero (e) (let x Nat zero e))|, the call \lstinline|(lam x Nat (with-zero x))| returns the caller's \lstinline|x|, not zero.
+
+Hygiene covers local variables only.
+References in a template to \emph{global} definitions and to other macros are resolved by name where the macro is used, not where it is defined.
+A program can therefore change the meaning of a library macro by defining a global or a macro with the same name, and a local variable named like a macro is treated as a macro call.
+Racket resolves such references where the macro is defined.
+Rust's \lstinline|macro_rules!| resolves unqualified item names at the use site, as LRL does, but a \lstinline|$crate::| path pins a name to the macro's own crate (\S\ref{sec:eval:compare}); LRL has no equivalent.
+
+\subsection{The phase barrier}\label{sec:macros:barrier}
+
+\begin{definition}[Phase barrier]\label{def:phase-barrier}
+Macro expansion is a function from surface syntax to surface syntax.
+It has no access to types, to the kernel, to the ownership state, to the borrow checker, or to input and output; and the whole file is expanded before anything in it is elaborated.
+\end{definition}
+
+The definition describes the implementation: the expander (\texttt{frontend/src/macro\_expander.rs}) holds the macro tables and a scope counter but no reference to the kernel environment or the elaborator, and the driver expands and parses all forms of a file before it elaborates the first one.
+Expansion does have state of its own: a template may define further macros, and a macro name is resolved in the module where the macro is called.
+
+The phase barrier gives the property we need.
+
+\begin{proposition}[Macro transparency]\label{prop:transparency}
+If a macro call expands without error to the syntax $p$, the compiler treats the call exactly as it treats the hand-written program $p'$ obtained from $p$ by renaming bound variables so that every name refers to the same binder or global definition as it does in $p$ under the hygiene rules of \S\ref{sec:macros:hygiene}: every check of Proposition~\ref{prop:pipeline} applies to $p'$, with the same result.
+\end{proposition}
+
+The proposition follows from the phase barrier.
+Expanded syntax differs from written syntax in two ways only: it carries hygiene scopes, which desugaring uses to resolve names before elaboration (\S\ref{sec:macros:hygiene}), and it carries the call's source location.
+After desugaring has resolved every name, nothing downstream can distinguish the two.
+Renaming is necessary: with the macro \lstinline|with-zero| above, \lstinline|(lam x Nat (with-zero x))| expands to the text \lstinline|(lam x Nat (let x Nat zero x))|, which, written by hand, returns zero, while the macro call returns its argument.
+Renaming is also needed in the other direction: when a binder written by the caller has the same name as a global definition that the template refers to, $p'$ must rename the caller's binder.
+Only two checks apply to a macro call and not to hand-written code: the expansion limits of \S\ref{sec:macros:alg} and the macro boundary of \S\ref{sec:macros:boundary}, both of which run during expansion.
+Neither changes $p$; a macro can therefore make the compiler reject a program that would be legal if written by hand, but never accept one that would be rejected.
+Diagnostics about code produced by a macro are labelled with the macro's name and call site.
+Section~\ref{sec:eval:corpus} tests the proposition on every ownership violation in our corpus, each written once by hand and once through a macro.
+
+The price is expressiveness: a macro cannot choose its expansion according to the types or the ownership of its arguments.
+Template Haskell, Scala~3, Lean~4 and Idris elaborator scripts all allow some form of this (\S\ref{sec:related:macros}).
+In a language with ownership we think the restriction is worth having: if macros could inspect ownership, changing whether an argument is moved or borrowed at a call site could change which code a macro generates.
+
+\subsection{The macro boundary}\label{sec:macros:boundary}
+
+One check is applied during expansion.
+The fully expanded output of every macro call is searched for declarations that add assumptions a program must trust: \lstinline|axiom|, \lstinline|unsafe| definitions and instances, \lstinline|eval|, and \lstinline|(import classical)|.
+Such forms are errors (\texttt{F0104}); the command-line flag \texttt{-{}-macro-boundary-warn} turns them into warnings for user code.
+The standard library (the prelude) is always processed with the error setting, and no prelude macro is exempt.
+This check is a syntactic tripwire, not a soundness mechanism: a hand-written axiom is allowed and tracked by the kernel (\S\ref{sec:core:defs}); the boundary only ensures that a macro cannot introduce one without the programmer seeing it in the source.
+
+\subsection{Comparison with other macro systems}\label{sec:macros:compare}
+
+LRL's macros are less powerful than all the systems we compare with.
+Rust's \lstinline|macro_rules!|~\cite{rustmacros} also expands before type checking, but it matches patterns with repetition, which LRL cannot; its hygiene applies to local variables and labels, and unqualified item names are resolved at the use site, as in LRL, unless they are written as \lstinline|$crate::| paths.
+Rust's procedural macros run arbitrary code over token streams.
+Racket's macros, written with \lstinline|syntax-parse|~\cite{culpepper2010} or as arbitrary transformer procedures, run in a compile-time phase with full computation, and Racket's hygiene also covers module-level bindings.
+Lean~4 macros~\cite{ullrich2022} use a simplified form of scope-based hygiene, and Lean's elaborators, which run in the same framework, can query the types of their arguments.
+Turnstile~\cite{chang2017turnstile,chang2020dependent} goes furthest in the other direction: type checking is itself performed by macros.
+LRL takes the opposite position for the reason given in \S\ref{sec:macros:barrier}.

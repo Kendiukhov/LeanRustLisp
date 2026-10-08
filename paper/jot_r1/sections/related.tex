@@ -1,0 +1,76 @@
+\section{Related Work}\label{sec:related}
+
+LRL combines ideas from several lines of work.
+For each line we say what LRL shares with it and where it differs.
+Section~\ref{sec:eval:compare} compares LRL with Lean~4, Rust, Idris~2 and Racket by running programs; here we position the design.
+
+\subsection{Linear and dependent type theories}\label{sec:related:lindep}
+
+Linear logic~\cite{girard1987linear} and Wadler's proposal to use linear types for safe in-place update~\cite{wadler1990} started the study of resource-sensitive types; combining them with dependent types is a line of work of its own.
+LLF~\cite{cervesato2002llf} adds linear implication to the LF logical framework but lets types depend only on unrestricted terms.
+Later calculi keep the same separation between a dependent, unrestricted world and a linear world~\cite{krishnaswami2015integrating}, and such systems have been given a categorical semantics~\cite{vakar2014syntax,vakar2015categorical}, including one for quantum circuits~\cite{fu2022linear}.
+Quantitative Type Theory (QTT)~\cite{mcbride2016,atkey2018} annotates every binder with a usage count drawn from a semiring and counts uses inside types as zero, so that linear variables may appear in types; Idris~2 implements QTT~\cite{brady2021}.
+Graded dependent type theories also track how variables are used in types~\cite{moon2021grtt} and give usage an operational meaning~\cite{choudhury2021grad}, and one with erasure has been formalised in Agda~\cite{abel2023graded}.
+A two-level design~\cite{fu2026twolevel} separates a logical level from a linear program level whose proofs and types are erasable; ATS~\cite{xi2007ats,zhu2005stateful,chen2005combining} combines dependent types, linear proofs about memory, and proofs written as total functions that are erased before execution.
+
+LRL differs from these systems in two ways.
+First, its annotations describe something else.
+QTT quantities, and the multiplicities of Linear Haskell~\cite{bernardy2018}, describe how a function uses its \emph{argument}.
+LRL's function kinds describe how a closure uses its \emph{captured environment}, as Rust's \lstinline|Fn|/\lstinline|FnMut|/\lstinline|FnOnce| traits do (\S\ref{sec:core:kinds}).
+The closest published analogue is the affinity mode of Oxidizing OCaml~\cite{lorenzen2024oxidizing}, in which a closure that captures a unique value can be called only once.
+Second, LRL keeps typing and ownership as two separate judgments in its kernel---occurrences of an owned variable inside a type are erased uses and impose no constraint---and checks borrows with a third, flow-sensitive analysis on its intermediate representation.
+Work on graded types takes the other route, folding uniqueness, ownership and borrowing into one graded type system~\cite{marshall2022,marshall2024fractional}, and Pure Borrow~\cite{matsushita2026pureborrow} brings Rust-style borrowing to Linear Haskell.
+Section~\ref{sec:tensions} discusses what our separation costs.
+Unlike QTT and graded type theories, LRL has no soundness proof for its full dependent calculus; our machine-checked results cover a non-dependent core (\S\ref{sec:own:meta}).
+
+\subsection{Languages with linearity, uniqueness, or ownership of state}\label{sec:related:lang}
+
+Clean's uniqueness types~\cite{barendsen1993conventional,barendsen1996uniqueness}, Alms~\cite{tov2011practical}, Linear Haskell~\cite{bernardy2018}, Granule~\cite{orchard2019granule} and Cogent~\cite{oconnor2016cogent} are implemented languages that statically restrict duplication; Mezzo~\cite{pottier2013mezzo,balabonski2016mezzo} tracks duplicable and affine permissions that change from one program point to the next.
+Vault~\cite{deline2001vault} enforces resource protocols in low-level code, and alias types~\cite{smith2000alias} track the shape of the store and the aliasing of pointers, so that low-level code can deallocate and reuse memory safely.
+Session types~\cite{honda1998session}, their reading in linear logic~\cite{caires2010session,wadler2012sessions}, and their dependent extension~\cite{toninho2011dependent} are the standard account of protocols such as the channel of \S\ref{sec:tour}.
+Systems that reason about mutable state with proofs inside a dependently typed language---Hoare Type Theory and Ynot~\cite{nanevski2006htt,nanevski2008htt,nanevski2008ynot}, Low*~\cite{protzenko2017lowstar} with explicit memory footprints, and the separation logics Steel and PulseCore in F*~\cite{swamy2016fstar,swamy2020steelcore,fromherz2021steel,ebner2025pulsecore}---reason about ownership of mutable state with proofs rather than with an affine type discipline.
+They combine dependent types with reasoning about ownership of mutable state far beyond what LRL offers; LRL, which has no mutable state at all (\S\ref{sec:limits}), is much less expressive in this respect.
+
+\subsection{Refinement types and verification for Rust}\label{sec:related:rust}
+
+RustBelt~\cite{jung2018rustbelt} proves a substantial fragment of Rust sound in the Iris logic; Oxide~\cite{weiss2021oxide} formalises borrow checking; Stacked and Tree Borrows~\cite{jung2020stacked,villani2025treeborrows} are aliasing models for unsafe code; LRL's MIR borrow checker follows non-lexical lifetimes~\cite{rfc2094}, computing each region as a set of program points; Polonius~\cite{polonius2018} reformulates the same check in terms of loans.
+A second line adds specifications and proofs to Rust programs: Prusti~\cite{astrauskas2019prusti}, Creusot~\cite{denis2022creusot}, Verus~\cite{lattuada2023verus,lattuada2024verussosp}, RustHorn~\cite{matsushita2020rusthorn}, Aeneas~\cite{ho2022aeneas}, RefinedRust~\cite{gaher2024refinedrust} and the Kani model checker~\cite{vanhattum2022kani}; RefinedC~\cite{sammler2021refinedc} does the same for C.
+Flux~\cite{lehmann2023flux} adds refinement types to Rust, checks them on rustc's MIR and indexes vectors by their length; Thrust~\cite{ogawa2025thrust} adds a dependent refinement type system that uses prophecy variables for mutable borrows.
+These tools can state and prove properties like those of our case studies, but they are separate tools layered on a mature language whose compiler does not check the proofs.
+LRL has one kernel that checks both programs and proofs, with dependent types in the style of the Calculus of Inductive Constructions rather than refinements, and none of Rust's maturity.
+
+\subsection{Dependent types and hygienic macros}\label{sec:related:macros}
+
+Hygienic macro expansion goes back to the 1980s and early 1990s~\cite{kohlbecker1986,dybvig1993}; scope sets~\cite{flatt2016scopes} underlie hygiene in Racket and inspired the simpler macro scopes of Lean~4~\cite{ullrich2022}.
+Turnstile~\cite{chang2017turnstile} and Turnstile+~\cite{chang2020dependent} reverse the usual relationship between macros and types: the type checker itself is written as macros, which makes it possible to build dependently typed languages, up to the Cur proof assistant, inside Racket.
+Typed Racket~\cite{tobinhochstadt2008typedscheme,tobinhochstadt2011languages} and its refinement types~\cite{kent2016occurrence} are other typed languages built from macros, and macro-extensible domain-specific languages can be built in the same way~\cite{ballantyne2020macros}.
+Template Haskell~\cite{sheard2002th}, Scala~3 macros~\cite{stucki2018scala,stucki2021multistage}, Lean~4 elaborators~\cite{ullrich2022}, Idris elaborator reflection~\cite{christiansen2016elab} (also available in Idris~2) and Agda's reflection~\cite{vanderwalt2013agda} let metaprograms inspect types; Rust's \lstinline|macro_rules!| has what the Rust reference calls mixed-site hygiene~\cite{rustmacros}.
+LRL takes the most restrictive position in this space: macros are templates with no conditionals, no pattern matching on arguments and no compile-time evaluation (\S\ref{sec:macros:alg}); they cannot inspect types or see ownership information, and their output enters the pipeline before elaboration.
+This gives up expressiveness compared with every system above, in exchange for a guarantee that is easy to state and to test: a macro can only produce programs that a user could have written by hand, up to renaming of bound variables; those programs pass the same checks as hand-written ones, and in addition a macro may not produce axioms, unsafe definitions, \lstinline|eval| or classical imports (\S\ref{sec:macros:boundary}).
+Turnstile, where type checking happens during expansion, is the opposite design point.
+
+\subsection{Ownership types in the object-oriented tradition}\label{sec:related:oo}
+
+Object-oriented languages studied the control of aliasing long before Rust: Islands~\cite{hogg1991islands}, Balloons~\cite{almeida1997balloon}, flexible alias protection~\cite{noble1998flexible} and ownership types~\cite{clarke1998ownership}, surveyed in~\cite{clarke2013survey}.
+Later work added uniqueness and borrowing: alias burying~\cite{boyland2001burying}, which checks uniqueness with a liveness analysis and so anticipates non-lexical lifetimes; capabilities for sharing~\cite{boyland2001capabilities}; external uniqueness~\cite{clarke2003external}; AliasJava~\cite{aldrich2002alias}; ownership domains~\cite{aldrich2004domains}; ownership types for freedom from data races and deadlocks~\cite{boyapati2002ownership}; capabilities for uniqueness and borrowing~\cite{haller2010capabilities}; reference immutability~\cite{gordon2012uniqueness}; the reference capabilities of Pony~\cite{clebsch2015deny}; and reference capabilities for data-race-free concurrency control~\cite{castegren2016reference}.
+Universe types use ownership to support modular verification~\cite{muller2002modular,dietl2005universes,dietl2007generic}; existential owners~\cite{wrigstad2007existential} and loose ownership domains~\cite{schaefer2007loose} make ownership types more expressive; and Joe3~\cite{ostlund2008ownership} combines ownership with uniqueness and immutability.
+Recent work in this journal studies mutable value semantics as an alternative to references~\cite{racordon2022mvs} and a capability-based intermediate language that guarantees uniqueness and immutability~\cite{racordon2022lingua}.
+In this paper ``ownership'' means Rust's discipline of moves and borrows---every value has one owner, a move transfers it, and references are checked against regions---and not owner-parameterised types, which constrain the shape of an object graph.
+LRL has no objects, no mutable heap and no owner parameters.
+Its closures come closest: as \S\ref{sec:core:kinds} explains, a closure is an object whose fields are its captures, and its kind says whether its single method takes the receiver by shared reference, by mutable reference or by value.
+The two traditions meet in uniqueness and borrowing~\cite{boyland2001burying,haller2010capabilities}: in LRL a value whose type is not Copy, including every closure that is not erased (\S\ref{sec:core:copy}), has a single owner and can be borrowed, much as a unique reference can be. A closure's kind is a separate property: \lstinline|FnOnce| limits how often a closure may be called, which Oxidizing OCaml calls affinity and distinguishes from uniqueness~\cite{lorenzen2024oxidizing}.
+
+\subsection{In-place update in functional and dependently typed languages}\label{sec:related:inplace}
+
+Static guarantees of destructive update go back to linear types~\cite{wadler1990}, Clean's uniqueness types~\cite{barendsen1996uniqueness} and Hofmann's type system for in-place update~\cite{hofmann2000inplace}.
+Lean~4~\cite{lean42021} and Koka~\cite{leijen2014koka} instead use precise reference counting to update unshared values in place at run time~\cite{ullrich2019beans,reinking2021perceus,lorenzen2022frame}---a style that Perceus calls ``functional but in-place'' (FBIP). FP\textsuperscript{2}~\cite{lorenzen2023fp2} checks statically that a function can run fully in place, without allocating memory, provided its arguments are not shared; its implementation in Koka checks that condition at run time.
+Idris~2 offers linear arrays updated in place~\cite{brady2021}.
+We observed the run-time behaviour of Lean~4 directly (\S\ref{sec:eval:compare}): it reversed an unshared array without copying it and copied a shared one.
+LRL performs no in-place update at all: its values are immutable and its backends copy them.
+Its ownership discipline would make a static reuse analysis possible, but we have not built one, and we make no performance claim based on ownership.
+
+\subsection{Trusted kernels}\label{sec:related:kernels}
+
+LRL follows proof assistants such as Coq~\cite{bertot2004coqart} and Lean~\cite{lean2015,lean42021} in routing every definition through a separate checker whose correctness suffices for the logical soundness of what it accepts.
+Verified compilers such as CompCert~\cite{leroy2009compcert} and CakeML~\cite{kumar2014cakeml} go much further and prove, in a proof assistant, that their compilation passes preserve the meaning of programs; LRL proves nothing about its compiler.
+The trust question specific to LRL is which resource properties lie inside the kernel's guarantee and which do not; \S\ref{sec:own:trust} answers it.

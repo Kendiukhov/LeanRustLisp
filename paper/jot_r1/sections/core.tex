@@ -1,0 +1,162 @@
+% =====================================================================
+\section{The Core Calculus}\label{sec:core}
+% =====================================================================
+
+This section describes the language that the kernel checks.
+The kernel is the \texttt{kernel/} crate and forms the \emph{logical trusted base}; every other part of the compiler lies outside it: a bug outside the kernel can make the compiler reject a good program, report a poor diagnostic, or generate wrong code (including code that breaks the borrowing discipline, \S\ref{sec:own:trust}), but it cannot make the kernel accept a definition that breaks the rules of this section and of \S\ref{sec:own:modes}--\S\ref{sec:own:rec}.
+Section~\ref{sec:own:trust} says exactly which guarantees this covers and which it does not.
+
+\subsection{Terms}\label{sec:core:terms}
+
+Figure~\ref{fig:syntax} gives the terms of the kernel.
+They correspond one to one to the constructors of the kernel's \texttt{Term} type, except for metavariables, which the elaborator must solve before a term reaches the kernel.
+Variables are de~Bruijn indices in the implementation; we write names.
+
+\begin{figure*}[t]
+\footnotesize
+\[
+\begin{array}{@{}r@{\;}c@{\;}l@{\qquad}l@{}}
+\ell & ::= & 0 \mid \ell+1 \mid \max(\ell,\ell) \mid \mathrm{imax}(\ell,\ell) \mid u & \text{universe levels}\\
+k & ::= & \Fn \mid \FnMut \mid \FnOnce & \text{function kinds}\\
+t, A, B & ::= & x \mid \kw{Sort}\,\ell \mid c \mid I \mid I.j \mid \kw{rec}_I & \text{variables, sorts, constants, inductives, constructors, recursors}\\
+ & \mid & \Pik{k}(x{:}A).\,B \mid \Lamk{k}(x{:}A).\,t \mid \Pik{k}\{x{:}A\}.\,B \mid \Lamk{k}\{x{:}A\}.\,t & \text{functions (explicit and implicit binders)}\\
+ & \mid & t\;t \mid t\;t^{\alpha} & \text{application, optionally carrying a lifetime label } \alpha\\
+ & \mid & \kw{let}\;x{:}A = t\;\kw{in}\;t \mid \kw{fix}\;f{:}A.\;t & \text{local definitions, general recursion}
+\end{array}
+\]
+\caption{Kernel terms. $\kw{Sort}\,0$ is the universe $\Prop$ of propositions and $\kw{Sort}\,1$ the universe of ordinary types. Constants, inductive types and constructors also carry universe-level arguments, which we omit. References are not separate terms: they are applications of the reserved constants $\kw{Ref}$, $\kw{Shared}$, $\kw{Mut}$, $\kw{borrow\_shared}$ and $\kw{borrow\_mut}$, which have fixed types; a lifetime label $\alpha$ is attached to an application of $\kw{Ref}$, and we write $\kw{Ref}^{\alpha}\,\kw{Shared}\,A$.}
+\label{fig:syntax}
+\end{figure*}
+
+Two features differ from a textbook dependent type theory~\cite{coquand1988,paulinmohring1993}.
+First, every $\Pi$ and $\lambda$ carries a function kind $k$ (\S\ref{sec:core:kinds}).
+Second, the calculus has a fixpoint $\kw{fix}$ for general recursion, which is allowed only in definitions declared \lstinline|partial| and never appears in types (\S\ref{sec:core:defs}).
+Pattern matching is not a kernel construct: the elaborator translates every \lstinline|match| into an application of the recursor $\kw{rec}_I$ of the matched inductive type $I$.
+A recursor application has the shape
+\[
+\kw{rec}_I\;\overline{p}\;P\;\overline{m}\;\overline{\imath}\;e
+\]
+with the parameters $\overline{p}$ of $I$, a \emph{motive} $P$ (the result type, as a function of the indices and of the scrutinee), one \emph{minor premise} $m_j$ per constructor (the case function), the indices $\overline{\imath}$ and the scrutinee $e$, which we also call the \emph{major premise}.
+The minor premise for constructor $I.j$ receives the constructor's fields in order, and each field whose type is $I$ again (a \emph{recursive field}) is immediately followed by the result of the recursive call on that field (its \emph{induction hypothesis}).
+
+\subsection{Function kinds}\label{sec:core:kinds}
+
+\begin{definition}[Function kinds]\label{def:kinds}
+The kinds are ordered $\Fn \sqsubset \FnMut \sqsubset \FnOnce$.
+The kind of a function says how \emph{calling} it uses the function's \emph{captured environment}---the variables that the body of a $\lambda$ refers to but does not bind:
+a call of an $\Fn$ function only reads the environment, a call of an $\FnMut$ function may also use it mutably, and a call of an $\FnOnce$ function may consume it.
+Consequently, calling a function \emph{value} $f$ of kind $k$ uses $f$ itself in the mode $\mathrm{cap}(k)$, where $\mathrm{cap}(\Fn)=\mathsf{read}$, $\mathrm{cap}(\FnMut)=\mathsf{mut}$ and $\mathrm{cap}(\FnOnce)=\mathsf{move}$ (\S\ref{sec:own:modes}).
+\end{definition}
+
+Readers used to objects may find the following view helpful.
+A closure is an object whose fields are its captured variables and whose only method is ``call''.
+The three kinds say how that method takes its receiver: by shared reference ($\Fn$), by mutable reference ($\FnMut$), or by value ($\FnOnce$)---exactly the receiver modes \lstinline|&self|, \lstinline|&mut self| and \lstinline|self| of Rust methods.
+A closure that consumes one of its fields can therefore be called only once.
+
+The kind says nothing about how the function uses its \emph{argument}: a function of kind $\Fn$ may consume its argument, and a top-level function, which captures nothing, has kind $\Fn$ unless it is annotated otherwise.
+This is the reading of Rust's \lstinline|Fn|, \lstinline|FnMut| and \lstinline|FnOnce| traits, transferred to $\Pi$-types; it differs from the quantities of QTT and the multiplicities of Linear Haskell, which describe the use of the argument (\S\ref{sec:related:lindep}).
+In the surface syntax a $\Pi$ or $\lambda$ is annotated with \lstinline|#[fn]|, \lstinline|#[mut]| or \lstinline|#[once]|; an unannotated $\lambda$ receives its required kind (\S\ref{sec:own:kind}), and an unannotated $\Pi$ has kind $\Fn$.
+
+In a curried function, each $\Pi$ has its own kind.
+For example, with a resource type \lstinline|Tok| declared \lstinline|affine| (\S\ref{sec:core:copy}), in
+\begin{lstlisting}
+(inductive (affine) Tok (sort 1) (ctor mk_tok Tok))
+(def pair_with (pi a Tok (pi #[once] b Nat (Pair Tok Nat)))
+  (lam a Tok (lam #[once] b Nat (mk_pair a b))))
+\end{lstlisting}
+the inner function captures the token \lstinline|a| and moves it into the pair, so it must be $\FnOnce$; the outer function captures nothing and is $\Fn$.
+Without the annotation \lstinline|#[once]| on the inner $\Pi$ the elaborator rejects the definition (\texttt{F0206}).
+This example and every other LRL example in the paper that is not part of a case study is a file in \texttt{case\_studies/paper\_examples/}, checked by a test.
+
+Kinds are part of type identity: $\Pik{\Fn}(x{:}A).B$ and $\Pik{\FnOnce}(x{:}A).B$ are different types, and the kernel has no subsumption between them.
+When a function of kind $k$ is expected at kind $k'$ with $k \sqsubset k'$, the elaborator inserts a coercion: it relabels a literal $\lambda$, and wraps any other term $f$ as $\Lamk{k'}(x{:}A).\,f\,x$.
+For a variable $f$, Lemma~\ref{lem:coercion} shows that the wrapper is well-owned; for other terms the kernel checks the wrapper like any other $\lambda$.
+The converse coercion does not exist: a function that may consume its environment cannot be used where a repeatable call is expected.
+
+The \emph{required kind} of a $\lambda$ is the smallest kind compatible with its body; it is defined in \S\ref{sec:own:kind} from the same analysis that drives the ownership check.
+
+\subsection{Copyable and affine types}\label{sec:core:copy}
+
+Values are \emph{affine} by default in Rust's sense: a value may be used (moved) at most once, unless its type is \emph{Copy}.
+
+\begin{definition}[Copy]\label{def:copy}
+After reduction to weak head normal form (that is, after evaluating the type until its outermost constructor is visible), a type $T$ is Copy if
+(i) $T$ is \emph{erased}: $T$ is a sort or a $\Pi$-type ending in a sort (its values are types or type families), or $T$ is a proposition, a type whose sort is $\Prop$ (its values are proofs); values of an erased type do not exist at run time;
+(ii) $T$ is a shared reference $\kw{Ref}^{\alpha}\,\kw{Shared}\,A$;
+or (iii) $T = I\;\overline{a}$ for an inductive type $I$ that has a Copy instance whose requirements are Copy when instantiated with the parameter arguments in $\overline{a}$.
+Function types that are not erased, mutable references $\kw{Ref}^{\alpha}\,\kw{Mut}\,A$, and opaque (axiomatised) types are not Copy.
+\end{definition}
+
+Copy instances are \emph{derived} automatically for every inductive type, unless the declaration carries the marker \lstinline|affine| or an interior-mutability marker.
+Derivation records, as the instance's requirements, the types of the constructor fields expressed over the parameters: recursive fields add nothing, and the index arguments of inductive families are dropped.
+So \lstinline|(Vec Nat n)| is Copy for every \lstinline|n|, \lstinline|(Vec Tok n)| only if \lstinline|Tok| is, and a type whose only field has type \lstinline|(Ref Shared A)| is Copy for every \lstinline|A|.
+Derivation fails, and the type is not Copy, when a field's type depends on an earlier field other than through an index, or when a recursive occurrence is not uniform; the marker \lstinline|copy| turns such a failure into an error.
+Programmers can also declare Copy instances explicitly, but only as \lstinline|unsafe| declarations, which the kernel records as unsafe axioms.
+
+The \lstinline|affine| marker is how a programmer declares a \emph{resource} type: its values are affine even if all their fields are copyable.
+The channel of \S\ref{sec:tour} is declared this way.
+Copy by default for plain data is a deliberate choice (\S\ref{sec:tensions}); it follows Idris~2 and Linear Haskell, where data is unrestricted unless a binder or arrow says otherwise, rather than Rust, where every type is affine unless it derives \lstinline|Copy|.
+
+\subsection{Typing}\label{sec:core:typing}
+
+Figure~\ref{fig:typing} gives the typing rules.
+A context $\Gamma$ is a list of assumptions $x{:}A$, and $\Sigma$ is the global environment of checked definitions, inductive declarations and axioms.
+Every rule except T-Conv corresponds to one case of the kernel's type inference (\texttt{infer} in \texttt{kernel/src/checker.rs}); T-Conv corresponds to its checking function \texttt{check}, and the conversion relation $\equiv$ is decided by normalisation by evaluation~\cite{abel2013} (\texttt{kernel/src/nbe.rs}).
+
+\begin{figure*}[t]
+\footnotesize
+\begin{mathpar}
+\inferrule*[right=T-Var]{x{:}A \in \Gamma}{\Gamma \vdash x : A}
+
+\inferrule*[right=T-Sort]{ }{\Gamma \vdash \kw{Sort}\,\ell : \kw{Sort}\,(\ell+1)}
+
+\inferrule*[right=T-Const]{(c : A) \in \Sigma}{\Gamma \vdash c : A}
+
+\inferrule*[right=T-Ind]{(I : A_I) \in \Sigma}{\Gamma \vdash I : A_I}
+
+\inferrule*[right=T-Ctor]{(I.j : A_{I.j}) \in \Sigma}{\Gamma \vdash I.j : A_{I.j}}
+
+\inferrule*[right=T-Rec]{I \in \Sigma \\ \ell \text{ allowed by the elimination restriction of } I}{\Gamma \vdash \kw{rec}_I^{\ell} : \mathrm{RecType}(I,\ell)}
+
+\inferrule*[right=T-Pi]{\Gamma \vdash A : \kw{Sort}\,\ell_1 \\ \Gamma, x{:}A \vdash B : \kw{Sort}\,\ell_2}{\Gamma \vdash \Pik{k}(x{:}A).\,B : \kw{Sort}\,\mathrm{imax}(\ell_1,\ell_2)}
+
+\inferrule*[right=T-Lam]{\Gamma \vdash A : \kw{Sort}\,\ell \\ \Gamma, x{:}A \vdash t : B \\ \mathrm{req}(\Gamma, x{:}A, t) \sqsubseteq k}{\Gamma \vdash \Lamk{k}(x{:}A).\,t : \Pik{k}(x{:}A).\,B}
+
+\inferrule*[right=T-App]{\Gamma \vdash f : \Pik{k}(x{:}A).\,B \\ \Gamma \vdash a : A}{\Gamma \vdash f\,a : B[a/x]}
+
+\inferrule*[right=T-Let]{\Gamma \vdash A : \kw{Sort}\,\ell \\ \Gamma \vdash v : A \\ \Gamma, x{:}A \vdash t : B}{\Gamma \vdash \kw{let}\;x{:}A = v\;\kw{in}\;t : B[v/x]}
+
+\inferrule*[right=T-Fix]{\Gamma \vdash A : \kw{Sort}\,\ell \\ A \equiv \Pik{k}(y{:}C).\,D \\ \Gamma, f{:}A \vdash t : A}{\Gamma \vdash \kw{fix}\;f{:}A.\;t : A}
+
+\inferrule*[right=T-Conv]{\Gamma \vdash t : A \\ A \equiv B}{\Gamma \vdash t : B}
+\end{mathpar}
+\caption{Typing rules of the kernel (implicit binders are typed like explicit ones). $\mathrm{RecType}(I,\ell)$ is the type of the recursor of $I$ eliminating into $\kw{Sort}\,\ell$, computed from the declaration of $I$; $\mathrm{req}$ is the required kind (Definition~\ref{def:req}). The checks that a definition's value is closed, that total definitions recurse structurally, and that partial and unsafe definitions do not occur in types are made when a definition is added to $\Sigma$ (\S\ref{sec:core:defs}).}
+\label{fig:typing}
+\end{figure*}
+
+Conversion $\equiv$ includes $\beta$-reduction, unfolding of transparent total definitions ($\delta$; definitions declared \lstinline|opaque|, partial and unsafe definitions, and fixpoints are not unfolded), recursor reduction on constructors ($\iota$), unfolding of \lstinline|let| ($\zeta$), and $\eta$: a $\lambda$ of kind $\Fn$ or $\FnMut$ is equal to a term $f$ when its body is equal to $f$ applied to the bound variable; a $\lambda$ of kind $\FnOnce$ is never $\eta$-contracted.
+Conversion compares function kinds and lifetime labels strictly.
+Normalisation during type checking never unfolds a fixpoint and is bounded by a configurable budget of reduction steps (\texttt{-{}-defeq-fuel}) and by a limit on nesting depth; when either is exhausted the kernel reports that it cannot decide, rather than looping. The budget counts reduction steps, not the size of the values that are built and compared, so a conversion check within the budget can still take a long time.
+
+\subsection{Propositions and erasure}\label{sec:core:prop}
+
+$\Prop$ is impredicative: $\Pi(x{:}A).\,B$ is a proposition whenever $B$ is, which is why T-Pi uses $\mathrm{imax}$, where $\mathrm{imax}(\ell_1,\ell_2)$ is $0$ if $\ell_2 = 0$ and $\max(\ell_1,\ell_2)$ otherwise.
+An inductive proposition may be eliminated only into $\Prop$, unless it has no constructor, or a single constructor all of whose fields (the binders after the parameters) are proofs, or it has the shape of equality, whose eliminator may then produce a value of any type (transport); this is the restriction mentioned in T-Rec.
+Inductive declarations are also checked for well-formedness (the declared type ends in a universe and every constructor type is a type), for strict positivity, and for universe levels: in an inductive type that is not a proposition, every constructor field must live in a universe no larger than that of the inductive type and may not be a proof, while parameters and indices are unconstrained; inductive propositions are exempt from the universe check because $\Prop$ is impredicative, as in Lean and Coq.
+Proofs have no run-time content.
+Code generation \emph{erases} them: a local whose type is a proposition becomes a unit value, and a computation whose result is a proof is not evaluated.
+Erasure in LRL is therefore less complete than in Lean~4 or Idris~2, which also remove proof arguments from function signatures; LRL still passes a unit value where a proof argument was.
+Section~\ref{sec:eval:cost} measures what this costs.
+
+\subsection{Definitions and effects}\label{sec:core:defs}
+
+A program is a sequence of declarations: inductive types, axioms, macros, and definitions of four sorts.
+A \lstinline|def| is \emph{total}: it may not refer to itself, so its recursion goes through recursors and is structural (the kernel also runs a structural termination check); total definitions may be used in types.
+Recursive functions are therefore written with \lstinline|match| and induction hypotheses.
+A \lstinline|partial| definition may use $\kw{fix}$ (whose result may not be a proof), must return a computation type \lstinline|(Comp A)| (which lives in $\kw{Sort}\,2$, because its constructors store types), may not occur in types, and may not be used by total definitions.
+An \lstinline|unsafe| definition may call primitives marked unsafe; it is excluded from types and from total and partial code.
+Axioms may carry the tags \lstinline|classical| and \lstinline|unsafe|, and the kernel records, for every definition, the axioms it depends on.
+A definition that depends on any axiom, whatever its tags, must be declared \lstinline|noncomputable| (or \lstinline|unsafe|); otherwise the kernel rejects it (\texttt{K0023}).
+Code generation replaces axioms by stubs that fail when they are reached, and does so only when the programmer passes \texttt{-{}-allow-axioms}; without it, the compiler refuses to generate code for a program that declares an axiom.
+
+Every definition, of every sort, goes through the same two kernel checks before it is added to $\Sigma$: the typing rules of Figure~\ref{fig:typing} and the ownership rules of the next section.

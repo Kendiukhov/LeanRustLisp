@@ -1,0 +1,30 @@
+% =====================================================================
+\section{Conclusion}\label{sec:conclusion}
+% =====================================================================
+
+We set out to see what happens when Rust's ownership mechanisms meet a dependently typed kernel and a hygienic macro system.
+
+\emph{RQ1: kinds and elimination.}
+Function kinds and dependent elimination are not independent: a recursor runs its case functions as often as the data requires, so a case that may run more than once must not consume what it captures, and a recursive field is consumed when its induction hypothesis is computed.
+The kernel enforces these rules; for $\lambda^{\mathrm{aff}}$, a non-dependent core calculus with function kinds and an iterator that models a repeatable case, we mechanized that well-owned programs never consume a resource twice, while the dependent calculus is not mechanized.
+
+\emph{RQ2: who enforces what.}
+The kernel, which is the logical trusted base, enforces affinity; the MIR borrow checker, outside the kernel, enforces borrowing; every definition passes both, and macros cannot avoid either because they run before elaboration and see neither types nor ownership.
+The two checkers check different things and are not required to agree; on the repository's programs the kernel never rejected a definition that MIR accepted, and on the violation corpus MIR independently rejected all but one class of the kernel's ownership violations.
+
+\emph{RQ3: does it work?}
+Complete programs that use all three features together can be written, checked and compiled.
+On our twelve properties, Idris~2 statically rejects every violation that LRL rejects but one (it accepts a proof forged with \lstinline|believe_me|; the program then fails at run time in the division the proof was meant to protect), and two that LRL accepts; LRL's design differs in expressing resources through Rust-style closure kinds and borrows with lifetimes.
+LRL does not yet turn ownership into efficiency, which Lean~4 (through reference counting), Idris~2 (with linear arrays) and Rust do.
+
+The most immediate directions for future work follow from the limitations: operations that read and write through references, a reuse analysis that exploits affinity for in-place update, and a mechanization that covers recursors and dependent types.
+
+\section*{Data and code availability}
+
+The implementation, the case studies, the comparison programs, the measurement scripts and the Lean development are available at \url{https://github.com/Kendiukhov/LeanRustLisp} under the MIT licence.
+All results in this paper refer to commit \texttt{\PinnedCommit}.
+The mechanization builds with \texttt{lake build LRL} in \texttt{mechanization/}; the compiler and its \NumTestsPassed{} tests build and run with \texttt{cargo test --all}; each generated report names the script that regenerates it (for the measurements, \texttt{bench/\allowbreak results/\allowbreak summary.md}, which also points to the raw data files).
+
+\section*{Declaration of competing interest}
+
+The author declares no competing financial interests or personal relationships that could have influenced the work reported in this paper.

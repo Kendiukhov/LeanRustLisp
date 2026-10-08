@@ -1,0 +1,215 @@
+% =====================================================================
+\section{Evaluation}\label{sec:eval}
+% =====================================================================
+
+The evaluation asks five questions.
+\begin{enumerate}\setlength\itemsep{1pt}
+\item[\textbf{E1}] Can complete programs that combine dependent types, ownership and macros be written, checked and run (\S\ref{sec:eval:cases})?
+\item[\textbf{E2}] Is every ownership violation rejected, by the component Table~\ref{tab:trust} says is responsible, and identically whether it is written by hand or produced by a macro (\S\ref{sec:eval:corpus})?
+\item[\textbf{E3}] How do the kernel's and MIR's verdicts relate in practice (\S\ref{sec:eval:stages})?
+\item[\textbf{E4}] How do the same properties fare in Lean~4, Idris~2, Rust and Racket (\S\ref{sec:eval:compare})?
+\item[\textbf{E5}] What do the checks and the code generators cost (\S\ref{sec:eval:cost})?
+\end{enumerate}
+
+\paragraph{Method.}
+Every result in this section is produced by a script in the repository and can be regenerated from commit \texttt{\PinnedCommitShort}: the case studies by \texttt{case\_studies/\allowbreak lrl/\allowbreak run\_*.sh}, the violation corpus by \texttt{case\_studies/\allowbreak corpus/\allowbreak run\_corpus.sh}, the stage comparison by \texttt{case\_studies/\allowbreak tools/\allowbreak run\_stage\_matrix.sh}, the cross-language comparison by the three \texttt{run\_*.sh} scripts in \texttt{case\_studies/\allowbreak comparison/}, and the measurements by \texttt{bench/\allowbreak run\_bench.py}; the one sampling profile we cite was taken by hand and is described, with its commands, in \texttt{bench/\allowbreak results/\allowbreak profiles.txt}.
+Each script writes a results file that records the commands it ran and the compiler binary it used (by its hash) or, for the other languages, the tool versions.
+The case studies, the corpus and the regression tests in the repository are also part of the Rust test suite, which has \NumTestsPassed{} tests at the pinned commit, all passing.
+
+\subsection{Complete case studies}\label{sec:eval:cases}
+
+\paragraph{A: length-indexed vectors with proofs.}
+The first case study (file \texttt{case\_studies/\allowbreak lrl/\allowbreak vectors.lrl}, \NumVectorsLines{} lines, Appendix~\ref{app:listings}) defines \lstinline|Vec|, a total \lstinline|vhead| on non-empty vectors (no run-time check and no default value), \lstinline|vtail|, \lstinline|vmap|, \lstinline|vappend| (whose type says that the lengths add), \lstinline|vsnoc|, \lstinline|vreverse|, conversion to lists and summation, and \NumVectorsTheorems{} theorems: the equality lemmas \lstinline|cong|, \lstinline|sym| and \lstinline|trans|, the lemma \lstinline|vreverse_vsnoc|, the involution \lstinline|vreverse_involutive| for every element type, length and vector, the corollary that \lstinline|vreverse| is injective, and an instance at a concrete vector.
+All theorems are total definitions whose types are propositions, and none depends on an axiom; a separate harness confirms this through the kernel's API and also submits false variants of the main theorems directly to the kernel, which rejects them.
+Compiled with either code generator, the program prints the expected values.
+
+Writing the case study exercised the ownership rules of \S\ref{sec:own:rec} in an unexpected way.
+The direct definition of \lstinline|vtail| for an arbitrary element type \lstinline|A|---match on the vector and return the tail---is rejected: \lstinline|(Vec A n)| is Copy only if \lstinline|A| is, so for a type variable \lstinline|A| the tail is an owned recursive field, which the recursor has already consumed to compute the induction hypothesis (\lstinline|RecursiveFieldConsumedByIh|).
+The case study therefore defines \lstinline|vtail| through a split of the vector, at linear rather than constant cost.
+This is a real cost of compiling recursors with eagerly computed induction hypotheses (\S\ref{sec:tensions}).
+
+\paragraph{B: a protocol tied to a vector.}
+The second case study (file \texttt{case\_studies/\allowbreak lrl/\allowbreak protocol.lrl}, \NumProtocolLines{} lines) is the running example of \S\ref{sec:tour}.
+It defines the affine channel, generates two send operations with the \lstinline|defsend| macro, sends a vector over a channel with \lstinline|send_all|, and performs a branching protocol step that consumes the channel in both branches.
+Both code generators produce binaries that print the sent messages and the same result.
+
+\paragraph{Negative variants.}
+For the two case studies there are \NumCaseNegatives{} negative variants, each a copy of a case study with one mistake.
+All are rejected, with the codes listed in \S\ref{sec:tour} and in the case studies' results files; a script also checks that removing the mistake makes each one accepted again.
+Every false proof and every wrong length is rejected by the \emph{elaborator}, which fails to unify the expected and the actual type before the term reaches the kernel; for the false proofs, the harness also submits the corresponding terms directly to the kernel, which rejects them.
+
+\paragraph{What the case studies do not show.}
+Two properties one might expect from a protocol are not enforced.
+Dropping a channel without closing it is accepted, because the discipline is affine, not linear.
+And because LRL has no abstraction mechanism that hides constructors, any code can take a channel apart and rebuild it at another index; a protocol in LRL is as trustworthy as the code that has access to its constructors.
+
+\subsection{Ownership violations, written by hand and by macros}\label{sec:eval:corpus}
+
+The validation corpus (\texttt{case\_studies/corpus/}) contains \NumCorpusClasses{} classes---violations of the ownership, kind and effect rules, and two kinds of declaration that a macro may not produce---and \NumCorpusPositives{} positive controls, the nearest legal programs.
+Each is written once by hand and once as a macro whose expansion is the hand-written program (\NumCorpusFiles{} files).
+Table~\ref{tab:corpus} groups the classes by the stage that rejects them.
+All \NumCorpusRows{} rows of the corpus behave as expected: every violation is rejected by the expected stage with the expected code; every macro-generated twin of a violation is rejected with the same code as its hand-written original, and in all classes but one the diagnostic names the macro (for a reference stored in a constructor that outlives its owner, MIR reports the error at the hand-written move of the owner, outside the macro's expansion); and every positive control and its twin is accepted and runs with the expected output.
+For the two macro-boundary classes---an axiom and an \lstinline|unsafe| definition introduced by a macro---the hand-written version is legal (the axiom is reported by the kernel's axiom tracking), and only the macro version is rejected.
+A Rust integration test checks every row.
+
+\begin{table*}[t]
+\centering\footnotesize
+\caption{Classes of the validation corpus by rejecting stage (\texttt{case\_studies/corpus/manifest.tsv}). Each class has a hand-written program and a macro-generated twin; both are rejected with the code shown, except in the last row, where the hand-written program is legal and only the twin is rejected.}
+\label{tab:corpus}
+\begin{tabular}{p{0.16\linewidth}p{0.62\linewidth}p{0.14\linewidth}}\hline
+\textbf{Stage} & \textbf{Classes} & \textbf{Codes}\\\hline\hline
+Kernel ownership & double use; use after moving into a function; calling a moved function; \lstinline|FnOnce| closure called twice; repeated case consuming a captured value; recursive field used after its induction hypothesis; partially applied recursor; fixpoint consuming a capture; case not binding a recursive field; repeated case given as a closure variable; repeated leaf case returning an owned value; borrowing a moved value; use after a branch consumed the value; use after a closure captured the value; two base cases consuming the same value & \texttt{K0021}\\
+Kernel, other & total code calling unsafe or partial code; \lstinline|affine| combined with \lstinline|copy|; \lstinline|affine| on a proposition & \texttt{K0022}, \texttt{K0052}\\
+Elaborator & \lstinline|#[fn]| closure consuming a capture; \lstinline|Fn| function type for such a closure; consuming an implicit owned argument; wrong protocol state & \texttt{F0206}, \texttt{F0207}, \texttt{F0209}, \texttt{F0214}\\
+MIR borrow check & two live mutable borrows; move while borrowed; reference escaping its referent; reference stored in a constructor outliving its owner or escaping; two mutable borrows stored in constructors & \texttt{M200}, \texttt{M201}, \texttt{M203}\\
+Macro boundary & axiom or \lstinline|unsafe| definition produced by a macro & \texttt{F0104}\\\hline
+\end{tabular}
+\end{table*}
+
+The corpus is the empirical counterpart of Propositions~\ref{prop:pipeline} and~\ref{prop:transparency}: no violation class escapes the pipeline, and no macro changes the verdict.
+It is not a proof: it covers the classes we could think of.
+
+\paragraph{Defects found by the validation.}
+Writing the case studies, the corpus and the comparison programs, and a systematic search for inputs that the kernel wrongly accepts, exposed defects in the compiler. The main ones are listed below; each of them is fixed at the pinned commit and covered by a regression test.
+In the kernel, a type that stores an owned value could be derived Copy; four recursor cases were accepted that consume an owned value more than once (a repeatable case consuming a captured value, a case using a recursive field that the recursor had already consumed to compute the induction hypothesis, a recursor applied without its cases, and a recursor of a non-recursive type applied without its scrutinee); a function value could be called after it had been moved; a proposition with a field of type $\Prop$ could be eliminated into a type, which, because $\Prop$ is impredicative, makes the logic inconsistent~\cite{hurkens1995}; binder types were not required to be types; the body of a fixpoint was checked against its type read in the wrong context, so an ill-typed fixpoint was accepted; inductive declarations were not checked for well-formedness, so a program could prove \lstinline|False|; the positivity check was not strict (an occurrence of the declared type to the left of two arrows counted as positive), and a \lstinline|let| in a constructor's field type could hide a negative occurrence, both of which also allowed a proof of \lstinline|False|; a constructor field whose type is a universe was counted one level too low, so a type could be declared in a universe smaller than its fields require, which also makes the logic inconsistent~\cite{hurkens1995}; the type of a recursor's case was wrong when a field that depends on another field followed a recursive field, which allowed a proof of \lstinline|False|; the termination check treated an induction hypothesis, and any application of a constant named \lstinline|proj|, as structurally smaller; a fixpoint could return a proof; and type checking could unfold fixpoints and restarted its step budget under every binder, so it could crash instead of reporting failure. Redefinition under the unsafe flag \texttt{-{}-allow-redefine} did not re-check the definitions that used the redefined name.
+In MIR, the borrow checker missed two mutable borrows passed through one curried call, a move while a value was borrowed, and borrows stored in data structures; a closure whose type is a proposition was not erased; and a copy propagation changed the results of programs.
+The dynamic code generator chose the wrong branch for types with three or more constructors, type arguments built by application, such as \lstinline|(List Nat)|, were compiled as function calls that failed at run time in both code generators, a number literal of a few hundred overflowed the compiler's stack, and in some cases proofs were evaluated at run time.
+In the driver, \texttt{lrl run} and the read--eval--print loop did not apply MIR's move analysis to the bodies of closures, top-level expressions skipped the ownership checks, and failed checks were reported with exit status~0.
+
+\subsection{Kernel and MIR, stage by stage}\label{sec:eval:stages}
+
+Because the kernel and MIR check different properties, we do not expect them to agree; we measured how they relate.
+The stage-matrix tool (\texttt{case\_studies/tools/stage\_matrix/}) elaborates every top-level definition of a file and records, separately, the verdicts of kernel typing, kernel admission (including the ownership check), MIR typing, MIR ownership and the MIR borrow check, for the definition's body and every closure in it.
+It computes the MIR verdicts even when the kernel rejects a definition, by lowering the elaborated term without admitting it; this uses only the compiler's public interfaces.
+For every definition, the tool's predicted admission agrees with the compiler's own driver processing the same form, and for all \NumStageCliFiles{} files (the programs of Table~\ref{tab:stages}, the files of the violation corpus and \NumStageProbeFiles{} probe files) the diagnostic codes it records agree with those of the command-line compiler run on the whole file.
+
+\paragraph{Defence in depth.}
+On the validation corpus, MIR independently rejects all but one of the classes that the kernel's ownership check rejects (\NumStageCorpusBoth{} classes are rejected by both: all but one by MIR's move analysis, \texttt{M100}, and the partially applied recursor by MIR lowering).
+If the kernel's ownership check were removed, MIR would therefore still reject every one of them except a fixpoint body that consumes a captured value, which MIR does not re-check.
+The effect checks (total code calling partial or unsafe code) exist only in the kernel.
+Besides the borrow classes, which only MIR checks by design, MIR rejects no class that the kernel accepts.
+
+\paragraph{The program corpus.}
+Over the repository's own programs (\texttt{tests/}, \texttt{code\_examples/} and the case studies), the kernel rejects no definition that MIR accepts, and every definition that the kernel rejects is also rejected by MIR's move analysis.
+The only definitions that pass the kernel and fail MIR are \NumStageKAcceptMReject{} borrow errors in negative tests (a conflict, \texttt{M200}, and a reference outliving its referent, \texttt{M203}), which is the division of labour of Table~\ref{tab:trust}.
+Table~\ref{tab:stages} gives the counts.
+
+\begin{table}[t]
+\centering\footnotesize
+\caption{Stage-by-stage verdicts over the repository's programs (\texttt{tests/}, \texttt{code\_examples/}, case studies), with the prelude of the dynamic backend, which \texttt{lrl run} uses by default: \NumStageFiles{} files with \NumStageDefs{} definitions and \NumStageExprs{} top-level expressions. Definitions that fail elaboration (mostly deliberate negative tests) have no kernel term and are not counted in the later stages.}
+\label{tab:stages}
+\begin{tabular}{lrr}\hline
+\textbf{Stage} & \textbf{Accepted} & \textbf{Rejected}\\\hline\hline
+Elaboration & \NumStageElabPass & \NumStageElabReject\\
+Kernel typing & \NumStageKTypingPass & \NumStageKTypingReject\\
+Kernel admission (incl.\ ownership) & \NumStageKAdmitPass & \NumStageKAdmitReject\\
+MIR typing & \NumStageMTypingPass & \NumStageMTypingReject\\
+MIR ownership (moves) & \NumStageMOwnPass & \NumStageMOwnReject\\
+MIR borrow check & \NumStageMBorrowPass & \NumStageMBorrowReject\\\hline
+Kernel accepts, MIR rejects & \multicolumn{2}{r}{\NumStageKAcceptMReject}\\
+Kernel rejects, MIR accepts & \multicolumn{2}{r}{\NumStageKRejectMAccept}\\\hline
+\end{tabular}
+\end{table}
+
+\subsection{Comparison with Lean~4, Idris~2, Rust and Racket}\label{sec:eval:compare}
+
+For twelve properties Q1--Q12 we wrote, for each language, correct programs that use the feature and programs that violate it (for a few language--property pairs only one kind exists; the summary in the repository lists them), compiled and ran them, and recorded what happened (\texttt{case\_studies/comparison/}).
+The programs use each language idiomatically: Lean's \lstinline|Vector| and core theorems, Idris~2's \lstinline|Vect|, quantities and \lstinline|Data.Linear|, Rust's ownership, typestate and type-level numerals, and five Racket dialects (plain Racket, Typed Racket, Typed Racket with refinements, and two languages built with Turnstile: Cur for dependent types and the linear example language).
+We used Lean~\ToolLean, Idris~2~\ToolIdris{} (Chez Scheme back end, with its \lstinline|linear| and \lstinline|contrib| packages), \texttt{rustc}~\ToolRustc{} (stable, without external crates or verifiers) and Racket~\ToolRacket.
+In total there are \NumCmpFilesLean{} Lean, \NumCmpFilesIdrisTwo{} Idris, \NumCmpFilesRust{} Rust, \NumCmpFilesRacket{} Racket and \NumCmpFilesLrl{} LRL programs, giving \NumCmpLeanIdrisCases{}, \NumCmpRustRacketCases{} and \NumCmpLrlCases{} test cases in the three results files.
+Each test case records a predicted outcome, and in all three results files every observed outcome matches its prediction; this confirms that each program behaves as its description in the repository says.
+Table~\ref{tab:compare} condenses the summary that a script generates from the results files; the summary gives the program behind every cell and the number of violations tried.
+
+\begin{table*}[t]
+\centering\footnotesize
+\caption{Observed outcomes for twelve properties, condensed from \texttt{case\_studies/comparison/SUMMARY.md}. \emph{static}: every violating program was rejected before running; \emph{partly}: some were rejected statically and the others were caught only at run time or not at all (the note says which); \emph{run time}: violations were caught only when the program ran; \emph{undetected}: a violating program compiled and ran, including where the language has no such restriction (Lean~4 has neither once-only functions nor tracked references); \emph{n/e}: not expressible---no correct program using the feature was accepted, or, for LRL, the feature does not exist. In row Q4 the cells also give the observed run-time representation of proofs and indices, and the Lean~4 and Racket cells of row Q11 describe the observed run-time behaviour. For the Racket family the dialect is named. Rust is stable \texttt{rustc} without external crates or verifiers; verifiers that add specifications and proofs to Rust programs, such as Verus, Creusot and Prusti (\S\ref{sec:related:rust}), were not tested.}
+\label{tab:compare}
+\begin{tabular}{p{0.16\linewidth}p{0.11\linewidth}p{0.11\linewidth}p{0.14\linewidth}p{0.18\linewidth}p{0.155\linewidth}}\hline
+\textbf{Property} & \textbf{Lean 4} & \textbf{Idris 2} & \textbf{Rust} & \textbf{Racket family} & \textbf{LRL}\\\hline\hline
+Q1 vector with total head & static & static & static (type-level numerals); partly$^g$ (const generics) & static (Typed Racket, Cur); partly$^g$ (refinements); run time (Racket) & static\\\hline
+Q2 append, length is the sum & static & static & static (type-level numerals); n/e (const generics) & static (Cur, refinements); n/e (Typed Racket); run time (Racket) & static\\\hline
+Q3 proof that reverse is an involution & static & static & run time (assertion only) & static (Cur); n/e (refinements); run time (Racket) & static\\\hline
+Q4 proofs absent at run time & partly$^f$; proofs erased, indices kept & partly$^f$; erased & partly$^f$; zero-sized & n/e (Typed Racket) & partly$^f$; passed as unit, indices kept\\\hline
+Q5 single-use channel & run time & static & static & static (Turnstile linear); run time (Racket, Typed Racket) & static\\\hline
+Q6 wrong protocol state & static & static & static & static (Typed Racket); run time (Racket) & static\\\hline
+Q7 protocol length equals data length & partly$^a$ & static & partly$^a$ & static, generic version n/e$^b$ (Typed Racket); run time (Racket) & partly$^a$\\\hline
+Q8 hygienic macro generating typed operations & static & static$^e$ & static & static (Typed Racket); run time (Racket) & static$^c$\\\hline
+Q9 two live mutable references & undetected & static & static & undetected & static check; n/e$^d$\\\hline
+Q10 value consumed in both branches & run time & static & static & static (Turnstile linear); run time (Racket) & static\\\hline
+Q11 in-place update & in place if unshared (checked at run time) & static (linear array) & static & in place, aliasing undetected & n/e\\\hline
+Q12 once-only closure called twice & undetected & static & static & static (Turnstile linear); run time (Racket, Typed Racket) & static\\\hline
+\end{tabular}
+
+\smallskip
+\begin{minipage}{0.95\linewidth}\scriptsize
+$^a$ Sending too many or too few messages is rejected statically; abandoning the channel is not detected (Lean~4 has neither affine nor linear types; Rust and LRL have affine but not linear types).
+$^b$ A written-out sequence of operations is checked statically; a generic send-all function cannot be written.
+$^c$ A library macro cannot refer to definitions of its own library: global names are resolved where the macro is used.
+$^d$ The borrow checker rejects two live mutable references, but no operation reads or writes through a reference.
+$^e$ A template written with a plain quotation captures a user variable of the same name; hygiene requires explicitly generated fresh names.
+$^f$ Three violations: dividing by zero, a forged proof, and reading the length index at run time. Lean~4 rejects only the division by zero statically and accepts the other two. Idris~2 rejects all but the forged proof (\lstinline|believe_me|), with which the program fails at run time. Rust rejects all but the division by zero, which is caught at run time. LRL rejects all but the index read, which it accepts.
+$^g$ Rust with const generics: a full build rejects taking the head of an empty array, but a check-only build (\texttt{rustc -{}-emit=metadata}) accepts it, and a head function without the compile-time assertion compiles and fails at run time. Typed Racket with refinements: a head function whose type has no length precondition and that reads the vector with \lstinline|unsafe-vector-ref| is accepted.
+\end{minipage}
+\end{table*}
+
+The table supports three observations.
+First, every language in the comparison can express some of what LRL expresses, and Idris~2 comes closest.
+It statically rejects every violation that LRL rejects in this table except one: a proof forged with \lstinline|believe_me| (Q4), which Idris~2 accepts and which fails at run time, whereas LRL rejects a total definition that depends on the axiom such a forgery needs.
+Idris~2 also statically rejects two violations that LRL accepts: abandoning a channel (Q7) and using an erased index at run time (Q4).
+LRL's design differs from Idris~2's in how resources are expressed---Rust-style closure kinds inferred from captures, and borrows with lifetimes, instead of quantities on binders---and no property in the table separates the two languages on these mechanisms.
+Second, the comparison documents capabilities of the other languages that are easy to overlook: Lean~4 updates unshared data in place, Lean~4 and Idris~2 erase proofs, Idris~2 has a linear vector library and macros (elaborator reflection), and dependent types and linearity are expressible in Racket through languages built with Turnstile.
+Third, two of LRL's own features are less useful than their checks suggest: LRL rejects aliased mutable references as Rust does, but references cannot be read or written through, and LRL has no in-place update at all.
+We mark both as not expressible.
+
+\subsection{Costs}\label{sec:eval:cost}
+
+We measured compile time, run time and the cost of proof arguments on an Apple M2 Pro (macOS, \texttt{rustc}~\ToolRustc) with a release build of the compiler (\texttt{bench/}).
+Each time we report is the median of at least five runs after warm-up runs, and each factor or per-call cost is computed from such medians; \texttt{bench/\allowbreak results/\allowbreak summary.md} gives the minimum and maximum of every measured time.
+The machine was not dedicated to the measurements (\texttt{bench/\allowbreak README.md} lists the background load), so we draw conclusions only from ratios and growth rates, not from differences of a few tens of percent.
+
+\paragraph{Compile time.}
+Compiling case study~B takes \BenchProtocolTypedTotal\,s with the typed backend, of which \BenchProtocolTypedFront\,s is LRL's own pipeline, measured by replacing \texttt{rustc} with a program that does nothing.
+Case study~A takes \BenchVectorsTypedTotal\,s, of which \BenchVectorsTypedFront\,s is LRL's own pipeline; a sampling profile of one such compilation places most of the compiler thread's samples in type inference during MIR lowering, which calls the kernel's weak-head normaliser.
+Compilation also becomes slow with numbers in types: natural numbers are unary, so a vector whose length is a closed expression in its type is expensive to compile.
+Building and summing a vector whose length index is a defined constant with value $n$ (written \lstinline|(nat_mul n 1)|) took \BenchClosedIndexA\,s, \BenchClosedIndexB\,s and \BenchClosedIndexC\,s in LRL's own pipeline (\texttt{rustc} excluded) for $n = 250, 500, 1000$, against \BenchVarIndexRange\,s when the length is a variable.
+
+\paragraph{Run time.}
+Table~\ref{tab:runtime} gives run times of four workloads built from the case studies, for the binary the compiler produces (which \texttt{lrl compile} builds without optimisation) and for the same generated Rust rebuilt with \texttt{rustc -O}.
+The typed backend's run time grows linearly with $n$ where the algorithm is linear, and quadratically for the reversal of case study~A, whose algorithm is quadratic (it reverses through repeated \lstinline|vsnoc|).
+The dynamic backend is as fast as the typed one on lists, but on vectors and channels---user-defined inductive types, which it represents as values that are copied on every use---its run time grows by an extra factor of $n$; at the sizes of Table~\ref{tab:runtime} it is \BenchDynTypedRatioRange{} times slower than the typed backend, and the factor grows with $n$.
+Both backends compute recursors by recursion on the native stack. With a stack of \BenchStackKiB\,KiB (the hard limit of the machine), the typed backend's default build overflowed it at the largest size we tried when building and summing a vector, sending messages and folding a list, and both dynamic builds overflowed it when folding a list; the typed \texttt{-O} builds ran at every size we tried.
+For context only: a plain Rust implementation of the reversal workload, with the same quadratic algorithm, runs within the process start-up time (a few milliseconds) at every size we measured.
+
+\begin{table}[t]
+\centering\footnotesize
+\caption{Median run time in seconds of workloads derived from the case studies (\texttt{bench/results/summary.md}). ``CLI'': the binary built by \texttt{lrl compile}; ``-O'': the generated Rust rebuilt with \texttt{rustc -O}.}
+\label{tab:runtime}
+\setlength\tabcolsep{4pt}
+\begin{tabular}{lrrrrr}\hline
+& & \multicolumn{2}{c}{\textbf{Typed}} & \multicolumn{2}{c}{\textbf{Dynamic}}\\
+\textbf{Workload} & $n$ & CLI & -O & CLI & -O\\\hline\hline
+Build and sum a vector & \BenchVecBuildSumN & \BenchVecBuildSumTypedCli & \BenchVecBuildSumTypedO & \BenchVecBuildSumDynamicCli & \BenchVecBuildSumDynamicO\\
+Send $n$ messages & \BenchProtoSendN & \BenchProtoSendTypedCli & \BenchProtoSendTypedO & \BenchProtoSendDynamicCli & \BenchProtoSendDynamicO\\
+Fold a list & \BenchListFoldN & \BenchListFoldTypedCli & \BenchListFoldTypedO & \BenchListFoldDynamicCli & \BenchListFoldDynamicO\\
+Reverse and sum a vector & \BenchVecRevSumN & \BenchVecRevSumTypedCli & \BenchVecRevSumTypedO & \BenchVecRevSumDynamicCli & \BenchVecRevSumDynamicO\\\hline
+\end{tabular}
+\end{table}
+
+\paragraph{Proofs at run time.}
+Two programs that differ only in whether a function called in a loop takes an equality proof as an argument show what erasure leaves behind (\S\ref{sec:core:prop}).
+The proof itself is not computed, but its parameter remains, so each call becomes two function applications.
+With the typed backend, the version with the proof argument took \BenchProofTypedCliRatio{} times as long as the version without it in the compiler's default build and \BenchProofTypedORatio{} times as long with \texttt{-O} (about \BenchProofTypedONs\,ns per call); with the dynamic backend the factor was \BenchProofDynamicCliRatio{} and \BenchProofDynamicORatio.
+The factors are large because the function's body is a single successor; they measure the overhead per call, not the cost of proofs in a realistic program.
+
+\paragraph{Summary.}
+LRL's code generators are prototypes: the typed backend has the expected asymptotic behaviour on the programs we measured, the dynamic backend does not, neither exploits ownership, and proof erasure is incomplete.
+In particular, LRL performs no in-place updates and its proofs are not free at run time; LRL makes no performance claims beyond these measurements.
+
+\subsection{Threats to validity}\label{sec:eval:threats}
+
+\begin{itemize}\setlength\itemsep{2pt}
+\item \emph{Coverage.} The corpus and the case studies cover the violation classes and programs we wrote; they are evidence that the pipeline behaves as stated, not a proof. Writing them, and searching systematically for inputs that the kernel wrongly accepts, exposed defects, the main ones listed in \S\ref{sec:eval:corpus}; there may be more.
+\item \emph{The model and the code.} The mechanized calculus is a model of the kernel's rules, written by hand; a discrepancy between the model and the Rust code would not be detected by the Lean proofs.
+\item \emph{Fairness of the comparison.} We are more familiar with LRL than with the other languages. To limit this, every program is in the repository, every outcome in the summary is derived mechanically from the results files and Table~\ref{tab:compare} condenses it, and we wrote additional programs where one language had fewer test cases than the others for a property. A property chosen by us may favour LRL's design; Q4 and Q11 are included because they do not.
+\item \emph{Measurements.} All measurements were taken on one machine; \S\ref{sec:eval:cost} describes the setup.
+\end{itemize}

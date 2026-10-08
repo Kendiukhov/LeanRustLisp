@@ -1,0 +1,57 @@
+\section{Proofs and Mechanized Results}\label{app:proofs}
+
+\subsection*{Proof of Lemma~\ref{lem:widening} (kind widening)}
+
+\emph{Typing.}
+A derivation of $\Gamma \vdash \Lamk{k}(x{:}A).\,t : \Pik{k}(x{:}A).\,C$ ends with T-Lam followed by zero or more uses of T-Conv, since no other rule applies to a $\lambda$.
+Hence $\Gamma \vdash A : \kw{Sort}\,\ell$, $\Gamma, x{:}A \vdash t : C'$ and $\mathrm{req}(\Gamma, x{:}A, t) \sqsubseteq k$ for some $C'$ with $\Pik{k}(x{:}A).\,C' \equiv \Pik{k}(x{:}A).\,C$; because conversion compares two $\Pi$-types by their kinds, their domains and their codomains, $C' \equiv C$.
+The required kind depends only on $t$ (the kinds of $\lambda$s nested inside $t$ are unchanged), and $k \sqsubseteq k'$, so T-Lam gives $\Gamma \vdash \Lamk{k'}(x{:}A).\,t : \Pik{k'}(x{:}A).\,C'$, and T-Conv, with $\Pik{k'}(x{:}A).\,C' \equiv \Pik{k'}(x{:}A).\,C$, gives $\Gamma \vdash \Lamk{k'}(x{:}A).\,t : \Pik{k'}(x{:}A).\,C$.
+
+\emph{Ownership.}
+The premises of \textsc{O-Lam} for $k$ and for $k'$ differ only in the ceilings of the variables $y \in \mathrm{dom}(\Gamma)$: $\gamma(y) \sqcap \mathrm{cap}(k)$ versus $\gamma(y) \sqcap \mathrm{cap}(k')$.
+Only the function $\mathrm{use}_{\Gamma;\mathcal{B};\gamma}$ reads the ceiling.
+For an occurrence of $y$ in $t$ used in mode $m$, let $m'$ be $m$ lowered by the kinds of the $\lambda$s inside $t$ that enclose the occurrence (these are the same in both derivations); its effective mode is $\min(m', \gamma(y), \mathrm{cap}(k))$ in the derivation for $k$ and $\min(m', \gamma(y), \mathrm{cap}(k'))$ in the derivation for $k'$.
+We show that these two effective modes have the same effect on the state, except in the excepted case; then the derivation for $k$ is also a derivation for $k'$, with the same states.
+If $y$ is Copy, $\mathrm{use}_{\Gamma;\mathcal{B};\gamma}$ leaves the state unchanged whatever the mode.
+Otherwise, by Definition~\ref{def:req} the use of $y$ in $t$ is at least $m'$, so the capture mode of $y$ is at least $m'$, except when $y$ is a mutable reference that $t$ moves, in which case its capture mode is $\mathsf{mut}$; and $\mathrm{req} \sqsubseteq k$ bounds the capture modes by $\mathrm{cap}(k)$.
+\begin{itemize}\setlength\itemsep{1pt}
+\item $k = \Fn$: all capture modes are $\mathsf{read}$, so $y$ is not a moved mutable reference (that would make $\mathrm{req} \sqsupseteq \FnMut$), and $m' \le \mathsf{read} = \mathrm{cap}(\Fn) \le \mathrm{cap}(k')$. Both effective modes are $\min(m', \gamma(y))$.
+\item $k = \FnMut$: all capture modes are at most $\mathsf{mut}$. If $m' \le \mathsf{mut}$, both effective modes are $\min(m', \gamma(y))$. Otherwise $y$ is a mutable reference moved by $t$; if $k' = \FnMut$ the two derivations coincide, and $k' = \FnOnce$ is the excepted case.
+\item $k = \FnOnce$: then $k' = \FnOnce$ and there is nothing to show. \qed
+\end{itemize}
+
+\subsection*{Proof of Lemma~\ref{lem:coercion} (coercion)}
+
+Write $w = \Lamk{k'}(x{:}A).\,f\,x$, where $f$ is a variable of $\Gamma$ (in de Bruijn notation, $f$ is shifted past $x$).
+\emph{Typing}: by T-Var and T-App, $\Gamma, x{:}A \vdash f\,x : C[x/x] = C$.
+\emph{Required kind}: in $f\,x$, the variable $f$ is the head of an application with first kind $k$, so its use is $\mathrm{cap}(k)$ (\textsc{O-App}); $x$ is the parameter of $w$, not a capture.
+The type of $f$ is a function type that is not erased, hence not Copy (Definition~\ref{def:copy}), and not a mutable reference, so the capture mode of $f$ is $\mathrm{cap}(k)$ and $\mathrm{req}(\Gamma, x{:}A, f\,x) = k$.
+Since $k \sqsubseteq k'$, T-Lam gives $\Gamma \vdash w : \Pik{k'}(x{:}A).\,C$.
+\emph{Ownership}: by \textsc{O-Lam} and \textsc{O-App}, checking $w$ performs $\mathrm{use}_{\Gamma;\mathcal{B};\gamma}(f, \mathrm{cap}(k), \sigma)$ with effective mode $\min(\mathrm{cap}(k), \mathrm{cap}(k'), \gamma(f)) = \min(\mathrm{cap}(k), \gamma(f))$---the same use that checking a call $f\,a$ performs---and the argument $x$ is the fresh parameter.
+Where the ceiling of $f$ is $\mathsf{move}$, this moves $f$ if and only if $\mathrm{cap}(k) = \mathsf{move}$, that is, $k = \FnOnce$. \qed
+
+\subsection*{Mechanized results}
+
+Table~\ref{tab:mech} lists the theorems of the Lean development that the paper relies on.
+The main results are re-exported from \texttt{mechanization/src/LRL/Mechanized.lean}, which also prints the axioms of every theorem in the table.
+The library (\NumLeanFiles{} files, \NumLeanLines{} lines, of which \NumAffineLines{} are for $\lambda^{\mathrm{aff}}$) builds with \texttt{lake build LRL} under Lean \LeanToolchain, the version pinned in \texttt{mechanization/lean-toolchain}; no proof in it uses \lstinline|sorry| or \lstinline|admit|, and the axioms printed for every theorem are among Lean's standard \texttt{propext}, \texttt{Quot.sound} and \texttt{Classical.choice}.
+The directory also contains \texttt{Dependent.lean}, an outline of a dependent extension whose proofs are incomplete; the library does not import it.
+
+\begin{table}[h]
+\centering\footnotesize
+\caption{Mechanized results used in this paper (namespace \texttt{LRL.Affine}; files under \texttt{mechanization/src/LRL/Affine/}).}
+\label{tab:mech}
+\setlength\tabcolsep{3pt}
+\begin{tabular}{p{0.38\linewidth}p{0.34\linewidth}p{0.2\linewidth}}\hline
+\textbf{Result} & \textbf{Lean theorem} & \textbf{File}\\\hline\hline
+Kind widening (Lemma~\ref{lem:widening}) & \texttt{kind\_widening} & \texttt{Ownership}\\
+Coercion of a variable (Lemma~\ref{lem:coercion}) & \texttt{eta\_coercion}, \texttt{eta\_coercion\_needs} & \texttt{Ownership}\\
+Coercion of an arbitrary term & \texttt{eta\_coercion\_\allowbreak general} & \texttt{Coercion}\\
+Value substitution (Lemma~\ref{lem:subst}) & \texttt{typed\_subst}, \texttt{own\_subst} & \texttt{Typing}, \texttt{Substi\-tution}\\
+Preservation, progress (Theorem~\ref{thm:affine}) & \texttt{preservation}, \texttt{progress} & \texttt{Semantics}\\
+No resource consumed twice (Theorem~\ref{thm:affine}) & \texttt{no\_double\_consume}, \texttt{affine\_safety} & \texttt{Semantics}\\
+The repetition barrier is necessary & \texttt{barrier\_needed} & \texttt{Examples}\\
+Substituting a non-value breaks the kind condition & \texttt{subst\_nonvalue\_\allowbreak breaks\_\allowbreak side\_\allowbreak condition} & \texttt{Examples}\\
+Reading after consumption is not excluded & \texttt{read\_after\_consume} & \texttt{Examples}\\\hline
+\end{tabular}
+\end{table}
